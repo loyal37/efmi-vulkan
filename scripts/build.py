@@ -487,7 +487,8 @@ RELEASE_LICENSE_COMMENTS = {
     "PCRE2-BSD.txt": ("F:/vulkan/XXMI-Libs-Package/pcre2/pcre2.h", "           Copyright (c) 2016-2017 University of Cambridge",
                       "-----------------------------------------------------------------------------"),
 }
-RELEASE_FILES = sorted([INJECT_DLL, "efmi_vk.cfg", "README.txt", "LICENSE.txt", "THIRD_PARTY_NOTICES.md"] +
+RELEASE_FILES = sorted([INJECT_DLL, "efmi_vk.cfg", "README.txt", "LICENSE.txt", "THIRD_PARTY_NOTICES.md",
+                        "switch_renderer.bat", "switch_renderer.ps1"] +
                        [os.path.basename(tool) for tool in RELEASE_TOOLS] +
                        ["licenses/" + name for name in list(RELEASE_LICENSES) + list(RELEASE_LICENSE_COMMENTS)])
 
@@ -531,6 +532,9 @@ def build_release(vcvars: str, include: str, out: str) -> dict:
         shutil.copy2(tool, os.path.join(out, os.path.basename(tool)))
     shutil.copy2(os.path.join(ROOT, "release", "efmi_vk.cfg"), os.path.join(out, "efmi_vk.cfg"))
     shutil.copy2(os.path.join(ROOT, "release", "README.txt"), os.path.join(out, "README.txt"))
+    # The DX11/Vulkan switch for the launcher's EFMI profile (release/README.txt, "Switching").
+    shutil.copy2(os.path.join(ROOT, "release", "switch_renderer.bat"), os.path.join(out, "switch_renderer.bat"))
+    shutil.copy2(os.path.join(ROOT, "release", "switch_renderer.ps1"), os.path.join(out, "switch_renderer.ps1"))
     shutil.copy2(os.path.join(ROOT, "LICENSE"), os.path.join(out, "LICENSE.txt"))
     shutil.copy2(os.path.join(ROOT, "THIRD_PARTY_NOTICES.md"), os.path.join(out, "THIRD_PARTY_NOTICES.md"))
     for name, path in RELEASE_LICENSES.items():
