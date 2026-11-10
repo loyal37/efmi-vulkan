@@ -1,5 +1,30 @@
 # EFMI Vulkan - Known issues
 
+## BUG-079: The INI execution matrix step is red since D-142 (found 2026-11-10, open)
+
+- `scripts/check_ini_execution_matrix.py` on the build of 2026-10-30: 32 classes, 41 probed uses, 39 failures. `docs/ini-execution-matrix.json` (2026-10-18) expects the refusals that D-142 to D-155 turned into plans or no-ops ("Planner supports direct indexed draws only" is in no source file).
+- The step is in run_all's `ini` group; the verification lists of those decisions do not name it. The judge step is in no group (docs/architecture-review-2.1.md, V-03 and V-04).
+
+## BUG-080: A failed activation leaves the character invisible (found by reading 2026-11-10, not reproduced, open)
+
+- `activate()` sets `activated` once; the worker returns when the mesh or the first batch cannot be made or on an exception (character_backend.cpp:1062, :1083, :1090); `ready` stays false and `record()` skips every matched draw (:1898). Neither the Mod's mesh nor the game's until the game restarts. L-01.
+
+## BUG-081: After a folder refused at start, F10 does nothing (found by reading 2026-11-10, not reproduced, open)
+
+- The reload request is taken from the folder program only (character_backend.cpp:3580-3581); a refused first load has none. The original always reloads. L-02.
+
+## BUG-082: One failed owned command ends the folder's owned GPU work until F10 (found by reading 2026-11-10, not reproduced, open)
+
+- `GpuResourceRuntime::failed_` is set by any exception in a resource command, by `execution_failed()` and by `discard()` (gpu_resources.cpp:636, :153, gpu_resources.h:50) and is never cleared; `begin` and `finish` then throw. Made for one Mod's generation (BUG-017); the folder generation has one runtime for every Mod (D-131). The per-command rule of D-155 catches `Refused` only (draw_plan.cpp:1604); another exception ends the Present and sets the latch. R-12, R-13.
+
+## BUG-083: RegisterMod refuses a Mod that requires more than EFMI 1.48; the installed Core is 1.49 (found by reading 2026-11-10, open)
+
+- character_core.cpp:465-470 against `global $version = 1.49` in Core\EFMI\main.ini. No installed Mod requires more than 1.48. R-06.
+
+## LIMIT-047: What makes a Mod a Mod, and the all-or-nothing plan (2026-11-10, docs/architecture-review-2.1.md)
+
+- A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections match no draw, without a notice. A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
+
 ## BUG-077: A broken buffer file dropped the whole Mod (fixed in the 2.1.2 tree)
 
 - Found by D-137's classification of refusal points (2026-10-28), shown failing by check_mod_degradation.py on a copy of an installed Mod: a mesh file that is not there refused the draws binding it ("INI mesh not in prepared stream profile"); a file one byte short of whole elements, or one file declared twice with another stride, left the whole Mod out of the folder generation ("Mesh size or stride invalid", "One mesh file declared with two meanings").

@@ -1,5 +1,14 @@
 # EFMI Vulkan - Tasks
 
+## Proposed: the architecture review's plan (2026-11-10, docs/architecture-review-2.1.md, waiting for the user)
+
+- P3-0: `docs/ini-execution-matrix.json` regenerated from the current behaviour and its step green (BUG-079); the judge step in the `ini` and `owned` groups; a `quick` group.
+- Phase 0, containment, each test first: notices for what is left out at start and for INIs with mesh sections that are no character Mod (P0-1); RegisterMod against the installed Core's version (P0-2, BUG-083); the Core's interface checked by name at load (P0-3); the owned runtime's failure scoped to its scope, every exception caught per command (P0-4, BUG-082); no exception leaves a Mod's unit at load, bisecting fallback (P0-5); CustomShader sections inert without the owned runtime (P0-6); a failed activation is a refusal that is tried again (P0-7, BUG-080); F10 with no generation loaded (P0-8, BUG-081); the 64-package bound and a check of the game's facts (P0-9).
+- P3-1: the matched-draw judge (dx11_judge.cpp draws an indexed mesh; TextureOverride lists run under the original and under the layer; variables and the image compared). To try first: whether the pinned DLL region-hashes in that program.
+- Phase 1: a replaced draw's lists against a draw state (every slot holds the application's binding, a Mod file, an owned resource or nothing); the lists run to their end; what Vulkan cannot honour is decided per record and slot from one table.
+- Phase 2: the device's section index from the generation's registry; a plain replaced draw without the Core; the contract from the executed lists; instanced character draws.
+- Phase 3 and 4: the single-line property check, golden plan digests and a corpus of public INIs; ARCHITECTURE.md rewritten for 2.1, the memory documents cut, character_backend.cpp split, the legacy load paths removed.
+
 ## Active: the design review after 1.9.2 (2026-10-26, docs/design-review-1.9.md)
 
 - The user: the designs still have many problems; solve them at the root. Order: (1) D-127 for the bones, our GPU work inside the game's batches (1.9.3, BUG-060); (2) images shared by file identity, F10 loading only what changed (1.9.4, BUG-061; the meshes and the bringing up of every package ever shown remain, see BUG-061's open part); (3) the texture load path measured and shortened (kept staging and command buffers, the file read straight into mapped staging, parallel loads); (4) the owned work of replaced draws and the Present work inside the game's batches (D-127; the Present shape-key compute is not ordered before the next frame's batches on the other queue); (5) per-draw work proportional to change, one generation for the Mods folder, the play configuration.
