@@ -487,6 +487,113 @@ Present runs and whose texture-hash section acts in the fixture's replaced draw;
 `copy_desc` in its post-Constants warned about once and loading otherwise), each failing on the build
 before; the judge's `encoding` case.
 
+## A failure stays with its unit (2026-11-10, docs/architecture-review-2.1.md Phase 0)
+
+The original's unit of failure is the line: a command that cannot act does nothing, a warning says so,
+and its list, its file and every other Mod go on (IniHandler.cpp:2342, CommandList.cpp:6407-6479). The
+layer's units were larger than that in several places; they are now:
+
+- **A command of a Present, Constants or key list**, at every depth of called lists and CustomShaders:
+  skipped and said once (`BridgeCommand::run`, `DrawPlanAdapter::Runtime::skipped`), whatever it raised
+  (the planner's refusal, or an exception of a guard or of the original's own code, which ended the whole
+  Present for every Mod before). The keys' lists and the transitions run under the same rule.
+- **An owned GPU command** (`GpuResourceRuntime::run`): one that fails before it recorded any GPU work
+  leaves its scope as it was. One that fails after recording part of its work drops that scope's batch
+  (`failed()`; the host discards instead of submitting), is not run again in the generation, and the next
+  scope starts clean. Before, either failure set a flag nothing cleared: the owned work of the whole
+  generation, since D-131 every Mod's panels, CustomShaders and shape-key compute, ended until F10.
+  `clear = Resource depth` on a buffer clears nothing, as the original, which asks for a depth-stencil
+  view no buffer has (the judge's `failure` case).
+- **A CustomShader section without the owned runtime** (its tools not beside the layer, `m2_owned = 0`):
+  declared, its runs doing nothing, said once; it refused the whole load before.
+- **A Mod at load**: `CharacterCore::prepare` tries every Mod and names those it cannot prepare; the
+  folder leaves exactly those out and loads again. A second INI under one namespace is left out with that
+  reason (the original keeps the first file's sections and warns about the second's). When every Mod
+  loads alone and the folder does not, the input it does not load with is searched for by halves, plain
+  INIs first (`CharacterProgram::discover_folder`).
+- **The Core**: the names the native handlers bind are checked at load (`check_interface`); a Core
+  without one refuses the folder with a statement that names the Core and the missing name.
+  `RegisterMod` compares a Mod's required version with the installed Core's `$version` (its main.ini), as
+  the original's list does; the layer's constant 1.48 switched off Mods the installed 1.49 runs.
+- **A LOD without a remap assignment** has no remap, as the Core's `z0 = @cs-t1 != 0` (BUG-084: the
+  installed `lastrite`, which assigns LOD 0 only, was left out whole).
+
+A replaced draw's lists still stand or fall together (the review's Phase 1).
+
+What the layer does not do while a generation runs is said through `LayerGap` (`layer_gap.h`): the
+original's warning channel, and `IniRuntime::gap_count` / `gaps_since` for the host.
+
+Checks: `scripts/check_mod_containment.py` (six variants of the smallest installed Mod, each failing
+before); resource_gpu's `declined` checks (a declined command leaves the Present running; 17 scopes went
+on, 4 were dropped, and the next scope ran); the judge's `failure` case; `check_mod_states.py` on the
+installed folder.
+
+## The original as the judge of a replaced draw's lists (D-157, 2026-11-10)
+
+The judge of D-150 runs Present lists only. For the lists of a matched draw the judge's program is the
+"game" (sandbox/dx11_judge_scene.h): each frame two indexed quads of known index bytes, drawn with
+DrawIndexedInstanced as the game draws its characters; the judge's d3dx.ini has `track_region_hashes = 1`
+and a ShaderRegex that runs `CheckTextureOverride = ib` at every draw, as the EFMI Core's
+`[ShaderRegexEnableTextureOverrides]`; so the pinned original runs a case's [TextureOverride] sections
+by the draws' region hashes. The picture has four places (the game's quads in A and B, a Mod's vertex
+files put quads in C and D); the pixel shader returns texel 0 of t0, so a point's colour says which
+texture was bound when which mesh was drawn there, and which triangle of the quad a draw covered.
+
+`scripts/check_dx11_judge_draws.py` reads off the original the colour at two points of each place, the
+primitives each game draw put through the input assembler (its own and the lists' draws) and the saved
+variables; on the layer's side it takes the plan of each draw from the frontend
+(`runtime_test.exe --judge-scene`) and works out the picture and the primitives that plan means by
+D3D11's rules (an index past its buffer reads 0, a null vertex buffer gives triangles without area, an
+empty slot reads zero, the game's draw runs between the pre and the post items unless skipped).
+
+2026-11-10: ten cases as the original's (a replaced mesh, a texture only, a null texture, post commands,
+a part of the game's index buffer, a non-indexed draw, `drawindexed = auto`, three sections on one hash
+in the order 3 2 1 of match_priority then name, the draw's operands, sections whose draw keys do not
+fit). Two known differences, kept as cases that must still differ: `other_stage` (`vs-cb1 = Resource`
+left bound: the layer refuses the whole list, the original draws the Mod) and `copy` (`ResourceX = copy
+ResourceY` in the list, then `vb0 = ResourceX`: null in a CPU generation, drawn by the original). Not
+covered: the conversion of a plan into the package's draws and the backend, and lists calling the Core.
+
+One line at a time (`--sweep`, sandbox/judge_draw_sweep.json): the list of the replaced mesh and, in front
+of its draw, one line of each kind a Mod may write (bindings at every kind of slot, copies and references,
+conditions on queries, the draw forms, calls, clears). The file records what each line gives against the
+original; the step fails when that changes in either direction. 2026-11-10: 50 lines, 35 as the original's;
+12 differ in the layer, each with why (a slot of another kind left changed refuses the whole draw, as do
+`<slot> = copy Resource`, `unless_null`, one pixel slot bound from another, `ResourceX = ref vb0` and
+`o0 = null`; a copy between declared resources stays null); 3 are answered by the character Core's
+extension, which this scene's generation has not, and are not judged here.
+
+Two rules of the original the sweep showed, now the plan's:
+
+- The post list of a matched section. The original does not remember what it matched before the draw: the
+  list that checks (`CheckTextureOverride = ib`, in both of its phases) looks the index buffer up again in
+  its post phase (CheckTextureOverrideCommand::run), and that is the buffer bound by then. A Mod's own
+  buffer has no hash and meets no section, so after `ib = ResourceX` the section's `post` lines do not
+  run. The plan runs a matched section's post list only when the pre lists bound no index buffer (BUG-086).
+- A reference to a pixel slot. `ResourceX = ref ps-tN` holds what the slot holds when the line runs: what
+  the lists bound there before, null after their unbind, the game's texture where they bound nothing
+  (BUG-087; the plan took the game's texture always).
+
+## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
+
+`scripts/check_mod_states.py` plans every section of every installed Mod without a GPU and without the
+game. Its stand-in for the game cannot answer four things; a refusal for one of them is not counted
+against the Mod (`offline_limit` in sandbox/character_test.cpp). Each is answered somewhere else, and
+only there:
+
+| Left out offline | What answers it in the layer | Where it is checked |
+| --- | --- | --- |
+| "needs the owned GPU domain": a list that needs owned GPU work in a replaced draw (a render target's size from the owned side, CustomShader work) | the owned GPU runtime of the folder generation | the owned runtime's steps (resource_gpu, EFMITTL owned transparency, live INI rendering); in the game for a Mod's own lists |
+| "Original buffer window unavailable": a query into the game's instance or constant data (`Original_VS_CB->...`) | the renderer's instance entry of the draw | the Core's spatial tests on synthetic entries and the captured frame's replay; in the game for every other character |
+| "render targets are not known": `oN`, `rt_width` of the replaced draw | the draw's render pass and target size from the host | the INI runtime test with given targets and the replay; in the game otherwise |
+| "offline ...": the pixel shader's declarations (`ps->srv_type`), the game's vertex buffer strides other than the one a section was split by | the draw's SPIR-V and its vertex bindings | the judge and the INI runtime test for the rule; in the game for the values |
+
+Also not run offline: sections matched by a texture's hash. Every pixel slot of the stand-in's draws is
+bound without a hash, so `CheckTextureOverride = ps-tN` meets no section there; their lists are planned
+only where the host names the game's textures (the live scene and the game). The BUG-051 kind of
+failure (nearly every draw refused in the game for a reason the offline check leaves out) is what this
+table is for: a refusal of the first kind seen in a game log is not covered by a green offline run.
+
 ## Status
 
 - BUG-076 (2.1.1 tree): a texture file that is not there binds nothing, in a Mod's own generation and in

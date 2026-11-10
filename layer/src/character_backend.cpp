@@ -142,6 +142,20 @@ float ini_seconds()
     return float((host_time_us() - origin) * 1.0e-6);
 }
 
+// A test's hook, in the test programs' own processes only: while the variable is set, a package's
+// activation fails (the scene sets and clears it around the activation it means).
+bool test_activation_fails()
+{
+    static const bool test_process = [] {
+        wchar_t executable[32768] = {};
+        GetModuleFileNameW(nullptr, executable, 32768);
+        const auto name = std::filesystem::path(executable).filename();
+        return !_wcsicmp(name.c_str(), L"efmi_vk_variant_gpu.exe") || !_wcsicmp(name.c_str(), L"efmi_vk_sandbox.exe");
+    }();
+    wchar_t value[4];
+    return test_process && GetEnvironmentVariableW(L"EFMI_VK_TEST_ACTIVATION_FAILS", value, 4) != 0;
+}
+
 efmi::frontend::RuntimeInput sample_ini_input()
 {
     efmi::frontend::RuntimeInput input;
@@ -173,7 +187,7 @@ enum Counter : uint32_t {
     C_ENTRY, C_BONES, C_IMPORT, C_EXHAUSTED, C_IDENTITIES, C_SET3_RESTORED,
     C_MATERIAL, C_IMAGE, C_IMAGE_PENDING, C_MATERIAL_ITEMS, C_COMPAT_ITEMS, C_DERIVED, C_INHERITED,
     C_IDENTITY_NEW, C_IDENTITY_EXPIRED, C_TEXTURED, C_KEPT, C_OWNED, C_MEMORY, C_GATED, C_GATED_FRAMES, C_SNAPSHOT_COPIES, C_IDENTITY_ADOPTED,
-    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_COUNT
+    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_COUNT
 };
 const char* const kCounterNames[C_COUNT] = {
     "matched", "replaced", "items", "hidden", "identifying", "incomplete", "pending",
@@ -183,7 +197,7 @@ const char* const kCounterNames[C_COUNT] = {
     "material_derived", "material_inherited", "identities_created", "identities_expired", "textured",
     "kept_original", "owned_streams", "waiting_memory", "gated", "gated_frames", "snapshot_copies", "identities_adopted", "preparing",
     "translucent", "bone_jobs", "bone_ring_busy", "batches_made_at_draw", "held_before_shown", "original_before_shown",
-    "bones_unavailable"
+    "bones_unavailable", "activation_failed"
 };
 // Where a matched draw's time goes (D-099): microseconds per stage of record(), in the status.
 enum Stage : uint32_t { S_LOCK, S_IDENTIFY, S_BONES, S_PLAN, S_MATERIALS, S_VARIANTS, S_OWNER, S_APPEND, S_SNAPSHOT, S_EMIT, S_COUNT };
@@ -706,6 +720,35 @@ public:
     std::condition_variable wake;
     bool stopped = false;
     std::thread worker;
+    // The worker ended without the package on the device (its mesh, its first batch) or after it (a later
+    // batch): the package's draws are the game's again, with the reason said, and the worker is started
+    // again at `retry_us` (1 s later, then 2, 4 ... 32). Before, `activated` stayed set, `ready` never came,
+    // and every matched draw was skipped: the character was neither the Mod's nor the game's until the
+    // game was started again (docs/architecture-review-2.1.md, L-01).
+    std::atomic<bool> worker_failed{false};
+    std::atomic<uint64_t> retry_us{0};
+    uint32_t worker_failures = 0; // under pool_mx
+    void worker_ended()
+    {
+        std::lock_guard<std::mutex> lock(pool_mx);
+        if (stopped) return;
+        ready = false;
+        worker_failures = std::min<uint32_t>(worker_failures + 1, 6);
+        retry_us.store(host_time_us() + (500000ull << worker_failures), std::memory_order_relaxed);
+        worker_failed.store(true, std::memory_order_release); // the worker's last act
+    }
+    // From a matched draw while the worker is down: at its time the worker again, with the mesh it had.
+    void retry_activation()
+    {
+        if (host_time_us() < retry_us.load(std::memory_order_relaxed)) return;
+        std::lock_guard<std::mutex> lock(pool_mx);
+        if (stopped || !worker_failed.load(std::memory_order_acquire)) return;
+        if (worker.joinable()) worker.join(); // it has returned: worker_ended was its last act
+        if (mesh) kept_mesh = mesh;
+        worker_failed.store(false, std::memory_order_release);
+        logf("character package activation tried again: %s", package_path.c_str());
+        worker = std::thread([this] { prepare(); });
+    }
     std::shared_ptr<const GpuMesh> mesh;
     std::deque<std::shared_ptr<CharacterCommand>> available;
     std::vector<std::weak_ptr<CharacterCommand>> all;
@@ -1048,6 +1091,8 @@ public:
             ~Activating() { if (textures) textures->activating_bytes.fetch_sub(std::min(textures->activating_bytes.load(), bytes)); }
         } activating{textures, activation_bytes};
         try {
+            // A test's hook (the scene sets and clears it in its own process): this activation fails.
+            if (test_activation_fails()) throw std::runtime_error("test: the activation was made to fail");
             std::shared_ptr<const GpuMesh> kept;
             { std::lock_guard<std::mutex> lock(pool_mx); kept = std::move(kept_mesh); }
             if (kept) {
@@ -1059,7 +1104,7 @@ public:
                 auto created = std::make_shared<GpuMesh>(device->handle, storage);
                 std::string reason;
                 const uint64_t began = host_time_us();
-                if (!created->create(package, memory, device, reason)) { note(reason); return; }
+                if (!created->create(package, memory, device, reason)) { note(reason); worker_ended(); return; }
                 mesh_upload_us = host_time_us() - began; ++g_mesh_uploads;
                 logf("character mesh uploaded: %llu bytes in %s memory (%s) from %s in %llu us", static_cast<unsigned long long>(package.payload_bytes),
                      created->device_local ? "device" : "host", mesh_memory_name(created->placement),
@@ -1080,14 +1125,15 @@ public:
                 }
                 std::string why;
                 auto batch = make_batch(why);
-                if (!batch) { note(why); return; }
+                if (!batch) { note(why); worker_ended(); return; }
                 {
                     std::lock_guard<std::mutex> lock(pool_mx);
                     if (stopped) return;
                     all.push_back(batch); available.push_back(std::move(batch)); ready = true;
+                    worker_failures = 0;
                 }
             }
-        } catch (const std::exception& e) { note(e.what()); }
+        } catch (const std::exception& e) { note(e.what()); worker_ended(); }
     }
 
     // A batch of snapshot arenas for one recording: one arena per image count of the package.
@@ -1473,7 +1519,7 @@ public:
             const int32_t allowed = gap ? static_cast<int32_t>(std::min<uint64_t>(uint64_t(radius) * gap, 64)) : 1;
             if (distance <= allowed && distance < best_distance) { best = &identity; best_distance = distance; }
             uint32_t bits = 0;
-            for (uint32_t value = identity.seen; value; value &= value - 1) ++bits;
+            for (uint64_t value = identity.seen; value; value &= value - 1) ++bits;
             if (!identity.custom && bits < weakest_seen) { weakest = &identity; weakest_seen = bits; }
             if (unseen && (!stale || identity.last_present < stale->last_present)) stale = &identity;
         }
@@ -1895,7 +1941,12 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             // first frame (D-103): the character is never the game's mesh before the Mod's.
             activate(); ++counters[C_PREPARING]; return true;
         }
-        if (!ready.load(std::memory_order_relaxed)) { ++counters[C_PREPARING]; return true; } // mesh and arenas on their way: skipped
+        if (!ready.load(std::memory_order_relaxed)) {
+            // The worker ended without the package: the game's draw stays, and the activation is tried again
+            // at its time. While the mesh and arenas are on their way the draw is skipped, as before.
+            if (worker_failed.load(std::memory_order_acquire)) { retry_activation(); ++counters[C_ACTIVATION]; return false; }
+            ++counters[C_PREPARING]; return true;
+        }
         ++counters[C_MATCHED];
         if (present != gate_frame) begin_gate_frame(present);
         if (section->component == kCharacterNone) {
@@ -2119,7 +2170,8 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 if (!registers) { why = "the stage's SPIR-V registers are not known"; return false; }
                 efmi::gpu::SourceSrvDeclaration declaration;
                 if (!efmi::gpu::source_srv_declaration(*registers, slot, declaration, why)) return false;
-                type = declaration.type; dimension = declaration.dimension; stride = declaration.stride;
+                type = declaration.words ? efmi::frontend::kWordBufferDeclaration : declaration.type;
+                dimension = declaration.dimension; stride = declaration.stride;
                 return true;
             };
             bool skip = false, added = false, textures = false; std::string reason;
@@ -2801,6 +2853,30 @@ struct FolderGeneration {
     std::vector<efmi::frontend::IniRuntime::DiscardGate> gates; // D-133, under plan_mx
     std::future<void> saving;
     bool empty = false; // the folder holds no character Mod: a valid generation of no package
+    std::vector<std::pair<std::string, std::string>> left_inputs; // inputs of no character Mod the folder was loaded without, and why
+    std::vector<std::string> unmatched;                            // enabled INIs with mesh sections that are no character Mod's
+    uint32_t gaps_seen = 0; size_t gaps_shown = 0;                 // LayerGap texts logged and shown, on the presenting thread
+    // What does not show, on the screen as in the log (docs/architecture-review-2.1.md, R-11): a folder
+    // that did not load, the Mods and inputs left out with their reasons, and INIs whose mesh sections
+    // match no draw because they are no EFMI character Mod. At the first load and after every exchange.
+    void announce() const
+    {
+        const auto mod = [](const std::string& ini) { return std::filesystem::u8path(ini).parent_path().filename().u8string(); };
+        if (!program && !empty) notice(NoticeLevel::Dire, "", ("EFMI Vulkan: no Mod is loaded: " + reason).c_str());
+        size_t shown = 0;
+        for (const auto& m : left_out)
+            if (shown++ < 6) notice(NoticeLevel::Warning, "", ("EFMI Vulkan: " + mod(m.first) + ": not loaded: " + m.second).c_str());
+        for (const auto& m : left_inputs)
+            if (shown++ < 6) notice(NoticeLevel::Warning, "", ("EFMI Vulkan: " + mod(m.first) + ": " + std::filesystem::u8path(m.first).filename().u8string() +
+                                                              " left out: " + m.second).c_str());
+        if (shown > 6) notice(NoticeLevel::Warning, "", ("EFMI Vulkan: " + std::to_string(shown - 6) + " more Mods or files not loaded, named in efmi_vk_layer.log").c_str());
+        for (const auto& ini : unmatched)
+            notice(NoticeLevel::Notice, ("unmatched " + ini).c_str(),
+                   ("EFMI Vulkan: " + mod(ini) + ": its mesh sections replace nothing (no [CommandListInitializeMergedSkeleton]: not an EFMI character Mod)").c_str());
+        if (program && (!left_out.empty() || !left_inputs.empty()))
+            notice(NoticeLevel::Info, "", ("EFMI Vulkan: " + std::to_string(packages.size()) + " Mods loaded, " +
+                                           std::to_string(left_out.size() + left_inputs.size()) + " left out").c_str());
+    }
     std::string reason, last_note;
     std::mutex note_mx;
     void note(const std::string& text)
@@ -2918,6 +2994,10 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
         return OwnedPresenter::runtime(device, memory, working, why, variants ? variants->pipeline_cache() : VK_NULL_HANDLE);
     };
     std::vector<CharacterProgram::FolderMod> mods;
+    std::vector<std::pair<std::filesystem::path, std::string>> left_inputs;
+    source.left_inputs = &left_inputs;
+    try { for (const auto& ini : CharacterProgram::unmatched_mesh_inis(source.mods)) folder->unmatched.push_back(ini.u8string()); }
+    catch (const std::exception& e) { logf("folder generation: INIs with mesh sections not listed: %s", e.what()); }
     const auto began = host_time_us();
     {
         // Every character Mod gone (removed, disabled): the original's reload gives a configuration
@@ -2967,6 +3047,11 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
         if (!folder->program) { folder->program = view; folder->owner = package; }
         folder->packages.push_back(std::move(package));
     }
+    for (const auto& item : left_inputs) {
+        folder->left_inputs.push_back({item.first.u8string(), item.second});
+        logf("folder generation: input left out: %s: %s", item.first.u8string().c_str(), item.second.c_str());
+    }
+    for (const auto& ini : folder->unmatched) logf("folder generation: mesh sections that match no draw (no character Mod): %s", ini.c_str());
     logf("folder generation: %zu character Mods, %zu left out, loaded in %llu ms", folder->packages.size(), folder->left_out.size(),
          static_cast<unsigned long long>((host_time_us() - began) / 1000));
     return folder;
@@ -2990,6 +3075,17 @@ void folder_frame(FolderGeneration& folder, bool had_draws, PresentWork* present
     ThreadTrace* const trace = folder.device->trace ? folder.device->trace() : nullptr;
     StageMark locking(trace, "folder Present (generation lock)");
     std::lock_guard<std::mutex> lock(*folder.plan_mx);
+    // What the layer did not do as the original does since the last presentation (LayerGap, D-137): each
+    // in the log, the first three of a generation on the screen, then one line for the rest.
+    if (const uint32_t count = folder.program->runtime_gap_count(); count != folder.gaps_seen) {
+        for (const auto& text : folder.program->runtime_gaps_since(folder.gaps_seen)) {
+            logf("folder generation: not as the original: %s", text.c_str());
+            if (folder.gaps_shown < 3) notice(NoticeLevel::Warning, text.c_str(), ("EFMI Vulkan: " + text).c_str());
+            else if (folder.gaps_shown == 3) notice(NoticeLevel::Notice, "", "EFMI Vulkan: more that the layer does not do as the original is in efmi_vk_layer.log");
+            ++folder.gaps_shown;
+        }
+        folder.gaps_seen = count;
+    }
     StageMark stage(trace, "folder Present (owned scope, INI Present, owned submission)");
     if (!ini_present(*folder.program, folder.presenter.get(), folder.frame.load(), folder.frame_seconds.load(std::memory_order_relaxed),
                      had_draws, present, base, now, [&folder](const std::string& text) { folder.note(text); }))
@@ -3198,6 +3294,7 @@ public:
     std::vector<std::future<void>> folder_retiring;
     uint64_t folder_staged_at = 0, folder_reloads = 0, folder_rejected = 0;
     bool folder_reload_again = false; // an F10 pressed while the last one loaded (BUG-069)
+    bool host_f10_down = false;       // F10 as the host sampled it while no generation is loaded (L-02)
     uint64_t folder_reload_began_us = 0; // the F10 reload that runs, for its notice (D-137)
     // D-133: the existing pipelines' twins, prepared when a discard gate appears (at the start, or RabbitFX
     // added by F10); presenting thread.
@@ -3350,12 +3447,12 @@ public:
 
 namespace {
 // The character Mods of an EFMI Mods folder (D-078).
-constexpr size_t kMaxPackages = 64;
+constexpr size_t kMaxPackages = 4096; // the folder generation's bound (D-141)
 std::vector<std::string> mods_characters(std::string& reason)
 {
     std::vector<std::string> found;
     for (const auto& path : CharacterProgram::mods_characters(mods_folder(), reason)) found.push_back(path.u8string());
-    if (found.size() > kMaxPackages) { found.resize(kMaxPackages); logf("character Mods: more than 64 in %s, the first 64 are used", mods_folder().u8string().c_str()); }
+    if (found.size() > kMaxPackages) { found.resize(kMaxPackages); logf("character Mods: more than 4096 in %s, the first 4096 are used", mods_folder().u8string().c_str()); }
     if (found.empty() && reason.empty()) reason = "no character Mod in " + mods_folder().u8string();
     return found;
 }
@@ -3409,13 +3506,14 @@ std::shared_ptr<CharacterBackend> character_create(Device* d, const VkPhysicalDe
         // One generation for the whole Mods folder (D-131): a controller per package carved from it.
         backend->folder = folder_create(d, p, m, backend->textures.get(), backend->variants, backend->translucency.get(), backend->bone_merge.get());
         for (auto& package : backend->folder->packages) {
-            if (backend->controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (64 at most)", package->package_path.c_str()); break; }
+            if (backend->controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (4096 at most)", package->package_path.c_str()); break; }
             auto controller = std::make_unique<CharacterController>();
             controller->path = package->package_path; controller->lazy = true; controller->folder_member = true;
             controller->active = package;
             backend->controllers.push_back(std::move(controller));
         }
         if (backend->controllers.empty()) backend->reason = backend->folder->reason.empty() ? "no character Mod in the folder generation" : backend->folder->reason;
+        backend->folder->announce();
         logf("character packages: %zu from the folder generation of %s", backend->controllers.size(), mods_folder().u8string().c_str());
         backend->rebuild_index();
         // The first frame's draws see the gates of the generation loaded here (D-133).
@@ -3549,7 +3647,7 @@ void folder_frame_and_exchange(CharacterBackend& b, bool had_draws, PresentWork*
                 CharacterController* back = nullptr;
                 for (auto& c : b.controllers) if (c->folder_member && c->path == added.first) back = c.get();
                 if (back && back->revive(added.second)) { logf("character package back with its Mod: %s", added.first.c_str()); continue; }
-                if (b.controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (64 at most)", added.first.c_str()); break; }
+                if (b.controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (4096 at most)", added.first.c_str()); break; }
                 auto controller = std::make_unique<CharacterController>();
                 controller->path = added.first; controller->lazy = true; controller->folder_member = true; controller->active = added.second;
                 logf("character package found by F10: %s", added.first.c_str());
@@ -3564,6 +3662,7 @@ void folder_frame_and_exchange(CharacterBackend& b, bool had_draws, PresentWork*
             auto old = std::move(b.folder); b.folder = std::move(staged); ++b.folder_reloads; b.folder_error.clear();
             logf("folder generation %llu Ready; F10 exchange complete for %zu packages", static_cast<unsigned long long>(b.folder_reloads),
                  b.folder->packages.size());
+            b.folder->announce();
             // As the original says it after its ReloadConfig (IniHandler.cpp): from the key to the exchange.
             if (b.folder_reload_began_us) {
                 char text[64];
@@ -3577,9 +3676,19 @@ void folder_frame_and_exchange(CharacterBackend& b, bool had_draws, PresentWork*
             logf("%s", b.folder_error.c_str()); b.retire_folder(std::move(b.folder_staged));
         }
     }
+    // Without a loaded generation (the folder refused at the start, or every character Mod was gone at the
+    // last reload) there is no reload_config binding to take the key: it is the host's then, as the
+    // original reloads whatever it holds. F10 did nothing in that state before, and the game had to be
+    // started again after a Mod was repaired (docs/architecture-review-2.1.md, L-02).
+    bool host_reload = false;
+    if (b.folder && !b.folder->program) {
+        const bool down = input.foreground && input.keys[VK_F10] && !input.keys[VK_CONTROL] && !input.keys[VK_SHIFT] && !input.keys[VK_MENU];
+        host_reload = down && !b.host_f10_down;
+        b.host_f10_down = down;
+    } else b.host_f10_down = false;
     // A request is taken only when no reload runs: one pressed meanwhile waits for it (BUG-069).
-    if (b.folder && b.folder->program && !b.folder_loading.valid() && !b.folder_staged &&
-        (std::exchange(b.folder_reload_again, false) || b.folder->program->take_reload_request())) {
+    if (b.folder && !b.folder_loading.valid() && !b.folder_staged &&
+        (b.folder->program ? (std::exchange(b.folder_reload_again, false) || b.folder->program->take_reload_request()) : host_reload)) {
         logf("folder generation: F10 reload starts");
         if (!b.folder_reload_began_us) b.folder_reload_began_us = host_time_us();
         Device* const d = b.device; const auto p = b.properties; const auto m = b.memory;
@@ -3615,7 +3724,7 @@ void character_rescan(CharacterBackend& b)
     }
     for (const auto& path : paths) {
         if (known.count(path)) continue;
-        if (b.controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (64 at most)", path.c_str()); break; }
+        if (b.controllers.size() >= kMaxPackages) { logf("character packages: no room for %s (4096 at most)", path.c_str()); break; }
         auto controller = std::make_unique<CharacterController>();
         controller->path = path; controller->lazy = true;
         Device* const d = b.device; const auto p = b.properties; const auto m = b.memory;
@@ -4051,6 +4160,10 @@ void character_status(CharacterBackend& b, JsonWriter& w)
         w.key("left_out"); w.begin_array();
         for (const auto& m : b.folder->left_out) { w.begin_object(); w.kv("ini", m.first); w.kv("reason", m.second); w.end_object(); }
         w.end_array();
+        w.key("left_inputs"); w.begin_array();
+        for (const auto& m : b.folder->left_inputs) { w.begin_object(); w.kv("ini", m.first); w.kv("reason", m.second); w.end_object(); }
+        w.end_array();
+        w.key("unmatched"); w.begin_array(); for (const auto& ini : b.folder->unmatched) w.str(ini); w.end_array();
         if (b.folder->presenter) b.folder->presenter->status(w);
         if (b.folder->program) {
             const auto ini = b.folder->program->status();

@@ -9,6 +9,10 @@ struct EngineHostState {
     std::wstring resource_root;
     size_t diagnostic_count = 0;
     std::deque<std::pair<size_t, std::string>> diagnostics;
+    // What the layer did not do as the original does (LayerGap, D-137): the texts in order, the latest
+    // 64 kept, and how many there were; the host shows each once.
+    size_t gap_count = 0;
+    std::deque<std::pair<size_t, std::string>> gaps;
 };
 // The generation the calling thread entered, or null outside every generation.
 EngineHostState* EngineHost();

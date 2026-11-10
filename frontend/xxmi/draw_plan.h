@@ -98,6 +98,8 @@ public:
     void tolerate_refusals(bool);
     // Matches of one resource share a phase. Keep every pre list ahead of every
     // post list; abort and budgets belong to the phase/transaction, not a match.
+    // The post lists run where the original's second check would meet the sections
+    // again: not after the pre lists bound an index buffer of their own.
     bool execute_matches(const std::vector<CommandList*>& pre,const std::vector<CommandList*>& post,CommandListState&,DrawPlan&,std::wstring&);
     // Each shader stage is an independent root. One transaction retains budgets
     // and GPU state across every pre root, the original call and every post root.
@@ -123,6 +125,8 @@ public:
     // During an execution: the matched root whose commands run (a TextureOverride's list, or a
     // shader hook's), else null. A folder generation's natives tell the calling Mod by it (D-131).
     const CommandList* current_root() const;
+    // During a native command: the INI line that runs it (its section names the calling Mod), else null.
+    const std::wstring* current_line() const;
     // During a plan, from a native command: a translucent draw of the current bindings (D-113), as a
     // DrawIndexed of `count` indices from `first` would be planned, with its opacity and mask (null:
     // none). False refuses with `why`.
@@ -133,6 +137,11 @@ public:
     // Shader operands (`vs`, `ps`) the host answers on the CPU where no owned shader facts apply (a
     // replaced draw's plan, D-089). A false answer refuses. Install before adaptation.
     void plan_shader_queries(ShaderQuery);
+    // A declaration the SPIR-V leaves between two DX11 answers (a buffer of 32-bit words: structured or
+    // raw): true when the running evaluation takes the second for this register. The adapter evaluates an
+    // `if` with every combination and refuses only when they do not agree; any other command that asks
+    // is refused.
+    bool undecided_words(wchar_t stage,unsigned slot);
     // Operands the original answers with Win32 calls outside the window sample (effective_dpi,
     // cursor_hotspot_x/y): the host answers them from its own sample. Install before adaptation.
     using HostValue=std::function<bool(ParamOverrideType,float&)>;
@@ -212,7 +221,8 @@ public:
     // flags of the assignments that use it.
     unsigned referenced_roles(CustomResource*) const;
 private:
-    bool execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState&,DrawPlan&,std::wstring&,OriginalCall between={});
+    bool execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState&,DrawPlan&,std::wstring&,OriginalCall between={},
+                      bool matched=false);
     void adapt_tree(CommandList& root, size_t depth);
     std::shared_ptr<Runtime> runtime_;
 };

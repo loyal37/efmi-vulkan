@@ -53,6 +53,10 @@ STEPS = [
     ("installed Mods offline plans in every key state", [os.path.join(ROOT, "scripts", "check_mod_states.py")]),
     # BUG-077: a Mod with a missing, short or twice-declared buffer file loads and degrades as the original.
     ("installed Mod with broken files offline plans", [os.path.join(ROOT, "scripts", "check_mod_degradation.py")]),
+    # docs/architecture-review-2.1.md Phase 0: what one Mod, one INI or one name of the Core gets wrong stays
+    # with it (the Core's version and names, a second INI under one namespace, an input the load refuses, a
+    # CustomShader without the owned runtime).
+    ("installed Mod failures contained, offline plans", [os.path.join(ROOT, "scripts", "check_mod_containment.py")]),
     # --mod-first: no matched draw shows the game's mesh, not even while a new object is identified or
     # an EFMI Mod registers with the Core's API (the user's bar; held instead, 2026-10-26).
     ("captured frame replayed with the Mods folder", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
@@ -116,6 +120,14 @@ STEPS = [
     # D-150: the original as the judge: INI cases under the pinned XXMI 3DMigoto in a D3D11 program and under the
     # owned GPU runtime, their persistent variables compared (after the GPU resource runtime is built).
     ("the original as the judge (XXMI DX11)", [os.path.join(ROOT, "scripts", "check_dx11_judge.py")]),
+    # P3-1 of docs/architecture-review-2.1.md: the judge's program draws, the original runs the cases'
+    # [TextureOverride] sections matched by the draws' index hashes, and the picture, the primitives and
+    # the variables are compared with what the layer's plans of the same lists mean.
+    ("the original as the judge of replaced draws (XXMI DX11)", [os.path.join(ROOT, "scripts", "check_dx11_judge_draws.py")]),
+    # One working replaced mesh and, one at a time, the lines of sandbox/judge_draw_sweep.json in front of its
+    # draw: no single line may make a Mod vanish. The record says which lines differ from the original and why;
+    # the step fails on a line that agreed and differs now, and on a recorded difference that agrees now.
+    ("one line at a time under the original (XXMI DX11)", [os.path.join(ROOT, "scripts", "check_dx11_judge_draws.py"), "--sweep"]),
     ("EFMITTL owned transparency", [os.path.join(ROOT, "scripts", "check_efmittl.py")]),
     ("original HLSL Vulkan compiler", [os.path.join(ROOT, "scripts", "check_shader_compiler.py")]),
     ("installed Mods and Core HLSL", [os.path.join(ROOT, "scripts", "check_hlsl_folder.py")]),
@@ -144,7 +156,8 @@ GROUPS = {
     "replay": ["captured frame"],
     "textures": ["texture first-use", "live INI rendering", "character replacement", "full card", "Mods folder"],
     "submission": ["two queues, bones", "bone regions reused", "probe end to end", "Vulkan validation", "live INI rendering"],
-    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "offline plans", "as the judge"],
+    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "offline plans", "as the judge",
+            "one line at a time"],
     "owned": ["owned", "GPU resources", "HLSL", "Present compute", "as the judge"],
     # A minute or so, for every change: text, the Python units, the expression cases, what each command
     # class does in a replaced draw, and the original as the judge.

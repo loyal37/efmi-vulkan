@@ -12,9 +12,11 @@ bool load_palette_files(const SkeletonFilePlan& input,core::PaletteDefinition& o
         component.range={source.first,source.count};
         for(uint32_t lod=0;lod<std::min(input.lod_count,2u);++lod){
             const auto& file=source.lods[lod];auto& target=component.lods[lod];
-            if(file.source==RemapSource::Unassigned)continue;
+            // A LOD whose pool element nothing assigned binds nothing in the original Core
+            // (MergedSkeleton.ini: `cs-t1 = ref Pool..._LodRemaps[component * levels + lod]`, then
+            // `z0 = @cs-t1 != 0`): no remap, the same as an element assigned null.
             target.available=true;
-            if(file.source==RemapSource::Identity)continue;
+            if(file.source!=RemapSource::File)continue;
             if(file.source!=RemapSource::File || !file.path.is_absolute() || !source.count || source.count>65536)
                 return fail("Invalid R16 remap file declaration");
         }

@@ -43,7 +43,14 @@ const SourceRegister* find_source_register(const std::vector<SourceRegister>& re
 // register (the DX11 builds of the game's pixel shaders declare registers their SPIR-V lacks, t60 and
 // up), a buffer of 32-bit words (a byte address buffer and a structured buffer of uint compile
 // alike), an image of a kind DX11 has no view for.
-struct SourceSrvDeclaration { uint32_t type = 0, dimension = 0, stride = 0; };
+// `type` 0: the slot is not declared (the original's ShaderResourceType::NONE).
+// `words`: a read-only buffer of 32-bit unsigned words. DX11 declares it as a structured buffer of
+// 4-byte elements or as a byte address buffer, and the SPIR-V is the same for both: the answer is one of
+// the two, `stride` being the structured one's.
+struct SourceSrvDeclaration { uint32_t type = 0, dimension = 0, stride = 0; bool words = false; };
+// The first t register the game's DX11 pixel shaders assign explicitly; the Vulkan builds do not declare
+// those textures, so a slot from here up without a SPIR-V register is not decided (docs/source-slots.md).
+constexpr uint32_t kSourceExplicitRegisters = 60;
 bool source_srv_declaration(const std::vector<SourceRegister>& registers, uint32_t slot, SourceSrvDeclaration& out, std::string& reason);
 
 // What the original EFMIv1 Core reads off a draw's vertex shader before it touches a mesh (D-079),

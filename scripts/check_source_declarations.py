@@ -10,7 +10,13 @@ is compared with the DX11 declaration of the same register in the paired scenes:
 of docs/source-slot-truth.json, the SPIR-V of catalogue-20261019/vulkan, the DXBC of
 catalogue-20261019/dx11. Fails on any answer that differs from a register DX11 declares, and when
 a kind of resource the rule leaves undecided turns out to be decided after all. Registers only the
-SPIR-V build declares are listed (they read as declared). Read-only on the catalogue.
+SPIR-V build declares are listed (they read as declared).
+
+A slot below t60 that the SPIR-V has no register for is answered "not declared" (D-159). Here every such
+slot of every pair is compared with the DXBC: the DX11 build must declare none there either. The pairs
+where it does are listed; the catalogue has three (one pixel register, t3, of two shaders), and the check
+fails when there are more. From t60 up the DX11 builds declare registers the SPIR-V lacks, and the rule
+does not answer. Read-only on the catalogue.
 """
 from __future__ import annotations
 
@@ -27,6 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TRUTH = ROOT / "docs" / "source-slot-truth.json"
 
 # D3D10_SB_RESOURCE_DIMENSION to D3D_SRV_DIMENSION, as ByteCodeReader's dxbc_dimension_to_srv.
+EXPLICIT_REGISTERS = 60   # frontend/gpu/source_registers.h, kSourceExplicitRegisters
+KNOWN_ABSENT_DECLARED = 3  # pairs whose DX11 build declares a register below t60 that the SPIR-V lacks (2026-11-10)
 SRV_DIMENSION = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8, 6: 9, 7: 3, 8: 5, 9: 7, 10: 10, 11: 11, 12: 1}
 TYPED, STRUCTURED, RAW = 1, 2, 3
 
@@ -89,8 +97,11 @@ def main() -> int:
             for item in fields[1:]:
                 slot, value = item.split(":")
                 slots[int(slot)] = None if value == "-" else tuple(int(x) for x in value.split("."))
+                # Type 0: a slot the SPIR-V has no register for, answered as not declared (compared below).
+                if slots[int(slot)] == (0, 0, 0):
+                    del slots[int(slot)]
             answers[h] = slots
-    stats, problems, only_spirv, undecided = Counter(), [], [], Counter()
+    stats, problems, only_spirv, undecided, absent_declared = Counter(), [], [], Counter(), []
     for vk, dx, stage in pairs:
         slots = answers.get(vk)
         if slots is None:
@@ -109,6 +120,16 @@ def main() -> int:
             else:
                 stats["answers equal to DX11"] += 1
         stats["DX11 registers beyond the SPIR-V's"] += len([s for s in declared if s not in slots])
+        for slot in range(EXPLICIT_REGISTERS):
+            if slot in slots:
+                continue
+            if slot in declared:
+                absent_declared.append("%s %s (DX11 %s) t%d declared %s" % (stage, vk, dx, slot, declared[slot]))
+            else:
+                stats["slots without a register that DX11 does not declare either"] += 1
+    if len(absent_declared) > KNOWN_ABSENT_DECLARED:
+        problems.append("%d slots below t%d answered as not declared are declared by DX11 (%d recorded)" %
+                        (len(absent_declared), EXPLICIT_REGISTERS, KNOWN_ABSENT_DECLARED))
     # The undecided registers are buffers of uint words; DX11 declares both kinds there.
     if undecided and not (undecided[RAW] and undecided[STRUCTURED]):
         problems.append("undecided registers are all of one kind %s: the rule could decide them" % dict(undecided))
@@ -118,6 +139,10 @@ def main() -> int:
           "%d DX11 registers beyond the SPIR-V's, %d registers only the SPIR-V build declares" % (
               stats["pairs vs"] + stats["pairs ps"], stats["pairs vs"], stats["pairs ps"], stats["answers equal to DX11"],
               dict(undecided), stats["DX11 registers beyond the SPIR-V's"], len(only_spirv)))
+    print("srv declarations: %d slots below t%d without a register are not declared by DX11 either; %d are (answered as not declared)" %
+          (stats["slots without a register that DX11 does not declare either"], EXPLICIT_REGISTERS, len(absent_declared)))
+    for line in absent_declared:
+        print("  DX11 declares where the SPIR-V has no register: " + line)
     for line in only_spirv:
         print("  only the SPIR-V build declares: " + line)
     for line in problems:

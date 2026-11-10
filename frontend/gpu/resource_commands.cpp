@@ -105,6 +105,7 @@ Buffer ResourceCommands::create(VkDeviceSize size,VkBufferUsageFlags usage,const
     return result;
 }
 VkCommandBuffer ResourceCommands::command() {
+    ++recorded_;
     if(pending_)return pending_->command_;
     auto p=std::make_shared<ResourceSubmission>();p->device_=device_;p->recycler_=recycler_;const auto& d=device_.dispatch;
     {

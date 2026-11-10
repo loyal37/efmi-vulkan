@@ -82,7 +82,19 @@ def set_key(lines: list[str], section: str, name: str, value: str) -> None:
     raise RuntimeError("[%s] sets no %s" % (section, name))
 
 
-def smallest_character_mod() -> Path:
+def binds_dds(folder: Path) -> bool:
+    """Whether one of the folder's INIs binds a declared .dds file at a pixel slot itself (`ps-tN = Resource...`),
+    which the texture variants below change; a Mod that binds its textures through a library does not."""
+    for ini in folder.glob("*.ini"):
+        text = ini.read_text(encoding="utf-8", errors="replace")
+        files = {n.lower(): k["filename"] for n, k in resources(text)}
+        if any(files.get(b.lower(), "").lower().endswith(".dds")
+               for b in re.findall(r"(?im)^\s*ps-t\d+\s*=\s*(?:ref\s+|reference\s+)?(Resource[^\s;]+)", text)):
+            return True
+    return False
+
+
+def smallest_character_mod(suits=lambda folder: True) -> Path:
     candidates = []
     for folder in MODS.iterdir():
         if not folder.is_dir() or folder.name.upper().startswith("DISABLED"):
@@ -90,14 +102,15 @@ def smallest_character_mod() -> Path:
         inis = [p for p in folder.glob("*.ini")]
         if not any(re.search(r"(?im)^\s*\[TextureOverride", p.read_text(encoding="utf-8", errors="replace")) for p in inis):
             continue
-        if not list(folder.rglob("*.buf")):
+        if not list(folder.rglob("*.buf")) or not suits(folder):
             continue
         candidates.append((sum(f.stat().st_size for f in folder.rglob("*") if f.is_file()), folder))
     return min(candidates)[1]
 
 
 def main() -> int:
-    source = smallest_character_mod()
+    # The smallest installed character Mod whose own lists bind a .dds texture (the texture variants need one).
+    source = smallest_character_mod(binds_dds)
     out = ROOT / "build" / "mod-degradation"
     if out.exists():
         shutil.rmtree(out)

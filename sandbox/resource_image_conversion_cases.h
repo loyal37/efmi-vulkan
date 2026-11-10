@@ -230,9 +230,9 @@ ps-t0 = ref ResourceDepth
 ResourceDepth = copy ResourceSource
 )ini");
         f.backend->begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!f.ini->present({},1,0,f.why) && f.why.find("enabled VK_EXT_depth_range_unrestricted")!=std::string::npos,"INI color-to-D32 copy reports missing enabled extension");
+        const bool presented=f.ini->present({},1,0,f.why);
         check(f.srv(0).image && f.srv(0).image_view,"INI color-to-D32 copy_desc creates the description without needing a transfer extension");
-        refuses([&]{f.backend->finish();},"Refused INI conversion prevents submitting the earlier clear and copy_desc scope");f.backend->discard();f.release();
+        declined(*f.ini,*f.backend,presented,"enabled VK_EXT_depth_range_unrestricted","INI color-to-D32 copy says the extension that is not enabled and copies nothing");f.release();
     }
     {
         gpu::ResourceBudgets budgets;

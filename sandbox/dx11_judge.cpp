@@ -2,18 +2,23 @@
 // d3d11.dll (3DMigoto) loaded from a project folder, presenting frames so the original runs its [Present]
 // lists, until its persistent variables are saved (d3dx_user.ini). The folder's d3dx.ini names this program
 // as the target; the user's installation is never touched.
-// Usage: efmi_vk_dx11_judge.exe <folder with d3d11.dll and d3dx.ini> <frames>
+// Usage: efmi_vk_dx11_judge.exe <folder with d3d11.dll and d3dx.ini> <frames> [scene]
+// With `scene` the program also draws (dx11_judge_scene.h): two indexed quads a frame, whose index region
+// hashes the case's [TextureOverride] sections match, and after the last frame the picture's points and
+// the draws' primitives on stdout (docs/architecture-review-2.1.md, P3-1).
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <cstdio>
 #include <string>
+#include "dx11_judge_scene.h"
 
 static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM a, LPARAM b) { return DefWindowProcW(w, m, a, b); }
 
 int wmain(int argc, wchar_t** argv)
 {
-    if (argc != 3) { fprintf(stderr, "usage: efmi_vk_dx11_judge <xxmi folder> <frames>\n"); return 2; }
+    if (argc != 3 && !(argc == 4 && !wcscmp(argv[3], L"scene"))) { fprintf(stderr, "usage: efmi_vk_dx11_judge <xxmi folder> <frames> [scene]\n"); return 2; }
+    const bool scene_mode = argc == 4;
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     const std::wstring folder = argv[1];
     const int frames = _wtoi(argv[2]);
@@ -41,14 +46,21 @@ int wmain(int argc, wchar_t** argv)
     ID3D11Texture2D* back = nullptr; swap->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back));
     ID3D11RenderTargetView* rtv = nullptr; device->CreateRenderTargetView(back, nullptr, &rtv);
     const float clear[4] = {0, 0, 0, 1};
+    judge_scene::Scene scene;
+    if (scene_mode && !judge_scene::create(device, scene)) return 5;
     for (int i = 0; i < frames; ++i) {
         MSG msg; while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
         context->OMSetRenderTargets(1, &rtv, nullptr);
         context->ClearRenderTargetView(rtv, clear);
+        if (scene_mode) {
+            const bool last = i == frames - 1;
+            judge_scene::draw(context, scene, rtv, last);
+            if (last && !judge_scene::report(context, scene, back)) return 6;
+        }
         swap->Present(0, 0);
         Sleep(10);
     }
-    printf("presented %d frames\n", frames);
+    if (!scene_mode) printf("presented %d frames\n", frames);
     rtv->Release(); back->Release(); context->Release(); device->Release(); swap->Release();
     DestroyWindow(window);
     return 0;

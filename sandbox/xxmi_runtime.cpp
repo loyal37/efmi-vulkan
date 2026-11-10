@@ -197,9 +197,66 @@ static int probe_command(const std::filesystem::path& file)
     printf("}\n");
     return 0;
 }
+// The judge's scene on the layer's side (docs/architecture-review-2.1.md, P3-1): the case in a CPU
+// generation, as the character renderer hosts a Mod's lists. Each frame the Present, then the two game
+// draws of sandbox/dx11_judge_scene.h by their index region hashes (six indices from the first, one
+// instance, DrawIndexedInstanced), the game's texture at pixel slot 0 bound and of no known hash. Printed:
+// the plan of each draw of the last frame (or why it was refused) and the generation's variables.
+static int judge_scene(const std::filesystem::path& file, int frames, uint32_t first_hash, uint32_t second_hash)
+{
+    const auto path = std::filesystem::absolute(file);
+    RuntimeConfig config{path.parent_path(), {path}, path.parent_path() / "settings", "judge"};
+    config.texture_identity = true;
+    std::string reason;
+    auto runtime = IniRuntime::load(config, {}, reason);
+    if (!runtime) { fprintf(stderr, "judge scene: %s\n", reason.c_str()); return 1; }
+    const uint32_t hashes[2] = {first_hash, second_hash};
+    efmi::assets::FilePlan plans[2];
+    std::string refused[2];
+    RuntimeInput input; input.foreground = true;
+    for (int frame = 1; frame <= frames; ++frame) {
+        if (!runtime->present(input, uint64_t(frame), float(frame) / 60.0f, reason)) { fprintf(stderr, "judge scene: present: %s\n", reason.c_str()); return 1; }
+        for (int i = 0; i < 2; ++i) {
+            RuntimeDraw draw; draw.hash = hashes[i]; draw.count = 6; draw.frame = uint64_t(frame); draw.seconds = float(frame) / 60.0f;
+            draw.shader_stages = 0x1 | 0x10;
+            // The scene's one colour target, 256 x 256, as the host knows a draw's target.
+            draw.targets_known = true; draw.render_targets = 1; draw.target_width = draw.target_height = 256;
+            draw.pixel_texture = [](unsigned slot, RuntimeTexture& texture, std::string&) { texture = {}; texture.bound = slot == 0; return true; };
+            plans[i] = {}; refused[i].clear();
+            if (!runtime->draw(draw, plans[i], refused[i]) && refused[i].empty()) refused[i] = "refused";
+        }
+    }
+    static const char* operations[] = {"bind_vertex", "bind_index", "bind_pixel_resource", "draw_indexed", "external", "translucent"};
+    printf("{\"draws\":[");
+    for (int i = 0; i < 2; ++i) {
+        const auto& plan = plans[i];
+        printf("%s{\"refused\":", i ? "," : ""); json_text(refused[i]);
+        printf(",\"skip\":%s,\"pre_items\":%lld,\"items\":[", plan.skip_original ? "true" : "false",
+               plan.pre_items == SIZE_MAX ? -1ll : static_cast<long long>(plan.pre_items));
+        for (size_t k = 0; k < plan.items.size(); ++k) {
+            const auto& item = plan.items[k];
+            printf("%s{\"op\":\"%s\",\"slot\":%u,\"file\":", k ? "," : "", operations[std::min<size_t>(size_t(item.operation), 5)], item.slot);
+            if (item.resource) { auto name = item.resource->path.filename().u8string(); for (auto& c : name) c = char(tolower(static_cast<unsigned char>(c))); json_text(name); }
+            else printf("null");
+            printf(",\"application\":%d,\"count\":%u,\"first\":%u,\"base\":%d,\"instances\":%u,\"indexed\":%s,\"automatic\":%s}", item.application_slot,
+                   item.index_count, item.first_index, item.vertex_offset, item.instance_count, item.indexed ? "true" : "false", item.automatic ? "true" : "false");
+        }
+        printf("]}");
+    }
+    printf("],\"variables\":{");
+    bool comma = false;
+    for (const auto& [name, value] : runtime->status().variables) {
+        if (comma) putchar(','); comma = true;
+        json_text(name); printf(":%.9g", value);
+    }
+    printf("}}\n");
+    return 0;
+}
 int wmain(int argc, wchar_t** argv)
 {
     try {
+        if (argc == 6 && !wcscmp(argv[1], L"--judge-scene"))
+            return judge_scene(argv[2], _wtoi(argv[3]), uint32_t(wcstoul(argv[4], nullptr, 16)), uint32_t(wcstoul(argv[5], nullptr, 16)));
         if (argc > 1 && !wcscmp(argv[1], L"--inspect-character")) return inspect_character(argc, argv);
         if (argc == 3 && !wcscmp(argv[1], L"--probe-command")) return probe_command(argv[2]);
         if (argc == 4 && !wcscmp(argv[1], L"--evaluate-language")) {
@@ -304,8 +361,16 @@ int wmain(int argc, wchar_t** argv)
             check(inert && reported, "A ShaderOverride acting on game shaders loads inert and is reported");
         }
         write(ini, "namespace = runtime_test\n[CustomShaderUnadapted]\ncs = absent.hlsl\n");
-        auto failed = IniRuntime::load(config, {}, reason);
-        check(!failed, "A candidate with an unadapted section is refused");
+        {
+            // As a CustomShader the original could not compile: declared, its runs doing nothing, the rest of
+            // the generation loaded, and said (it refused the whole candidate before; P0-6).
+            auto inert = IniRuntime::load(config, {}, reason);
+            const auto loaded = inert ? inert->status() : RuntimeStatus{};
+            const bool told = std::any_of(loaded.gaps.begin(), loaded.gaps.end(),
+                                          [](const std::string& text) { return text.find("CustomShader") != std::string::npos; });
+            if (!inert) fprintf(stderr, "CustomShader candidate: %s\n", reason.c_str());
+            check(inert && told, "A CustomShader section without shader execution loads inert and is said");
+        }
         write(ini, "namespace = runtime_test\n[ShaderOverrideInert]\nhash = 1234\nfilter_index = 5\nallow_duplicate_hash = overrule\n");
         check(bool(IniRuntime::load(config, {}, reason)), "A ShaderOverride with only hash and filter_index runs nothing and loads");
         render(first); check(plan.items.back().index_count == 9, "Failed parse leaves live generation usable");
@@ -353,13 +418,14 @@ int wmain(int argc, wchar_t** argv)
             for (const auto& text : loaded.diagnostic_messages) named |= text.find("invalid_operation") != std::string::npos;
             check(warned && loaded.diagnostics >= 1 && named, "An invalid dormant command is reported and skipped, as by the original loader");
         }
-        // What this generation cannot execute refuses the whole candidate instead (a CustomShader
-        // without shader execution; an acting ShaderOverride loads inert since D-089).
+        // What this generation cannot execute is inert and the rest loads, as the original loads past a
+        // CustomShader it cannot compile (P0-6; an acting ShaderOverride loads inert since D-089). It refused
+        // the whole folder before.
         write(tree / "Mods/second/dormant.ini", "[CustomShaderUnsupported]\ncs = absent.hlsl\n");
-        check(!IniRuntime::load(folder_config, {}, reason), "A section without an adapter refuses the candidate");
+        check(bool(IniRuntime::load(folder_config, {}, reason)), "A CustomShader section without shader execution does not refuse the folder");
         render(directory);
         check(plan.items.back().index_count == 6 && directory->status().variables.at("$\\second\\hits") == 24,
-              "Failed directory reload leaves the previous generation usable");
+              "Another directory load leaves the previous generation usable");
         std::filesystem::remove(tree / "Mods/second/dormant.ini");
         write(tree / "library/shared.ini", "namespace = shared\n[Constants]\nglobal $n = 30\n[CommandListCount]\n$n = $n + 1\n");
         auto directory_next = IniRuntime::load(folder_config, {}, reason);

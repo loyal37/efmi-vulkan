@@ -53,6 +53,11 @@ public:
     // by silently treating an active render pass as OutsideRenderPass.
     void begin(VkQueue,ExecutionSite);
     bool scope_active() const {return active_;}
+    // Whether the active scope's recorded work is to be dropped: a command failed after it had recorded
+    // part of its work, or the execution around the scope failed. finish() refuses such a scope;
+    // discard() or suspend() drops its work and the next scope starts clean. The failure is the scope's:
+    // it ended the whole generation's owned work before, which in a folder generation is every Mod's.
+    bool failed() const {return failed_;}
     ExecutionSite site() const {return site_;}
     VkQueue queue() const {return queue_;}
     // Another queue of the family once the host waited for every earlier submission (D-090).
@@ -162,6 +167,8 @@ private:
     // A store's reads in flight in replaced draws' scopes, with the value's offset in each (D-147).
     std::unordered_map<const StoreCommand*,std::vector<std::pair<gpu::ResourceCommands::Feedback,UINT>>> feedback_;
     bool recorded_=false; // owned work recorded in the current Draw scope
+    // Commands that failed after recording part of their work: not run again in this generation.
+    std::unordered_set<const CommandListCommand*> disabled_;
     bool active_=false,installed_=false,failed_=false;
 };
 }

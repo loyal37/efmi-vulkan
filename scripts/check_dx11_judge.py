@@ -58,9 +58,10 @@ hunting = 0
 def build_host() -> Path:
     exe = OUT / "efmi_vk_dx11_judge.exe"
     source = ROOT / "sandbox" / "dx11_judge.cpp"
-    if not exe.is_file() or exe.stat().st_mtime < source.stat().st_mtime:
+    scene = ROOT / "sandbox" / "dx11_judge_scene.h"
+    if not exe.is_file() or exe.stat().st_mtime < max(source.stat().st_mtime, scene.stat().st_mtime):
         run_cl(find_vcvars(), str(OUT), COMMON + ["/Fo" + str(OUT) + "/", "/Fd" + str(OUT / "judge.pdb"), str(source),
-                                                  "/Fe:" + str(exe), "/link", "/NOLOGO", "d3d11.lib", "dxgi.lib", "user32.lib"])
+                                                  "/Fe:" + str(exe), "/link", "/NOLOGO", "d3d11.lib", "dxgi.lib", "user32.lib", "d3dcompiler.lib"])
     return exe
 
 

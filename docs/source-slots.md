@@ -48,7 +48,9 @@ the original's ByteCodeReader takes it off the shader's DXBC. The register above
 - a read-only storage buffer: structured (2), dimension buffer (1), stride its array stride; except
   an array of 32-bit unsigned words, which DXC makes of a ByteAddressBuffer and of a
   StructuredBuffer<uint> alike: not decided;
-- a slot without a register: not decided.
+- a slot without a register, below t60: not declared (type 0; `srv_stride` and `srv_dimension` read -1), as the
+  original answers a slot its DXBC does not declare (D-159);
+- a slot without a register, from t60 up: not decided.
 
 `frontend/gpu/source_registers.cpp` (`source_srv_declaration`); `efmi_vk_character_test
 --srv-declarations` prints it per module. `scripts/check_source_declarations.py` (suite step)
@@ -56,7 +58,10 @@ compares every answer with the DXBC of the paired catalogue (2026-10-19, 180 sha
 vertex, 121 pixel): all 1555 answers equal the DX11 declaration. Of the 146 undecided word
 buffers DX11 declares 74 structured and 72 raw, so neither answer would be right. The DX11 builds
 of the pixel shaders declare 554 registers their SPIR-V lacks, in 87 pairs (from t60 upward in
-84, from t3 in 3), which is why a slot without a register is not taken as undeclared. 5 registers only
+84, from t3 in 3). From t60 up a slot without a register is therefore not taken as undeclared. Below t60 it
+is (D-159, 2026-11-10): of the 9094 slots below t60 that a SPIR-V of the pairs has no register for, the
+DX11 build declares 3 (one pixel register, t3, in the pairs of two shaders) and none of the other 9091;
+the check lists them and fails when there are more. 5 registers only
 the SPIR-V build has (a vertex t0 in two pairs of one DX11 shader, a pixel t12 or t13 in three) read
 as declared where DX11 would answer none.
 

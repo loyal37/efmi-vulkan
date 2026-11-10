@@ -1,6 +1,7 @@
 // The parser is included unchanged, as in the standalone feasibility host.
 #include "ini_module.cpp"
 #include "runtime_host.h"
+#include "layer_gap.h"
 #include <regex>
 
 std::wstring HostResourceDirectory();
@@ -72,6 +73,7 @@ void RuntimeShaderRegexGates(std::vector<std::pair<uint32_t, uint32_t>>& gates, 
 }
 void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,bool custom_shaders,bool shader_hooks)
 {
+    size_t inert_shaders = 0; std::wstring first_inert;
     // These require renderer adapters not supplied by the character runtime.
     // Reject the whole candidate instead of silently dropping active features.
     for (const auto& section : ini_sections) {
@@ -86,18 +88,31 @@ void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,boo
                 return !_wcsicmp(line.first.c_str(), L"hash") || !_wcsicmp(line.first.c_str(), L"filter_index") ||
                        !_wcsicmp(line.first.c_str(), L"allow_duplicate_hash");
             });
-            if (!declaration)
-                LogOverlayW(LOG_WARNING, L"[%ls] acts on game shaders by their DX11 hash, which the Vulkan layer cannot see: inert\n",
+            // A ShaderOverride that acts is a difference the player sees (a shader hidden under DX11 is drawn
+            // here): said on the screen. ShaderRegex sections are the libraries' (RabbitFX, EFMITTL), whose
+            // effect the layer provides natively where it does (D-113, D-133): the original's warning only.
+            if (!declaration && !_wcsnicmp(section.first.c_str(), L"ShaderOverride", 14))
+                LayerGap(L"[%ls] acts on game shaders by their DX11 hash, which the Vulkan layer cannot see: inert", section.first.c_str());
+            else if (!declaration)
+                LogOverlayW(LOG_WARNING, const_cast<wchar_t*>(L"[%ls] acts on game shaders by their DX11 hash, which the Vulkan layer cannot see: inert\n"),
                             section.first.c_str());
             continue;
         }
-        for (const auto* prefix : {L"CustomShader", L"ShaderOverride", L"ShaderRegex"})
-            if (!_wcsnicmp(section.first.c_str(), prefix, wcslen(prefix)) &&
-                !(custom_shaders && !wcscmp(prefix,L"CustomShader")) &&
-                !(shader_hooks && (!wcscmp(prefix,L"ShaderOverride") || !wcscmp(prefix,L"ShaderRegex"))) &&
-                std::none_of(native_shaders.begin(), native_shaders.end(), [&](const auto& name) { return !_wcsicmp(name.c_str(), section.first.c_str()); }))
-                throw std::runtime_error("INI declares an unsupported shader/overlay section");
+        // A CustomShader section in a generation without a shader executor (the owned GPU runtime not
+        // available: its tools not deployed beside the layer, or switched off): as one the original could
+        // not compile, it is declared and its runs do nothing; the rest of the Mod loads. Before, such a
+        // section refused the whole generation.
+        if (!custom_shaders && !_wcsnicmp(section.first.c_str(), L"CustomShader", 12) &&
+            std::none_of(native_shaders.begin(), native_shaders.end(), [&](const auto& name) { return !_wcsicmp(name.c_str(), section.first.c_str()); })) {
+            if (!inert_shaders++) first_inert = section.first;
+        }
     }
+    // Once for the generation, not per section (a folder of Mods has dozens).
+    if (inert_shaders == 1)
+        LayerGap(L"[%ls] does nothing: this generation has no owned GPU runtime to run a CustomShader", first_inert.c_str());
+    else if (inert_shaders)
+        LayerGap(L"[%ls] and %zu more CustomShader sections do nothing: this generation has no owned GPU runtime to run a CustomShader",
+                 first_inert.c_str(), inert_shaders - 1);
 }
 void efmi::frontend::RuntimeParseCustomShaders(const std::function<void(const RuntimeShaderDeclaration&)>& compile)
 {

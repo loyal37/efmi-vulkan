@@ -189,11 +189,22 @@ const SourceRegister* find_source_register(const std::vector<SourceRegister>& re
 bool source_srv_declaration(const std::vector<SourceRegister>& registers, uint32_t slot, SourceSrvDeclaration& out, std::string& reason)
 {
     const auto* r = find_source_register(registers, 't', slot);
-    if (!r) { reason = "no t register in the SPIR-V (a DX11 build may declare more)"; return false; }
+    if (!r) {
+        // A slot the draw's shader has no register for. The original answers a slot its DXBC does not declare
+        // with type NONE (srv_stride and srv_dimension then read -1). Below t60 the Vulkan build lacks a
+        // register exactly where the DX11 build declares none: the paired catalogue's 180 shader pairs differ
+        // in one register (a pixel t3 of two shaders, scripts/check_source_declarations.py). From t60 up the
+        // DX11 pixel shaders declare registers by explicit assignment that the Vulkan builds do not have
+        // (551 registers in 84 pairs): not decided there. A library that asks every slot of a range
+        // (EFMITTL's `ps->srv_type(8)` ... `(21)`) refused every draw it ran on while this was not answered.
+        if (slot < kSourceExplicitRegisters) { out = {}; return true; }
+        reason = "no t register in the SPIR-V at t60 or above (the DX11 builds declare more there)"; return false;
+    }
     out = {};
     if (r->kind == SourceRegister::TexelSrv) { out.type = 1; out.dimension = 1; return true; }
     if (r->kind == SourceRegister::BufferSrv) {
-        if (r->words || !r->stride) { reason = "a buffer of 32-bit words: raw or structured is not decided"; return false; }
+        if (r->words && r->stride) { out.words = true; out.type = 2; out.dimension = 1; out.stride = r->stride; return true; }
+        if (!r->stride) { reason = "a buffer whose element stride the SPIR-V does not give"; return false; }
         out.type = 2; out.dimension = 1; out.stride = r->stride; return true;
     }
     // SPIR-V Dim 0 1D, 1 2D, 2 3D, 3 cube; arrayed and multisampled as DX11's view dimensions.

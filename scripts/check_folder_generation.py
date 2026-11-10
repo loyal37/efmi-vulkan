@@ -61,7 +61,7 @@ def main() -> int:
         for h in {s["hash"] for s in entry.get("sections", [])}:
             hashes[h] += 1
     shared = {h for h, n in hashes.items() if n > 1}
-    differences, shared_differences = [], []
+    differences, shared_differences, not_compared = [], [], []
     for ini, a in own.items():
         b = folder.get(ini)
         if b is None:
@@ -71,6 +71,13 @@ def main() -> int:
             differences.append("%s: loads %s alone, %s in the folder (%s)" % (ini, a["loaded"], b["loaded"], b.get("reason", "")))
             continue
         if not a["loaded"]:
+            continue
+        # A generation of one Mod does not load a library that acts on the game's resources by hash (it
+        # would act once per generation, D-112); the folder generation loads it, as the original does. Such
+        # a Mod's two runs are two different inputs: listed, not compared (the folder's is the one that plays).
+        unloaded = [n for n in a.get("library_notes", []) if "acts on game resources by hash" in n]
+        if unloaded:
+            not_compared.append("%s: %s" % (ini, unloaded[0]))
             continue
         for k in COMPARED:
             if a.get(k) != b.get(k):
@@ -94,6 +101,8 @@ def main() -> int:
     (out / "compare.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     print("folder generation: %d character Mods, %d load alone, %d in the folder; %d sections on hashes two Mods declare"
           % (report["mods"], report["loaded_alone"], report["loaded_in_folder"], len(shared)))
+    for text in not_compared:
+        print("  not compared:", text.encode("ascii", "backslashreplace").decode())
     for text in shared_differences:
         print("  shared hash:", text.encode("ascii", "backslashreplace").decode())
     for text in differences:

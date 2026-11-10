@@ -431,6 +431,12 @@ def directory_generation(checks, validation):
         "namespace = runtime_bad\n[Constants]\nglobal persist $presents = 0\npost ResourceCopied = copy_desc ResourceSource\n"
         "[ResourceSource]\ntype = Buffer\nstride = 16\nfilename = source.buf\n[ResourceCopied]\n[Present]\n$presents = 1\n", encoding="ascii")
     (mods / "bad" / "source.buf").write_bytes(bytes(64))
+    # docs/architecture-review-2.1.md R-03, R-11: an INI outside every character Mod whose TextureOverride
+    # matches by an index count (a mesh Mod that is no EFMI character Mod). The layer matches no draw with
+    # it; it is listed and said, where nothing told the player before.
+    (mods / "meshonly").mkdir()
+    (mods / "meshonly" / "mesh.ini").write_text(
+        "namespace = runtime_meshonly\n[TextureOverrideMesh]\nhash = 0badf00d\nmatch_index_count = 3\nhandling = skip\n", encoding="ascii")
     # A file named .INI is not an INI to the original (its extension test is case-sensitive): neither a
     # character Mod nor an input, and the folder loads without it.
     (mods / "upper").mkdir()
@@ -496,6 +502,19 @@ def directory_generation(checks, validation):
     left_out = status.get("folder_generation", {}).get("left_out", [])
     checks.equal([Path(m.get("ini", "")).parent.name for m in left_out], ["broken"],
                  label + ": the Mod the layer cannot take is left out alone, with its reason " + str([m.get("reason", "") for m in left_out]))
+    # R-11: what does not show is said on the screen (a notice), not only in the log and the status.
+    log_path = root / "layer.log"
+    log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines() if log_path.is_file() else []
+    checks.check(any("notice: EFMI Vulkan: broken: not loaded" in line for line in log_lines),
+                 label + ": the Mod left out is named in a notice with its reason")
+    checks.equal([Path(p).parent.name for p in status.get("folder_generation", {}).get("unmatched", [])], ["meshonly"],
+                 label + ": the INI whose mesh sections match no draw is listed")
+    checks.check(any("notice: EFMI Vulkan: meshonly: its mesh sections replace nothing" in line for line in log_lines),
+                 label + ": and said in a notice")
+    # L-02 and L-01: the scene's last steps ran to their end (F10 with no generation loaded reloads; a
+    # package whose activation fails once leaves its draws to the game and is brought up again).
+    checks.check((folder / "runtime-reactivated.json").is_file(),
+                 label + ": F10 without a loaded generation and the retried activation ran to their end")
     if len(packages) == 4:
         own, other, zeta, colon_package = packages
         checks.check(colon_package.get("lazy") and not colon_package.get("activated"), label + ": the Mod named in another script is a package of the folder, never matched")

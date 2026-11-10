@@ -42,7 +42,13 @@ struct CharacterDiscovery {
     // What the original does for the Mod's sections and the layer does not (D-137, D-138): a line each
     // (UTF-8, the section named), for the host to show; the rest of the Mod loads.
     std::vector<std::string> gaps;
+    // Why the generation could not prepare this Mod (its skeleton declarations, its contract), empty when
+    // it did; a folder generation that refused names here every Mod to leave out (UTF-8).
+    std::string refused;
 };
+// The version the installed Core declares (`global $version` of its main.ini), which its RegisterMod
+// compares a Mod's required version with; 0 when not known. Before the generation loads.
+void character_core_version(RuntimeExtension& core, float version);
 std::shared_ptr<RuntimeExtension> character_discovery(const std::string& mod_namespace, std::shared_ptr<CharacterDiscovery> output);
 // A folder generation (D-131, docs/folder-generation.md): every character Mod of the Mods folder in
 // one generation, by its namespace as the parser names it (lower case), each discovered into its output as above, in the order the draws name them

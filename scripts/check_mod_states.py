@@ -7,10 +7,18 @@ state; after each, every Mod's sections are planned. The original's own dispatch
 changes (cycle, toggle, hold, conditions). A section the layer refuses in any state is a place where a
 player sees the game's model or a broken one: the check fails and lists it with the first state it
 appeared in. The offline stand-ins' own limits (no game pipeline) are not counted.
+
+Plan digests (docs/architecture-review-2.1.md, P3-3): the run gives every Mod one number over all its
+plans in all states. For the installed folder the number is compared with the one accepted before for
+the same files (the Mod's own, and the Core's and the folder's shared INIs): a change of the layer that
+changes any plan of an installed Mod fails here and names the Mod, until it is accepted with --accept.
+A Mod whose files changed, or a new one, is accepted as it is. The accepted numbers are this machine's
+(build/plan-digests/accepted.json, not in the repository: they describe the user's Mods).
 No GPU. Writes build/mod-states/states.jsonl.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -21,6 +29,61 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MODS = Path(os.environ.get("EFMI_VK_CHECK_MODS", r"D:\XXMI-Launcher-Portable-v2.1.6\EFMI\Mods"))
 CORE = Path(os.environ.get("EFMI_VK_CHECK_CORE", r"D:\XXMI-Launcher-Portable-v2.1.6\EFMI\Core\EFMI"))
+
+
+ACCEPTED = ROOT / "build" / "plan-digests" / "accepted.json"
+
+
+def files_signature(folders: list[Path], whole: bool) -> str:
+    """The files plans depend on: every INI by its bytes; with `whole` every other file by name and size
+    (a buffer's size decides counts and bounds, its bytes do not reach a plan)."""
+    h = hashlib.sha1()
+    for folder in folders:
+        if folder.is_file():  # an INI of its own in the Mods folder
+            h.update(folder.read_bytes())
+            continue
+        for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+            name = path.relative_to(folder).as_posix().lower()
+            if path.suffix.lower() == ".ini":
+                h.update(name.encode("utf-8", "replace") + b"\0" + path.read_bytes() + b"\0")
+            elif whole:
+                h.update(("%s\0%d\0" % (name, path.stat().st_size)).encode("utf-8", "replace"))
+    return h.hexdigest()
+
+
+def compare_digests(mods: list[dict], accept: bool) -> bool:
+    """True when a Mod's plans changed while its files did not."""
+    accepted = json.loads(ACCEPTED.read_text(encoding="utf-8")) if ACCEPTED.is_file() else {}
+    roots = sorted({Path(m["ini"]).parts[0] for m in mods})
+    # What every Mod's plans share: the Core's lists and the folder's INIs outside the character Mods.
+    shared = hashlib.sha1()
+    shared.update(files_signature([CORE], False).encode())
+    for path in sorted(p for p in MODS.rglob("*.ini") if p.relative_to(MODS).parts[0] not in roots):
+        if any(part.lower().startswith("disabled") for part in path.relative_to(MODS).parts):
+            continue
+        shared.update(path.relative_to(MODS).as_posix().lower().encode("utf-8", "replace") + b"\0" + path.read_bytes())
+    shared_signature = shared.hexdigest()
+    same = new = changed = 0
+    for mod in mods:
+        if not mod.get("loaded") or "digest" not in mod:
+            continue
+        key = mod["ini"]
+        inputs = files_signature([MODS / Path(key).parts[0]], True) + ":" + shared_signature
+        before = accepted.get(key)
+        if before and before["inputs"] == inputs and before["digest"] == mod["digest"]:
+            same += 1
+            continue
+        if before and before["inputs"] == inputs and not accept:
+            changed += 1
+            print("  PLANS CHANGED: %s: its files are as accepted, its plans are not (%s, accepted %s)" % (key, mod["digest"], before["digest"]))
+            continue
+        new += 1
+        accepted[key] = {"inputs": inputs, "digest": mod["digest"]}
+    ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
+    ACCEPTED.write_text(json.dumps(accepted, indent=1, sort_keys=True), encoding="utf-8")
+    print("plan digests: %d as accepted, %d accepted now (new, changed files, or --accept), %d changed%s" %
+          (same, new, changed, "; review the change, then run with --accept" if changed else ""))
+    return changed > 0
 
 
 def main() -> int:
@@ -41,7 +104,10 @@ def main() -> int:
         print("mod states: the dry run failed: %s" % result.stderr[-1500:])
         return 1
     summary, mods = lines[0], lines[1:]
-    print("mod states: %d key actions, %d states, %d Mods" % (summary["key_actions"], summary["states"], len(mods)))
+    print("mod states: %d key actions, %d states, %d Mods, %d of them drawing in the default state" %
+          (summary["key_actions"], summary["states"], len(mods), sum(1 for m in mods if m.get("drawn"))))
+    for item in summary.get("left_inputs", []):
+        print("  INPUT LEFT OUT: %s: %s" % (item["ini"], item["reason"]))
     for error in summary.get("present_errors", []):
         print("  PRESENT REFUSED: %s" % error)
     failed = bool(summary.get("present_errors"))
@@ -55,6 +121,11 @@ def main() -> int:
         # What the original does for a section and the layer does not: shown, as the layer shows it.
         for gap in mod.get("gaps", []):
             print("  GAP %s: %s" % (mod["ini"], gap))
+        # With EFMI_VK_CHECK_DRAWS a Mod has to draw something of its own in the default state: a plan that
+        # is made and draws nothing passes every refusal check (a Mod that never enables itself).
+        if os.environ.get("EFMI_VK_CHECK_DRAWS") and not mod.get("drawn"):
+            print("  NO DRAW: %s: no section draws the Mod in the default state" % mod["ini"])
+            failed = True
         if not refusals:
             continue
         failed = True
@@ -71,6 +142,9 @@ def main() -> int:
         print("refusal reasons:")
         for reason, n in reasons.most_common():
             print("  %4d  %s" % (n, reason))
+    # Only for the installed folder: the checks that plan a folder of their own have nothing accepted.
+    if "EFMI_VK_CHECK_MODS" not in os.environ and compare_digests(mods, "--accept" in sys.argv):
+        failed = True
     print("mod states: %s" % ("FAILED" if failed else "every section plans in every state"))
     return 1 if failed else 0
 

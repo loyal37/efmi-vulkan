@@ -1,0 +1,408 @@
+{
+ "scope": "Lines put one at a time in front of a working replaced mesh's draw (scripts/check_dx11_judge_draws.py --sweep): `expect` is what the comparison with the original gives now, `finding` why a line differs, `class` whose difference it is: `layer` (the plan path differs from the original) or `scene` (the layer's side of this scene lacks what answers the line in a character generation, so the line is not judged here).",
+ "lines": [
+  {
+   "name": "plain",
+   "lines": [],
+   "expect": "same"
+  },
+  {
+   "name": "vb1",
+   "lines": [
+    "vb1 = ResourcePlaceD"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "vb5",
+   "lines": [
+    "vb5 = ResourcePlaceD"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "vs_cb",
+   "lines": [
+    "vs-cb0 = ResourceConstants"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+  },
+  {
+   "name": "ps_cb",
+   "lines": [
+    "ps-cb2 = ResourceConstants"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+  },
+  {
+   "name": "vs_t",
+   "lines": [
+    "vs-t3 = ResourceGreen"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+  },
+  {
+   "name": "gs_t",
+   "lines": [
+    "gs-t0 = ResourceGreen"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+  },
+  {
+   "name": "ps_t5",
+   "lines": [
+    "ps-t5 = ResourceGreen"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "ps_t0_again",
+   "lines": [
+    "ps-t0 = ResourceGreen"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "ps_t0_null",
+   "lines": [
+    "ps-t0 = null"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "ps_t0_copy",
+   "lines": [
+    "ps-t0 = copy ResourceGreen"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "`<slot> = copy Resource` is refused whole; a copy of a resource the generation never writes shows what a reference shows"
+  },
+  {
+   "name": "ps_t0_ref",
+   "lines": [
+    "ps-t0 = ref ResourceGreen"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "ps_t0_unless_null",
+   "lines": [
+    "ps-t0 = unless_null ResourceSaved"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the unless_null modifier is refused whole; with a null source the original leaves the slot as it is"
+  },
+  {
+   "name": "slot_to_slot",
+   "lines": [
+    "ps-t1 = ref ps-t0"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "one pixel slot bound from another is refused whole; the original binds what the other slot holds"
+  },
+  {
+   "name": "slot_range",
+   "lines": [
+    "ps-t[0:1] = ResourceGreen"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "save_restore_pixel",
+   "lines": [
+    "ResourceSaved = ref ps-t0",
+    "ps-t0 = ResourceGreen",
+    "ps-t0 = ref ResourceSaved"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "save_restore_vertex",
+   "lines": [
+    "ResourceSaved = ref vb0",
+    "vb0 = ResourcePlaceD",
+    "vb0 = ref ResourceSaved"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "`ResourceX = ref vb0` (the game's vertex buffer held by a declaration) is refused whole"
+  },
+  {
+   "name": "copy_then_bind",
+   "lines": [
+    "ResourceSaved = copy ResourcePlaceD",
+    "vb0 = ResourceSaved"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "a copy between declared resources is not made in a plan: the destination stays null, a notice says so, and what is bound from it draws nothing (D-155)"
+  },
+  {
+   "name": "ib_null",
+   "lines": [
+    "ib = null"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "vb0_null",
+   "lines": [
+    "vb0 = null"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "this_null",
+   "lines": [
+    "this = null"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "o0_null",
+   "lines": [
+    "o0 = null"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan cannot unbind the game's render target; the draw is refused where the original draws nothing"
+  },
+  {
+   "name": "cs_t",
+   "lines": [
+    "cs-t0 = ResourceGreen"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152); under the original a compute slot does not touch the draw"
+  },
+  {
+   "name": "cs_cb",
+   "lines": [
+    "cs-cb0 = ResourceConstants"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152); under the original a compute slot does not touch the draw"
+  },
+  {
+   "name": "if_true",
+   "lines": [
+    "if 1 == 1",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "variable",
+   "lines": [
+    "$x = 5"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "local",
+   "lines": [
+    "local $y = 2"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "iniparam",
+   "lines": [
+    "x7 = 1"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "run_list",
+   "lines": [
+    "run = CommandListCounted"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "check_pixel_slot",
+   "lines": [
+    "checktextureoverride = ps-t0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "check_vertex_buffer",
+   "lines": [
+    "checktextureoverride = vb0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "store",
+   "lines": [
+    "store = $x, ResourceConstants, 0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "clear",
+   "lines": [
+    "clear = ResourceWritable"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "dispatch",
+   "lines": [
+    "dispatch = 1, 1, 1"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "layout_format",
+   "lines": [
+    "vb0->ElementFormat(POSITION, 0) = R32G32_FLOAT"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "draw_indexed_instanced",
+   "lines": [
+    "drawindexedinstanced = 6, 1, 0, 0, 0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "draw_instanced",
+   "lines": [
+    "drawinstanced = 3, 1, 0, 0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "draw_from_caller",
+   "lines": [
+    "draw = from_caller"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "draw_auto",
+   "lines": [
+    "draw = auto"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "base_vertex",
+   "lines": [
+    "drawindexed = 3, 0, 1"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "post_draw",
+   "lines": [
+    "post drawindexed = 3, 0, 0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_vertex_stride",
+   "lines": [
+    "if vb0->stride == 8",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "differs",
+   "class": "scene",
+   "finding": "`vbN->stride` is answered by the character Core's extension from the host's fact (RuntimeDraw::vertex_stride); this scene's generation has no Core"
+  },
+  {
+   "name": "if_slot_null",
+   "lines": [
+    "if ps-t0 === null",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_slot_bound",
+   "lines": [
+    "if ps-t0 !== null",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_index_size",
+   "lines": [
+    "if ib->size > 0",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "differs",
+   "class": "scene",
+   "finding": "a query on the game's index buffer is answered by the character Core's extension; this scene's generation has no Core"
+  },
+  {
+   "name": "if_target_width",
+   "lines": [
+    "if rt_width > 100",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_resolution",
+   "lines": [
+    "if res_width > 100",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_time",
+   "lines": [
+    "if time >= 0",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_index_count",
+   "lines": [
+    "if index_count == 6",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_vertex_shader",
+   "lines": [
+    "if vs == 0",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "differs",
+   "class": "scene",
+   "finding": "`vs`, `ps` are answered by the character Core's extension (D-089); this scene's generation has no Core"
+  }
+ ]
+}

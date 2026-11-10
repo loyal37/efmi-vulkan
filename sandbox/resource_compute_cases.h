@@ -280,7 +280,7 @@ post $post_root = 1
     auto recursive_root=root/"recursive";
     ShaderFixture recursive(d,recursive_root,"namespace = compute\n[CustomShaderRecursive]\nrun = CustomShaderRecursive\n[Present]\nrun = CustomShaderRecursive\n");
     recursive.backend->resources().begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!recursive.ini->present({},1,0,why),"Recursive CustomShader calls refuse at the shared execution budget");
-    refuses([&]{recursive.backend->resources().finish();},"Failed nested shader execution cannot submit");
-    recursive.backend->resources().discard();recursive.release();
+    declined(*recursive.ini,recursive.backend->resources(),recursive.ini->present({},1,0,why),"",
+             "Recursive CustomShader calls end at the shared execution budget and are said");
+    recursive.release();
 }

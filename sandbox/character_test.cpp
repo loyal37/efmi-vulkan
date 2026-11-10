@@ -50,7 +50,8 @@ static bool srv_of(const std::vector<efmi::gpu::SourceRegister>& registers, unsi
 {
     efmi::gpu::SourceSrvDeclaration declaration;
     if (!efmi::gpu::source_srv_declaration(registers, slot, declaration, why)) return false;
-    type = declaration.type; dimension = declaration.dimension; stride = declaration.stride;
+    type = declaration.words ? efmi::frontend::kWordBufferDeclaration : declaration.type;
+    dimension = declaration.dimension; stride = declaration.stride;
     return true;
 }
 template <class T> static void put(std::vector<uint8_t>& data, T value)
@@ -453,10 +454,19 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
 {
     const auto vertex = common_vertex_registers();
     CharacterProgram::FolderSource source{std::filesystem::absolute(mods), std::filesystem::absolute(core), std::filesystem::absolute(settings)};
-    source.declarations_only = true;
+    // EFMI_VK_CHECK_NO_OWNED: as in the game where the owned GPU runtime is not available (its tools not
+    // deployed, m2_owned = 0): no CustomShader execution and none declared.
+    source.declarations_only = !getenv("EFMI_VK_CHECK_NO_OWNED");
+    std::vector<std::pair<std::filesystem::path, std::string>> left_inputs;
+    source.left_inputs = &left_inputs;
     std::vector<CharacterProgram::FolderMod> found;
     std::string reason;
-    if (!CharacterProgram::discover_folder(source, found, reason)) { fprintf(stderr, "folder generation refused: %s\n", reason.c_str()); return 1; }
+    if (!CharacterProgram::discover_folder(source, found, reason)) {
+        fprintf(stderr, "folder generation refused: %s\n", reason.c_str());
+        for (const auto& m : found)
+            if (!m.reason.empty()) fprintf(stderr, "  %s: %s\n", m.ini.lexically_relative(mods).u8string().c_str(), m.reason.c_str());
+        return 1;
+    }
     CharacterProgram* presenter = nullptr;
     for (auto& m : found) if (m.program) { presenter = m.program.get(); break; }
     if (!presenter) { fprintf(stderr, "no character Mod\n"); return 1; }
@@ -464,6 +474,16 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     std::vector<std::vector<Refusal>> refusals(found.size());
     std::vector<std::set<std::string>> seen_refusals(found.size());
     std::vector<uint64_t> plans(found.size());
+    // Sections whose plan in the default state hides the game's draw and draws the Mod's own: what a
+    // player sees of the Mod without a key (a plan that is made and draws nothing is no evidence).
+    std::vector<uint64_t> drawn(found.size());
+    // docs/architecture-review-2.1.md P3-3: what a Mod's plans are, in one number. Every section's plan in
+    // every state, in order: whether the game's draw is hidden, each draw of the list (streams, range,
+    // instances, layout edits, translucency) with the textures bound for it, and a refusal with its reason.
+    // The same Mod files under the same layer give the same number; a change of the plan path that changes
+    // any plan of an installed Mod changes it (scripts/check_mod_states.py compares with the accepted ones).
+    std::vector<uint64_t> digests(found.size(), 1469598103934665603ull);
+    auto mix = [](uint64_t& h, uint64_t v) { for (int b = 0; b < 8; ++b) { h ^= (v >> (b * 8)) & 0xff; h *= 1099511628211ull; } };
     std::vector<std::string> present_errors;
     uint64_t frame = 0, states = 0;
     efmi::frontend::RuntimeInput released;
@@ -487,7 +507,40 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
                 auto request = section_draw(s, lod, frame, *m.program, vertex);
                 CharacterList list; bool skip = false, added = false, textures = false; std::string why;
                 ++plans[i];
-                if (m.program->plan(request, m.package, list, skip, added, why, nullptr, &textures)) continue;
+                auto& digest = digests[i];
+                mix(digest, s.hash); mix(digest, uint64_t(s.component) << 32 | lod);
+                if (m.program->plan(request, m.package, list, skip, added, why, nullptr, &textures)) {
+                    if (state == "default" && skip && list.count) ++drawn[i];
+                    mix(digest, uint64_t(skip) | uint64_t(textures) << 1); mix(digest, list.count);
+                    // A stream and an image by what they are, not by their number in the package (numbers are
+                    // given at first use and need not be the same in two runs).
+                    auto stream_of = [&](uint32_t index) -> uint64_t {
+                        if (index >= m.package.streams.size()) return 0xffff000000000000ull | index;
+                        const auto& stream = m.package.streams[index];
+                        return uint64_t(stream.kind) << 60 | uint64_t(stream.stride) << 48 | (stream.size & 0xffffffffffffull);
+                    };
+                    auto image_of = [&](uint32_t index) -> uint64_t {
+                        if (index >= m.package.images.size()) return 0xffff000000000000ull | index;
+                        uint64_t h = 1469598103934665603ull;
+                        for (unsigned char c : m.package.images[index]) { h ^= c; h *= 1099511628211ull; }
+                        return h;
+                    };
+                    for (uint32_t d = 0; d < list.count && size_t(list.first) + d < m.package.draws.size(); ++d) {
+                        const auto& draw = m.package.draws[list.first + d];
+                        mix(digest, stream_of(draw.index_stream)); mix(digest, draw.count); mix(digest, uint64_t(draw.first) << 32 | uint32_t(draw.base));
+                        for (uint32_t stream : draw.vb) mix(digest, stream_of(stream));
+                        mix(digest, uint64_t(draw.instances) << 32 | draw.first_instance);
+                        mix(digest, uint64_t(draw.indexed) | uint64_t(draw.texture_only) << 1 | uint64_t(draw.translucent) << 2 | uint64_t(draw.mask_invert) << 3 |
+                                    uint64_t(uint32_t(draw.blend)) << 8);
+                        for (const auto& o : draw.offsets) { mix(digest, uint64_t(o.binding) << 32 | o.from); mix(digest, o.to); }
+                        for (const auto& o : draw.owned) mix(digest, uint64_t(o.slot) << 32 | o.stride);
+                        if (draw.translucent) { uint32_t bits = 0; memcpy(&bits, &draw.alpha, sizeof(bits)); mix(digest, bits); mix(digest, image_of(draw.mask_image)); mix(digest, draw.mask_channel); }
+                        if (size_t(list.first) + d < m.package.pixels.size())
+                            for (const auto& pixel : m.package.pixels[list.first + d]) { mix(digest, pixel.slot); mix(digest, image_of(pixel.asset)); }
+                    }
+                    continue;
+                }
+                mix(digest, 0xdeadull); for (unsigned char c : why) mix(digest, c);
                 if (offline_limit(why)) continue; // the stand-ins' limits, not the Mod's
                 char key[64]; snprintf(key, sizeof(key), "%08x/%u/%u/", s.hash, s.component, lod);
                 if (!seen_refusals[i].insert(key + why).second) continue;
@@ -526,6 +579,14 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     JsonWriter summary; summary.begin_object();
     summary.kn("key_actions", combos.size()); summary.kn("states", states);
     summary.key("present_errors"); summary.begin_array(); for (const auto& e : present_errors) summary.str(e); summary.end_array();
+    // The inputs the folder was loaded without, and what the layer did not do as the original does while
+    // the generation ran (the host shows both).
+    summary.key("left_inputs"); summary.begin_array();
+    for (const auto& item : left_inputs) {
+        summary.begin_object(); summary.kv("ini", item.first.lexically_relative(mods).u8string()); summary.kv("reason", item.second); summary.end_object();
+    }
+    summary.end_array();
+    summary.key("gaps"); summary.begin_array(); for (const auto& gap : presenter->status().gaps) summary.str(gap); summary.end_array();
     summary.end_object();
     printf("%s\n", summary.out.c_str());
     for (size_t i = 0; i < found.size(); ++i) {
@@ -534,7 +595,8 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
         w.kb("loaded", found[i].program != nullptr);
         if (!found[i].program) w.kv("reason", found[i].reason);
         else { w.key("gaps"); w.begin_array(); for (const auto& gap : found[i].program->gaps()) w.str(gap); w.end_array(); }
-        w.kn("plans", plans[i]);
+        w.kn("plans", plans[i]); w.kn("drawn", drawn[i]);
+        { char text[24]; snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(digests[i])); w.kv("digest", text); }
         w.key("refusals"); w.begin_array();
         for (const auto& r : refusals[i]) {
             w.begin_object();
@@ -742,7 +804,8 @@ int main(int argc, char** argv)
             std::string line;
             for (uint32_t slot = 0; slot < count; ++slot) {
                 uint32_t type = 0, dimension = 0, stride = 0; char item[48];
-                if (srv_of(registers, slot, type, dimension, stride, reason)) snprintf(item, sizeof(item), " %u:%u.%u.%u", slot, type, dimension, stride);
+                if (srv_of(registers, slot, type, dimension, stride, reason) && type != efmi::frontend::kWordBufferDeclaration)
+                    snprintf(item, sizeof(item), " %u:%u.%u.%u", slot, type, dimension, stride);
                 else snprintf(item, sizeof(item), " %u:-", slot);
                 line += item;
             }
@@ -802,6 +865,8 @@ int main(int argc, char** argv)
                 w.end_object(); printf("%s\n", w.out.c_str()); continue;
             }
             w.kn("warnings", program.status().diagnostics);
+            // The libraries this generation of one Mod called and those it left out, with why (D-112).
+            w.key("library_notes"); w.begin_array(); for (const auto& note : program.library_notes()) w.str(note); w.end_array();
             uint64_t frame = 0;
             write_plans(w, program, program, package, vertex, frame);
             // The Mod's own enable state after the run (EFMI exports register at a Present and draw after).
@@ -865,7 +930,7 @@ int main(int argc, char** argv)
         if (!p.load(argv[2], why)) { fprintf(stderr, "package rejected: %s\n", why.c_str()); return 1; }
         printf("{\"bones\":%u,\"components\":%zu,\"streams\":%zu,\"sections\":%zu,\"draws\":%zu,\"payload_bytes\":%zu,\"required\":[",
                p.bones, p.components.size(), p.streams.size(), p.sections.size(), p.draws.size(), static_cast<size_t>(p.payload_bytes));
-        for (size_t i = 0; i < p.lists.size(); ++i) printf("%s%u", i ? "," : "", p.lists[i].required);
+        for (size_t i = 0; i < p.lists.size(); ++i) printf("%s%llu", i ? "," : "", static_cast<unsigned long long>(p.lists[i].required));
         printf("],\"materials\":%s,\"images\":%zu,\"profiles\":%zu}\n", p.materials ? "true" : "false", p.images.size(), p.profiles.size());
         return 0;
     }
@@ -910,12 +975,13 @@ int main(int argc, char** argv)
         };
         auto unknown = [&](unsigned slot) { uint32_t a = 0, b = 0, c = 0; std::string why; return !srv_of(shader, slot, a, b, c, why) && !why.empty(); };
         check(is(0, 2, 1, 16), "a read-only buffer of 16-byte elements is dcl_resource_structured with its stride (vs->srv_stride(0) == 16)");
-        check(unknown(1), "a buffer of uint words is a byte address buffer or a structured buffer of uint: not decided");
+        check(is(1, efmi::frontend::kWordBufferDeclaration, 1, 4), "a buffer of uint words is a byte address buffer or a structured buffer of uint: answered as one of the two");
         check(is(2, 1, 1, 0), "a texel buffer is a typed buffer view");
         check(is(3, 1, 4, 0) && is(4, 1, 4, 0), "each element of an image array declares its own typed 2D register");
         check(is(5, 1, 10, 0) && is(6, 1, 7, 0) && is(7, 1, 8, 0), "cube arrays, multisampled 2D arrays and 3D images by their view dimensions");
         check(unknown(8), "an arrayed 3D image has no DX11 view");
-        check(unknown(9) && unknown(127), "a slot without a register is not known: a DX11 build may declare more than its SPIR-V");
+        check(is(9, 0, 0, 0) && is(59, 0, 0, 0), "a slot below t60 without a register is not declared, as the DX11 build declares none there");
+        check(unknown(60) && unknown(127), "a slot from t60 up without a register is not known: the DX11 builds declare more than their SPIR-V there");
     }
     Model m;
     const auto valid = package(&m);

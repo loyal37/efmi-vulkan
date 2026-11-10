@@ -78,6 +78,7 @@ struct RuntimeTexture {
     bool described = false;
     uint32_t description[11] = {};
 };
+constexpr uint32_t kWordBufferDeclaration = 0xFFFFFFFFu;
 struct RuntimeDraw {
     uint32_t hash = 0, count = 0, first = 0, instances = 1, first_instance = 0;
     int32_t base = 0;
@@ -106,6 +107,9 @@ struct RuntimeDraw {
     // L'g', L'p') as the original reads it off DXBC, for `vs->srv_type(n)`, `srv_stride` and
     // `srv_dimension` (D-124): the original's ShaderResourceType, D3D_SRV_DIMENSION and stride.
     // False: not known, and the query refuses.
+    // `type` kWordBufferDeclaration: a buffer of 32-bit words, which DX11 declares structured (type 2,
+    // dimension 1, the given stride) or raw (type 3, dimension 11, stride 0); the SPIR-V does not tell.
+    // A condition is then evaluated with both and goes on when they agree (D-159).
     std::function<bool(wchar_t stage, unsigned slot, uint32_t& type, uint32_t& dimension, uint32_t& stride, std::string& reason)> source_srv;
     // `vbN->stride` in a replaced draw's plan: the stride of the game's vertex buffer at DX11 input slot N
     // (the Vulkan binding of that number), as the original's IAGetVertexBuffers gives it; 0 when none is
@@ -147,6 +151,8 @@ struct RuntimeStatus {
     // continues with what it could parse; so does this runtime. At most the latest 64 texts.
     size_t diagnostics = 0;
     std::vector<std::string> diagnostic_messages;
+    // What the layer did not do as the original does, in the order it met it (the latest 64).
+    std::vector<std::string> gaps;
     bool dirty = false, reload_requested = false;
     std::map<std::string, float> variables;
 };
@@ -196,6 +202,10 @@ public:
     // whenever a replaced shader draws. Empty when no replacement gates a discard.
     struct DiscardGate { uint32_t index = 0, component = 0; float value = 0; };
     std::vector<DiscardGate> discard_gates() const;
+    // What the layer did not do as the original does since the generation was made (D-137): how many
+    // such texts there were, read without the generation's lock, and those after the first `seen`.
+    uint32_t gap_count() const;
+    std::vector<std::string> gaps_since(uint32_t seen) const;
     void note_timing(const char* name, uint64_t microseconds);
     std::vector<std::shared_ptr<const assets::FileResource>> resources() const;
     // The virtual keys each of the generation's key actions needs held, in the original's order (a

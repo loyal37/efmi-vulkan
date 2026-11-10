@@ -8,7 +8,8 @@ void require(bool condition,const char* why){if(!condition)throw std::runtime_er
 std::wstring widen(const char* text){std::string s(text);return {s.begin(),s.end()};}
 }
 void GpuResourceRuntime::publish_parameters(){
-    active();require(!failed_,"GPU resource generation failed");
+    active();
+    if(failed_)return; // the scope's work is dropped
     require(parameters_.image && G && G->iniParams.size()==parameters_.image_description.texture.Width,
             "GPU parameter allocation does not match this generation");
     static_assert(sizeof(DirectX::XMFLOAT4)==16);
@@ -22,7 +23,6 @@ void GpuResourceRuntime::publish_parameters(){
 bool GpuResourceRuntime::initialize_parameters(CommandListState&,std::wstring& why){
     try{
         require(installed_ && !parameters_initialized_ && G,"GPU parameters require a fresh installed generation");
-        require(!failed_,"GPU resource generation failed");
         const auto count=G->iniParams.size();
         require(count<=D3D11_REQ_TEXTURE1D_U_DIMENSION,"GPU parameters exceed the original Texture1D width limit");
         if(count){

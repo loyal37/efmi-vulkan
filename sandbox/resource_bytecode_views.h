@@ -84,8 +84,7 @@ static void bytecode_ini_views(Device& d,const std::filesystem::path& root){
                 "Original INI bytecode bindings preserve native view offsets, structures and typed conversions");}
         if(!typed){auto incompatible=program;for(auto& binding:incompatible.bindings)if(binding.source_type=='t' && binding.slot==3)binding.source_stride+=4;
             f.backend->set_programs({incompatible});resources.begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-            check(!f.ini->present({},++f.frame,0,f.why) && f.why.find("structured buffer view")!=std::string::npos,"Wrong native structure stride refuses before dispatch");
-            refuses([&]{resources.finish();},"Refused bytecode binding cannot submit a partial transaction");resources.discard();
+            declined(*f.ini,resources,f.ini->present({},++f.frame,0,f.why),"structured buffer view","A wrong native structure stride leaves its CustomShader undone");
             check(resources.commands().readback(d.queue,views.back().binding.buffer,0,views.back().binding.buffer->size())==expected[0],"Refused bytecode binding leaves previous GPU output intact");}
         views.clear();f.release();
         if(typed)for(unsigned guard=0;guard<4;++guard){auto restricted=d.resource;gpu::ResourceBudgets budgets;auto host=shader_host(d);

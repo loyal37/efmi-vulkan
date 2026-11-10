@@ -52,8 +52,10 @@ int HostSkeletonPlanTests()
     source.components[0].lods[1].path="relative.buf";
     check(!load_palette_files(source,owned,error) && retained(),"relative remap paths cannot depend on the application's working directory");
     source.components[0].lods[1]={RemapSource::Unassigned,{}};
-    check(load_palette_files(source,owned,error) && !owned.components[0].lods[1].available,
-          "unassigned LOD remains unavailable after preparation");
+    // The original Core binds nothing for a pool element no line assigned and takes no remap
+    // (`z0 = @cs-t1 != 0`): the same as an element assigned null.
+    check(load_palette_files(source,owned,error) && owned.components[0].lods[1].available && owned.components[0].lods[1].indices.empty(),
+          "a LOD no line assigned has no remap, as the original Core binds nothing for it");
     source.components[1].first=0;
     check(!load_palette_files(source,owned,error),"invalid bone partitions refuse before file loading");
     printf("XXMI skeleton metadata: %d checks passed, %d failed\n",passed,failed);return failed;

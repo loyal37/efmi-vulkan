@@ -221,10 +221,14 @@ static void parameter_registers_and_failures(Device& d,const std::filesystem::pa
         frontend::RuntimeConfig config{path,{},path/"settings","failure",path/"Mods"};gpu::ResourceBudgets budgets;
         auto backend=std::make_shared<frontend::GpuResourceRuntime>(d.resource,budgets);backend->begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
         std::string why;auto ini=frontend::IniRuntime::load(config,backend,why);
-        check(!ini,"Invalid parameter generation refuses initialization");
-        if(why.find(failures[index].second)==std::string::npos)throw std::runtime_error("Wrong parameter failure: "+why);++checks;
-        refuses([&]{backend->finish();},"Failed initialization cannot submit partial zero/Constants uploads");
-        backend->discard();backend.reset();check(!budgets.resident->used() && !budgets.staging->used(),"Failed initialization releases allocations");
+        // The parameters' own allocation refuses the generation (index 0); a command of [Constants] that
+        // cannot act does nothing and the generation loads, as the original's (index 1, D-155).
+        check(bool(ini)==(index==1),"A parameter allocation that cannot be made refuses; an invalid Constants command does not");
+        if(!ini){
+            if(why.find(failures[index].second)==std::string::npos)throw std::runtime_error("Wrong parameter failure: "+why);++checks;
+            refuses([&]{backend->finish();},"Failed initialization cannot submit partial zero/Constants uploads");backend->discard();
+        }else{declined(*ini,*backend,true,failures[index].second,"An invalid copy in Constants does nothing and is said");ini.reset();}
+        backend.reset();check(!budgets.resident->used() && !budgets.staging->used(),"Failed initialization releases allocations");
     }
     const auto path=root/"scope";std::filesystem::create_directories(path/"Mods");write(path/"Mods/scope.ini","[Constants]\nx = 1\n");
     frontend::RuntimeConfig config{path,{},path/"settings","scope",path/"Mods"};gpu::ResourceBudgets budgets;

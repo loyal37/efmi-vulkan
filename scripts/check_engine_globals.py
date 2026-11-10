@@ -63,6 +63,8 @@ RULES = [
     # Written once before any use, or at module initialization only.
     (r"runtime_shim", r"migoto_handle|tls_idx", "once", "set at module initialization"),
     (r"runtime", r"creation_lock", "once", "a once flag"),
+    (r"draw_plan|runtime", r"g_layer_gap_sink|gap_sink_installed", "once",
+     "LayerGap's sink: the runtime installs it at module initialization; what it writes is the entered generation's"),
     (r"runtime", r"LogFile|gLogDebug|gLogVerbosity", "once", "the original's log settings, never set by the runtime"),
     (r"command_module|runtime_parser", r"fnGetCursorFrameInfo|s", "once",
      "function statics initialized once (thread-safe statics); GetOrigSwapChain1's is never called"),

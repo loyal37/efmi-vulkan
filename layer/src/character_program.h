@@ -46,6 +46,9 @@ public:
         std::filesystem::path mods, core, settings;
         std::string settings_name = "mods";
         bool declarations_only = false;
+        // When given: the inputs that are no character Mod's and that the folder was loaded without,
+        // each with why (the folder did not load with it).
+        std::vector<std::pair<std::filesystem::path, std::string>>* left_inputs = nullptr;
     };
     struct FolderMod {
         std::filesystem::path ini;
@@ -66,6 +69,11 @@ public:
     // DISABLED, as the original skips them) that declares the EFMIv1 merged-skeleton initializer.
     static std::vector<std::filesystem::path> mods_characters(const std::filesystem::path& mods, std::string& reason);
     static std::vector<std::filesystem::path> native_library_files(const std::filesystem::path& mods);
+    // Enabled INIs outside every character Mod's folder whose TextureOverride sections match by an index
+    // count: mesh sections the layer matches no draw with (they are no character Mod's).
+    static std::vector<std::filesystem::path> unmatched_mesh_inis(const std::filesystem::path& mods);
+    // The version the installed Core declares in its main.ini (`global $version`), 0 when not found.
+    static float core_version(const std::filesystem::path& core);
     // The libraries a generation of `inputs` calls (D-112): every enabled INI of the Mods folder outside
     // every character Mod's folder that declares a namespace the inputs reference (`CommandList\NS\...`,
     // `$\NS\...`) and that neither an input nor `known` (the extension's own libraries) declares; then
@@ -76,6 +84,10 @@ public:
     const std::vector<std::string>& library_notes() const { return library_notes_; }
     // What the original does for the Mod's sections and the layer does not (CharacterDiscovery::gaps).
     const std::vector<std::string>& gaps() const { return gaps_; }
+    // What the layer did not do as the original does while the generation runs (IniRuntime::gap_count):
+    // how many texts there were, read without a lock, and those after the first `seen`.
+    uint32_t runtime_gap_count() const { return runtime_ ? runtime_->gap_count() : 0; }
+    std::vector<std::string> runtime_gaps_since(uint32_t seen) const { return runtime_ ? runtime_->gaps_since(seen) : std::vector<std::string>{}; }
     // A package image whose file the original's loader makes nothing of (D-139): never declared, bound as nothing.
     bool image_unloadable(const std::string& path) const;
     // The folder of the library of this namespace the generation loaded (D-112), empty without one.

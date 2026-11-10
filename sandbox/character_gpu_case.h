@@ -614,6 +614,43 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
             check(reloads_to(reloads + 1, 600), "F10 after RabbitFX was enabled again exchanges the generation");
             for (int i = 0; i < 20; ++i) { frame(false); Sleep(2); }
             self_probe("{\"cmd\":\"status\"}", "runtime-rabbitfx-back.json");
+            // F10 with no generation loaded (docs/architecture-review-2.1.md, L-02): every character Mod is
+            // disabled and F10 exchanges for a generation of none; the Mods are enabled again and F10 pressed.
+            // The original reloads whatever it holds; the layer had no key binding left to take the press.
+            const wchar_t* const others[] = {L"..\\other\\mod.ini", L"..\\Zeta\\mod.ini", L"..\\broken\\mod.ini", L"..\\\uff1aMod\\mod.ini"};
+            auto every_mod = [&](bool enable) {
+                for (const auto* ini : others) {
+                    std::wstring off = ini; off.insert(off.rfind(L'\\') + 1, L"DISABLED_");
+                    if (!MoveFileExW(enable ? off.c_str() : ini, enable ? ini : off.c_str(), 0)) throw std::runtime_error("Cannot switch a Mod of the scene");
+                }
+                if (!MoveFileExA(enable ? "DISABLED_mod.ini" : "mod.ini", enable ? "mod.ini" : "DISABLED_mod.ini", 0))
+                    throw std::runtime_error("Cannot switch the scene's Mod");
+            };
+            every_mod(false);
+            reloads = number(status(), "reloads");
+            press("1 121\n"); frame(false); press("1\n");
+            check(reloads_to(reloads + 1, 600), "F10 with every character Mod disabled exchanges for a generation of none");
+            for (int i = 0; i < 5; ++i) frame(false);
+            self_probe("{\"cmd\":\"status\"}", "runtime-no-mods.json");
+            // The package that comes back is made to fail its activation once (L-01): its draws are the game's
+            // meanwhile, not skipped for good, and the activation is tried again.
+            SetEnvironmentVariableA("EFMI_VK_TEST_ACTIVATION_FAILS", "1");
+            every_mod(true);
+            press("1 121\n"); frame(false); press("1\n");
+            check(reloads_to(reloads + 2, 600), "F10 with no generation loaded reloads the folder, as the original always does");
+            bool failed = false;
+            for (uint32_t i = 0; i < 400 && !failed; ++i) {
+                frame(false);
+                const auto count = number(status(), "activation_failed");
+                failed = count != UINT32_MAX && count > 0;
+                if (!failed) Sleep(5);
+            }
+            check(failed, "a package whose activation fails leaves its draws to the game");
+            SetEnvironmentVariableA("EFMI_VK_TEST_ACTIVATION_FAILS", nullptr);
+            bool again = false;
+            for (uint32_t i = 0; i < 1500 && !again; ++i) { frame(false); again = shade_at(-.6f,.3f) == 5; if (!again) Sleep(5); }
+            check(again, "the failed activation is tried again and the Mod is drawn");
+            self_probe("{\"cmd\":\"status\"}", "runtime-reactivated.json");
         }
     }
 }

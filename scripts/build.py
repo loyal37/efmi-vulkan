@@ -392,12 +392,14 @@ def build_tracker_test(vcvars: str, include: str, out: str) -> str:
     return exe
 
 
-def build_recipe_tests(vcvars: str, include: str, out: str) -> dict:
+def build_recipe_tests(vcvars: str, include: str, out: str, only: tuple = ()) -> dict:
     folder = os.path.join(ROOT, "sandbox")
     result = {}
     generate_bone_merge_shader()
     for name, tracker in (("recipe_test", True), ("variant_gpu", False), ("cache_test", False), ("snapshot_test", False),
                           ("mesh_test", False), ("character_test", False)):
+        if only and name not in only:
+            continue
         os.makedirs(os.path.join(folder, "build", name), exist_ok=True)
         exe = os.path.join(out, "efmi_vk_" + name + ".exe")
         sources = [name + ".cpp", "../layer/src/pipeline_recipe.cpp", "../layer/src/pipeline_variant.cpp",
@@ -554,7 +556,7 @@ def build_release(vcvars: str, include: str, out: str) -> dict:
     return {"release": out, "release_archive": archive, "release_sha256": digest}
 
 
-def build(targets, out: str | None = None) -> dict:
+def build(targets, out: str | None = None, tests: tuple = ()) -> dict:
     release_out = out or os.path.join(ROOT, "build", "release", RELEASE_NAME)
     out = os.path.abspath(out or os.path.join(ROOT, "dist"))
     os.makedirs(out, exist_ok=True)
@@ -564,6 +566,10 @@ def build(targets, out: str | None = None) -> dict:
     # Every binary of one build carries the stamp of the shared headers it was built from.
     COMMON[:] = [f for f in COMMON if not f.startswith("/DEFVK_ABI=")] + ["/DEFVK_ABI=" + abi_stamp()]
     result["abi"] = abi_stamp()
+    # --test: only these test programs of the layer target (a change of one test, or of what one links).
+    if tests:
+        result.update(build_recipe_tests(vcvars, include, out, tests))
+        return result
     if "module" in targets:
         result["module"] = build_module(vcvars, include, out)
     if "layer" in targets:
@@ -588,15 +594,18 @@ def main() -> int:
                     help="what to build (default: layer and sandbox; 'module' builds the replacement module alone; "
                          "'release' the playable package in build/release)")
     ap.add_argument("--out", help="output directory (default: dist)")
+    ap.add_argument("--test", action="append", default=[],
+                    choices=["recipe_test", "variant_gpu", "cache_test", "snapshot_test", "mesh_test", "character_test"],
+                    help="build only this test program (may be given several times); nothing else is built")
     args = ap.parse_args()
     targets = args.targets or ["layer", "sandbox"]
     try:
-        result = build(targets, args.out)
+        result = build(targets, args.out, tuple(args.test))
     except BuildError as e:
         print(str(e))
         return 1
     print("shared header stamp %s" % result["abi"])
-    for key in ("layer", "module", "sandbox", "tracker_test", "recipe_test", "variant_gpu", "bone_test", "release", "release_archive"):
+    for key in ("layer", "module", "sandbox", "tracker_test", "recipe_test", "variant_gpu", "character_test", "bone_test", "release", "release_archive"):
         if key in result:
             print("built %s" % result[key])
     if "release_sha256" in result:

@@ -164,6 +164,24 @@ struct Device {
     }
 };
 template<class F> static void refuses(F f,const char* why){bool rejected=false;try{f();}catch(const std::exception&){rejected=true;}check(rejected,why);}
+// A command of a Present, Constants or key list that cannot act does nothing, the list goes on and the
+// generation says so (D-155; docs/architecture-review-2.1.md P0-4), as the original's: the Present
+// succeeded, a text of what the layer did not do names `text`, and the scope submits its other work, or,
+// when the command failed after recording part of its own, is refused and discarded. Either way the
+// generation runs on: these assertions said "the Present refuses and the generation is dead" before.
+// Scopes that went on after a declined command, and scopes dropped because it had recorded part of its work.
+static unsigned declined_kept=0,declined_dropped=0;
+template<class Ini,class Runtime> static void declined(Ini& ini,Runtime& resources,bool presented,const std::string& text,const char* why)
+{
+    check(presented,why);
+    const auto gaps=ini.status().gaps;bool told=false;std::string all;
+    for(const auto& gap:gaps){told=told || gap.find(text)!=std::string::npos;all+=gap+" | ";}
+    if(!told)throw std::runtime_error(std::string(why)+": nothing the generation said names '"+text+"': "+all);
+    ++checks;
+    if(!resources.scope_active())return;
+    if(resources.failed()){++declined_dropped;refuses([&]{resources.finish();},"A scope whose command failed after recording cannot submit");resources.discard();}
+    else{++declined_kept;if(auto ticket=resources.finish())ticket->wait();}
+}
 static float value(const std::vector<uint8_t>& bytes,size_t offset=0){float v;check(offset+4<=bytes.size(),"Readback value in bounds");memcpy(&v,bytes.data()+offset,4);return v;}
 #include "resource_image_cases.h"
 static void low_level(Device& d){
@@ -348,7 +366,11 @@ static void ini_gpu(Device& d,const std::filesystem::path& root){
     gpu::ResourceBudgets budgets;auto backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);std::string why;
     auto ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error("Load original INI: "+why);++checks;
     refuses([&]{backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::InsideRenderPass);},"Active render-pass scope refused");
-    check(!ini->present({},1,0,why) && why.find("scope")!=std::string::npos,"GPU commands cannot run without explicit host scope");
+    {
+        auto unscoped=std::make_shared<GpuResourceRuntime>(d.resource);auto probe=IniRuntime::load(config,unscoped,why);
+        if(!probe)throw std::runtime_error("Load original INI without a scope: "+why);
+        declined(*probe,*unscoped,probe->present({},1,0,why),"scope","Without a host scope the GPU commands do nothing and the Present goes on");
+    }
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
     if(!ini->present({},1,0,why))throw std::runtime_error("Original GPU commands: "+why);++checks;
     auto ticket=backend->finish();if(ticket)ticket->wait();ticket.reset();
@@ -385,8 +407,14 @@ static void ini_gpu(Device& d,const std::filesystem::path& root){
     // A section the generation cannot execute: a CustomShader without shader execution. (An acting
     // ShaderOverride loads inert since D-089.)
     write(root/"Mods/resource.ini","[CustomShaderUnadapted]\ncs = absent.hlsl\n");
-    auto failed=IniRuntime::load(config,std::make_shared<GpuResourceRuntime>(d.resource,budgets),why);
-    check(!failed,"A candidate without an adapter refuses without replacing a working generation");
+    {
+        // As a CustomShader the original could not compile: declared, its runs doing nothing, the rest of
+        // the generation loaded, and said (it refused the whole candidate before; P0-6).
+        auto inert=IniRuntime::load(config,std::make_shared<GpuResourceRuntime>(d.resource,budgets),why);
+        bool told=false;
+        if(inert)for(const auto& gap:inert->status().gaps)told=told || gap.find("CustomShader")!=std::string::npos;
+        check(inert && told,"A CustomShader without shader execution loads inert and is said, beside a working generation");
+    }
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);check(ini->present({},3,0,why),"Working generation survives bad candidate");
     ticket=backend->finish();if(ticket)ticket->wait();ticket.reset();
     next.reset();next_backend.reset();ini.reset();backend.reset();check(saved.buffer->buffer()!=VK_NULL_HANDLE,"Retained binding survives both runtime retirements");
@@ -451,10 +479,10 @@ bind_flags = shader_resource unordered_access
         auto rejected=std::make_shared<GpuResourceRuntime>(d.resource,budgets);auto candidate=IniRuntime::load(config,rejected,why);
         if(!candidate)throw std::runtime_error("Negative fixture did not reach execution: "+why);
         rejected->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!candidate->present({},2,0,why),"Unsupported/invalid GPU command refuses");
-        if(why.find(item.reason)==std::string::npos)throw std::runtime_error("Wrong GPU refusal: "+why);++checks;
-        refuses([&]{rejected->finish();},"Partial failed scope cannot submit");rejected->discard();
-        refuses([&]{rejected->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);},"Discarded generation cannot publish stale data");
+        declined(*candidate,*rejected,candidate->present({},2,0,why),item.reason,"An unsupported GPU command does nothing and the Present goes on");
+        // The failure was the command's: the generation's next scope runs.
+        rejected->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
+        declined(*candidate,*rejected,candidate->present({},3,0,why),item.reason,"The generation's next scope runs after a declined command");
         candidate.reset();rejected.reset();check(budgets.resident->used()==0 && budgets.staging->used()==0,"Failure path releases unsubmitted resources");
     }
     output=backend->commands().readback(d.queue,held.buffer,0,32);
@@ -573,10 +601,8 @@ vs-cb4 = ref PoolCB[1]->Region(16, 16)
     for(const auto& failure:bad){write(root/"Mods/ranges.ini",(declarations+failure.first).c_str());
         backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);ini=IniRuntime::load(config,backend,why);
         if(!ini)throw std::runtime_error("Range fixture must parse: "+why);backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!ini->present({},2,0,why),"Invalid range refuses before GPU emission");
-        if(why.find(failure.second)==std::string::npos)throw std::runtime_error("Unexpected range refusal: "+why);++checks;
-        refuses([&]{backend->finish();},"Invalid range poisons the scope before submission");
-        backend->discard();ini.reset();backend.reset();check(!budgets.resident->used() && !budgets.staging->used(),"Invalid range leaves no allocations");
+        declined(*ini,*backend,ini->present({},2,0,why),failure.second,"An invalid range binds nothing and the Present goes on");
+        ini.reset();backend.reset();check(!budgets.resident->used() && !budgets.staging->used(),"Invalid range leaves no allocations");
     }
 }
 static void copy_gpu(Device& d,const std::filesystem::path& root){
@@ -795,8 +821,8 @@ $phase = $phase + 1
     write(root/"Mods/pools.ini",rejected.c_str());backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);
     ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error(why);
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!ini->present({},3,0,why) && why.find("incompatible allocation sizes")!=std::string::npos,"Invalid whole-pool copy description refuses explicitly");
-    refuses([&]{backend->finish();},"Failed whole-pool scope cannot publish partial work");backend->discard();ini.reset();backend.reset();
+    declined(*ini,*backend,ini->present({},3,0,why),"incompatible allocation sizes","An invalid whole-pool copy description does nothing and is said");
+    ini.reset();backend.reset();
     check(!budgets.resident->used() && !budgets.staging->used(),"Rejected whole-pool generation releases its source and staging");
 }
 static void buffer_options_gpu(Device& d,const std::filesystem::path& root){
@@ -1104,8 +1130,8 @@ $phase = $phase + 1
     write(root/"Mods/spatial.ini",rejected.c_str());backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);
     ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error(why);invalid.frame_seconds=std::numeric_limits<float>::max();
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!ini->present(invalid,6,6,why) && why.find("radius outside")!=std::string::npos,"Overflowing spatial radius refuses before original unsigned conversion");
-    refuses([&]{backend->finish();},"Spatial execution failure poisons the pending GPU scope");backend->discard();ini.reset();backend.reset();
+    declined(*ini,*backend,ini->present(invalid,6,6,why),"radius outside","An overflowing spatial radius stops its command before the original's unsigned conversion");
+    ini.reset();backend.reset();
     check(!budgets.resident->used() && !budgets.staging->used(),"Rejected spatial command releases source and staging owners");
     const auto cpu_failure=source.substr(0,source.find("[TextureOverrideProbe]"))+
         "[Present]\nps-t0 = ref ResourceSource\n$phase = #PoolSpace[0]\n"
@@ -1113,9 +1139,10 @@ $phase = $phase + 1
     write(root/"Mods/spatial.ini",cpu_failure.c_str());backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);
     ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error(why);
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!ini->present(invalid,6,6,why) && why.find("radius outside")!=std::string::npos,"Original CPU query fails after earlier GPU commands were recorded");
-    refuses([&]{backend->finish();},"CPU command failure also prevents partial GPU scope submission");
-    backend->discard();ini.reset();backend.reset();
+    // In a Present each command stands for itself: the CPU query that fails does nothing, and the GPU
+    // commands recorded before it are submitted (a draw's lists, below, still stand or fall together).
+    declined(*ini,*backend,ini->present(invalid,6,6,why),"radius outside","A CPU query that fails after GPU commands were recorded does nothing");
+    ini.reset();backend.reset();
     check(!budgets.resident->used() && !budgets.staging->used(),"CPU-failed generation discards all pending GPU owners");
     backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);ini=IniRuntime::load(config,backend,why);
     if(!ini)throw std::runtime_error(why);draw.frame_seconds=invalid.frame_seconds;
@@ -1268,9 +1295,8 @@ ps-t8 = ref ResourceIndexCopy
     for(const auto& failure:bad){write(root/"Mods/regions.ini",(declarations+failure.first).c_str());
         backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);ini=IniRuntime::load(config,backend,why);
         if(!ini)throw std::runtime_error("Region rejection must parse: "+why);backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!ini->present({},2,0,why),"Invalid copy region refuses execution");
-        if(why.find(failure.second)==std::string::npos)throw std::runtime_error("Unexpected region refusal: "+why);++checks;
-        refuses([&]{backend->finish();},"Invalid region cannot submit its partial scope");backend->discard();ini.reset();backend.reset();
+        declined(*ini,*backend,ini->present({},2,0,why),failure.second,"An invalid copy region copies nothing and is said");
+        ini.reset();backend.reset();
     }
     converted={};check(!budgets.resident->used() && !budgets.staging->used(),"Successful and rejected region generations release all allocations");
 }
@@ -1416,9 +1442,8 @@ vb0 = ref ResourceVertex->Region(12, 48)
         write(root/"Mods/properties.ini",rejected.c_str());backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);
         ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error("Property rejection must parse: "+why);
         backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!ini->present({},2,0,why),"Unavailable property context refuses execution");
-        if(why.find(failure.second)==std::string::npos)throw std::runtime_error("Unexpected property refusal: "+why);++checks;
-        refuses([&]{backend->finish();},"Failed property query poisons its GPU scope");backend->discard();ini.reset();backend.reset();
+        declined(*ini,*backend,ini->present({},2,0,why),failure.second,"A property without its draw context leaves its command undone");
+        ini.reset();backend.reset();
         check(!budgets.resident->used() && !budgets.staging->used(),"Rejected property query releases its generation");
     }
 }
@@ -1541,6 +1566,7 @@ int wmain(int argc,wchar_t** argv){
             bytecode_resources(bytecode_device,root/"bytecode-resources");
             bytecode_float32(bytecode_device,root/"bytecode-float32-hardware",gpu::DxbcFloat32Mode::Hardware);}}
         check(errors==0 && warnings==0,"Clean validation including device shutdown");
-        printf("resource_gpu: %u checks passed; validation errors=%u warnings=%u\n",checks,unsigned(errors),unsigned(warnings));return 0;
+        printf("resource_gpu: %u checks passed; validation errors=%u warnings=%u\n",checks,unsigned(errors),unsigned(warnings));
+        printf("declined commands: %u scopes went on, %u dropped\n",declined_kept,declined_dropped);return 0;
     }catch(const std::exception& e){printf("FAIL after %u checks: %s\n",checks,e.what());return 1;}
 }

@@ -6,6 +6,7 @@
 #include "Override.h"
 #include "ResourceHash.h"
 #include "engine_host.h"
+#include "layer_gap.h"
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -144,6 +145,8 @@ struct EngineState {
     efmi::frontend::RuntimeInput sample;
     // G->user_config_dirty as every call left it, read without the generation's lock (settings_dirty()).
     std::atomic<bool> dirty{false};
+    // host.gap_count as every call left it, read without the generation's lock (gap_count()).
+    std::atomic<uint32_t> gaps{0};
     // One thread at a time in this generation, as the original's one context.
     std::mutex mutex;
     EngineState() : globals(std::make_unique<Globals>())
@@ -197,11 +200,23 @@ struct Scope {
     ~Scope()
     {
         state.dirty.store(G->user_config_dirty, std::memory_order_relaxed);
+        state.gaps.store(uint32_t(state.host.gap_count), std::memory_order_relaxed);
         input_adapter = nullptr; input_context = nullptr; RuntimeWindowSample(nullptr);
         clear_command_list_profiling(); engine_current = nullptr; efvk_engine_g = nullptr;
     }
 };
 void f10(HackerDevice*, void*) { G->gReloadConfigPending = true; }
+// LayerGap's sink: the entered generation keeps what the layer did not do, for the host to show.
+void keep_gap(const wchar_t* text)
+{
+    auto* host = EngineHost();
+    if (!host) return;
+    std::string kept;
+    try { kept = utf8(text); } catch (const std::exception&) { kept = "(a text that is not UTF-16)"; }
+    host->gaps.emplace_back(++host->gap_count, std::move(kept));
+    if (host->gaps.size() > 64) host->gaps.pop_front();
+}
+const bool gap_sink_installed = (g_layer_gap_sink = keep_gap, true);
 }
 }
 
@@ -359,6 +374,11 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
             auto relative = path.lexically_relative(config.resource_root);
             read_ini(path, relative.empty() || *relative.begin() == L".." ? path.filename().wstring() : relative.wstring());
         }
+        // A test's hook for the folder's isolation: an input whose path contains this text refuses the load.
+        if (const wchar_t* refused = _wgetenv(L"EFMI_VK_TEST_REFUSE_INPUT"); refused && *refused)
+            for (const auto& path : config.inputs)
+                if (path.wstring().find(refused) != std::wstring::npos)
+                    throw std::runtime_error("test: the input " + path.filename().u8string() + " refuses the load");
         for (const auto& path : config.libraries) {
             if (!path.is_absolute()) throw std::runtime_error("Library INI path must be absolute");
             read_ini(path, path.lexically_relative(config.resource_root).wstring());
@@ -688,6 +708,9 @@ bool IniRuntime::present(const RuntimeInput& input, uint64_t frame, float second
             if (p.blocked_keys[i]) sampled.keys[i] = false;
         }
         input_adapter = &p.adapter; input_context = &p.context;
+        // The keys' lists, the transitions and the Present lists run each command on its own, as the
+        // original's (D-155): one a key's list cannot act on ended the whole Present for every Mod before.
+        struct Tolerant { DrawPlanAdapter& a; Tolerant(DrawPlanAdapter& adapter) : a(adapter) { a.tolerate_refusals(true); } ~Tolerant() { a.tolerate_refusals(false); } } tolerant(p.adapter);
         if (RuntimeDispatchInput(&p.device, sampled)) ++p.stats.key_events;
         CurrentTransition.UpdatePresets(&p.device);RuntimeUpdateTransitions(&p.device);
         phase("present keys+presets");
@@ -811,8 +834,17 @@ RuntimeStatus IniRuntime::status() const
     result.diagnostics = HostDiagnosticCount() - p.diagnostics_base;
     result.diagnostic_messages = HostDiagnosticListSince(p.diagnostics_base);
     result.commands = p.adapter.command_timing();
+    for (const auto& gap : p.state.host.gaps) result.gaps.push_back(gap.second);
     result.dirty = G->user_config_dirty; result.reload_requested = G->gReloadConfigPending;
     for (const auto& item : command_list_globals) result.variables[utf8(item.first)] = item.second.fval;
+    return result;
+}
+uint32_t IniRuntime::gap_count() const { return impl_->state.gaps.load(std::memory_order_relaxed); }
+std::vector<std::string> IniRuntime::gaps_since(uint32_t seen) const
+{
+    auto& p = *impl_; Scope scope(p.state);
+    std::vector<std::string> result;
+    for (const auto& gap : p.state.host.gaps) if (gap.first > seen) result.push_back(gap.second);
     return result;
 }
 std::vector<IniRuntime::DiscardGate> IniRuntime::discard_gates() const

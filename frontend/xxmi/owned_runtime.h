@@ -39,6 +39,8 @@ public:
     void suspend();
     void discard();
     bool scope_active() const;
+    // The active scope's work is to be dropped (GpuResourceRuntime::failed): discard it instead of finishing.
+    bool failed() const;
     std::shared_ptr<gpu::ResourceSubmission> finish(const gpu::ResourceCommands::SubmitSync&, VkQueue);
     // bb, r_bb and f_bb: the host's current back buffer. Null makes them read as null.
     void backbuffer(gpu::Image, DXGI_FORMAT, bool shader_resource);

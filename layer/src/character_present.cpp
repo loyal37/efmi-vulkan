@@ -234,7 +234,9 @@ void OwnedPresenter::finish(PresentWork* present, bool executed, std::string& re
         gpu_->backbuffer(nullptr, DXGI_FORMAT_UNKNOWN, false);
         if (!replay) drew_backbuffer_ = executed && gpu_->scope_active() && gpu_->backbuffer_targeted();
         if (!gpu_->scope_active()) { current_ = nullptr; return; }
-        if (!executed) { gpu_->discard(); ++failed_; current_ = nullptr; return; }
+        // A scope whose work is to be dropped (the execution failed, or a command failed after recording part
+        // of its work): discarded, and the next presentation's scope starts clean.
+        if (!executed || gpu_->failed()) { gpu_->discard(); ++failed_; current_ = nullptr; return; }
         gpu::ResourceCommands::SubmitSync sync;
         if (current_) {
             sync.waits = present->waits;

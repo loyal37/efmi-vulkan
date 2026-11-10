@@ -225,6 +225,9 @@ public:
     std::shared_ptr<ResourceSubmission> submit(VkQueue,const SubmitSync& sync={});
     // Work recorded and not yet submitted.
     bool pending() const {return bool(pending_);}
+    // How often a command buffer was asked for to record into, since the domain was made: a caller that
+    // reads it before and after a call knows whether that call recorded any GPU work.
+    uint64_t recorded() const {return recorded_;}
     // Another queue of the same family for later submissions. The caller has waited for every earlier
     // submission of this domain; recorded, unsubmitted work goes to the new queue.
     void rebind(VkQueue queue){queue_=queue;}
@@ -260,6 +263,7 @@ private:
     ResourceBudgets budgets_;
     std::shared_ptr<const uint8_t> domain_=std::make_shared<const uint8_t>(0);
     std::shared_ptr<ResourceSubmission> pending_;
+    uint64_t recorded_=0;
     std::shared_ptr<SubmissionRecycler> recycler_;
     Buffer image_copy_scratch_;
     VkQueue queue_=VK_NULL_HANDLE;

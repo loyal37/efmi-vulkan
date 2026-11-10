@@ -452,9 +452,7 @@ static void image_ini_failures(Device& d,const std::filesystem::path& root){
     for(size_t i=0;i<std::size(cases);++i){const auto directory=root/std::to_string(i);
         ImageIniFixture f(d,directory,"namespace = images\n"+cases[i].first);
         f.backend->begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-        check(!f.ini->present({},1,0,f.why),"Invalid original image operation is refused");
-        if(f.why.find(cases[i].second)==std::string::npos)throw std::runtime_error("Unexpected image refusal: "+f.why);++checks;
-        refuses([&]{f.backend->finish();},"Failed image operation prevents submission of partial work");f.backend->discard();f.release();
+        declined(*f.ini,*f.backend,f.ini->present({},1,0,f.why),cases[i].second,"An invalid original image operation does nothing and is said");f.release();
     }
 }
 static void image_ini_pool_lifetime(Device& d,const std::filesystem::path& root){

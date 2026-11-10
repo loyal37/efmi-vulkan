@@ -4,6 +4,7 @@
 #include "util.h"
 #include "ResourceHash.h"
 #include "Overlay.h"
+#include "layer_gap.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -137,11 +138,10 @@ void GpuResourceRuntime::draw_commands(DrawExecutor executor){
     require(!installed_ && bool(executor),"Install GPU draw executor before generation adaptation");draw_executor_=std::move(executor);
 }
 void GpuResourceRuntime::begin(VkQueue queue,ExecutionSite site) {
-    require(!failed_,"GPU resource generation failed; prepare a new generation");
     require(!active_ && ((queue && site==ExecutionSite::OutsideRenderPass) || (!queue && (site==ExecutionSite::Deferred || site==ExecutionSite::Draw))),
             "GPU resource execution requires an explicit outside-render-pass scope");
     require(!queue || !queue_ || queue_==queue,"GPU resource scope cannot change queues");if(queue)queue_=queue;active_=true;site_=site;recorded_=false;
-    backbuffer_targeted_=false;
+    backbuffer_targeted_=false;failed_=false;
 }
 std::shared_ptr<gpu::ResourceSubmission> GpuResourceRuntime::finish(const gpu::ResourceCommands::SubmitSync& sync,VkQueue queue) {
     active();require(!failed_,"Cannot submit a failed GPU resource scope");
@@ -149,8 +149,10 @@ std::shared_ptr<gpu::ResourceSubmission> GpuResourceRuntime::finish(const gpu::R
     require(queue_!=VK_NULL_HANDLE,"A deferred GPU resource scope needs its queue to submit");
     auto result=commands_.submit(queue_,sync);active_=false;return result;
 }
-void GpuResourceRuntime::suspend(){active();active_=false;}
-void GpuResourceRuntime::discard(){commands_.discard();active_=false;failed_=true;}
+// A failed scope that is suspended drops what it and the scopes pending before it recorded: their work
+// is one batch, and a later scope starts clean.
+void GpuResourceRuntime::suspend(){active();active_=false;if(failed_){commands_.discard();failed_=false;}}
+void GpuResourceRuntime::discard(){commands_.discard();active_=false;failed_=false;}
 void GpuResourceRuntime::active() const {require(active_,"GPU resource operation has no outside-render-pass execution scope");}
 ResourceCopyTarget& GpuResourceRuntime::effective(ResourceCopyTarget& t,CommandListState& state) {
     if(t.type!=Target::THIS_RESOURCE)return t;
@@ -235,7 +237,7 @@ GpuResourceBinding GpuResourceRuntime::resolve(ResourceCopyTarget& input,Command
 // with the stride the original would bind it with.
 bool GpuResourceRuntime::owned_vertex(ResourceCopyTarget& target,CommandListState& state,PlanItem::OwnedBuffer& out,std::wstring& why){
     try{
-        active();require(!failed_,"GPU resource generation failed");
+        active();
         auto b=get(target,state);
         require(b.buffer && !b.image,"Only an owned buffer binds as a replaced draw's vertex stream");
         require(b.buffer->usage()&VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,"The owned buffer was not made for vertex input");
@@ -250,7 +252,7 @@ std::shared_ptr<void> resource_owner(const GpuResourceBinding& binding){
 }
 }
 void GpuResourceRuntime::identify_resource(const GpuResourceBinding& binding,SourceResourceIdentity identity){
-    require(bool(binding) && !failed_,"Resource identity requires a live owned allocation");
+    require(bool(binding),"Resource identity requires a live owned allocation");
     require(identity.hash_known || !identity.hash,"Unknown original resource hash has an asserted value");
     require(identity.tracking==SourceResourceIdentity::Tracking::Tracked || (!identity.hash_known && !identity.region_hash),
             "Untracked resource has asserted source hash facts");
@@ -263,7 +265,8 @@ void GpuResourceRuntime::identify_resource(const GpuResourceBinding& binding,Sou
     source_identities_[key]=std::move(identity);
 }
 bool GpuResourceRuntime::match_source(ResourceCopyTarget& target,CommandListState& state,SourceResourceMatch& result,std::wstring& reason){
-    try{active();require(!failed_,"GPU resource generation failed");
+    const uint64_t mark=commands_.recorded();
+    try{active();
         result={};ResourceCopyTarget single;ResourceCopyTarget* resolved=&target;
         if(target.slot_expression){const auto slot=target.ResolveSlot(&state);if(slot==UINT_MAX)return true;
             single.type=target.type;single.shader_type=target.shader_type;single.slot=slot;single.max_slot=target.max_slot;resolved=&single;}
@@ -282,7 +285,7 @@ bool GpuResourceRuntime::match_source(ResourceCopyTarget& target,CommandListStat
             else throw std::runtime_error("Original image dimension is unknown");
         }
         return true;
-    }catch(const std::exception& e){if(active_)failed_=true;reason=widen(e.what());return false;}
+    }catch(const std::exception& e){if(active_ && commands_.recorded()!=mark)failed_=true;reason=widen(e.what());return false;}
 }
 GpuResourceBinding GpuResourceRuntime::get(ResourceCopyTarget& input,CommandListState& state,ResourceCopyTarget* destination) {
     auto& t=effective(input,state);GpuResourceBinding b;
@@ -483,7 +486,9 @@ void GpuResourceRuntime::clear(ClearViewCommand& op,CommandListState& state) {
     select_view(b,GpuResourceBinding::View::UnorderedAccess);
     if(!b)return; // no view to clear through (D-151)
     b.format=b.view_format;b.offset=b.view_offset;b.visible_size=b.view_size;
-    require(!op.clear_depth && !op.clear_stencil,"GPU buffer clear cannot use depth/stencil flags");
+    // `clear = Resource depth` or `stencil`: the original asks for a depth-stencil view (create_best_view),
+    // which D3D11 makes of no buffer, and clears nothing.
+    if(op.clear_depth || op.clear_stencil)return;
     require(b.description.BindFlags&D3D11_BIND_UNORDERED_ACCESS,"GPU buffer clear needs a UAV-compatible resource");
     // Raw/structured UAV clears use only the first uint, including when the
     // INI token looked floating point. Typed 32-bit views use all components.
@@ -622,21 +627,38 @@ void GpuResourceRuntime::store(StoreCommand& op,CommandListState& state) {
     }
     op.SetOutputValue(&state,value);
 }
+// A command that cannot act does nothing, as the original's (D-137): one that fails before it recorded
+// any GPU work leaves its scope as it was, and the list goes on. One that fails after recording part
+// of its work leaves the scope's batch in a state no INI command describes: that scope's work is
+// dropped (finish refuses it, the host discards), what follows in the scope does nothing, the next scope
+// starts clean, and the command is not run again in this generation. Before, either failure ended the
+// generation's owned work for good, which in a folder generation is every Mod's.
 bool GpuResourceRuntime::run(CommandListCommand& command,CommandListState& state,std::wstring& reason) {
-    try{active();require(!failed_,"GPU resource generation failed");recorded_=true;
+    const uint64_t mark=commands_.recorded();
+    auto dropped=[&](const std::wstring& why){
+        if(!active_ || commands_.recorded()==mark)return;
+        failed_=true;
+        if(disabled_.size()<4096 && disabled_.insert(&command).second)
+            LayerGap(L"A command failed after recording GPU work: this presentation's owned work is dropped and the command is not run again before a reload: %ls (%ls)",
+                     command.ini_line.c_str(),why.c_str());
+    };
+    try{active();
+        if(failed_ || disabled_.count(&command))return true;
+        recorded_=true;
         if(auto* c=dynamic_cast<ResourceCopyOperation*>(&command))copy(*c,state);
         else if(auto* c=dynamic_cast<SlotRangeCopyOperation*>(&command))ranges(*c,state);
         else if(auto* c=dynamic_cast<ClearViewCommand*>(&command))clear(*c,state);
         else if(auto* c=dynamic_cast<StoreCommand*>(&command))store(*c,state);
         else if(auto* c=dynamic_cast<DrawCommand*>(&command);c && draw_executor_){
-            if(!draw_executor_(*c,state,reason)){failed_=true;return false;}
+            if(!draw_executor_(*c,state,reason)){dropped(reason);return false;}
         }
         else throw std::runtime_error("GPU draw/dispatch needs a shader execution adapter");
         return true;
-    }catch(const std::exception& e){if(active_)failed_=true;reason=widen(e.what())+L": "+command.ini_line;return false;}
+    }catch(const std::exception& e){reason=widen(e.what())+L": "+command.ini_line;dropped(widen(e.what()));return false;}
 }
 bool GpuResourceRuntime::query(ResourceCopyTarget& input,CommandListState& state,float& result,std::wstring& reason) {
-    try{require(!failed_,"GPU resource generation failed");const auto mode=input.evaluation_mode;
+    const uint64_t mark=commands_.recorded();
+    try{const auto mode=input.evaluation_mode;
         require(mode==Mode::RESOURCE_STRIDE || mode==Mode::RESOURCE_SIZE || mode==Mode::RESOURCE_SOURCE_STRIDE ||
                 mode==Mode::RESOURCE_FORMAT || mode==Mode::RESOURCE_WIDTH || mode==Mode::RESOURCE_HEIGHT ||
                 mode==Mode::RESOURCE_ARRAY || mode==Mode::RESOURCE_MIPS || mode==Mode::RESOURCE_BIND_FLAGS ||
@@ -710,10 +732,10 @@ bool GpuResourceRuntime::query(ResourceCopyTarget& input,CommandListState& state
         default:throw std::runtime_error("GPU resource property requires source-semantic adaptation");
         }
         return true;
-    }catch(const std::exception& e){if(active_)failed_=true;reason=widen(e.what());return false;}
+    }catch(const std::exception& e){if(active_ && commands_.recorded()!=mark)failed_=true;reason=widen(e.what());return false;}
 }
 bool GpuResourceRuntime::render_target(CommandListState&,bool& bound,float& width,float& height,std::wstring& reason) {
-    try{require(!failed_,"GPU resource generation failed");active();bound=false;
+    try{active();bound=false;
         const auto found=slots_.find({L'\0',Target::RENDER_TARGET,0u});
         if(found==slots_.end() || !found->second.image)return true;
         // ProcessParamRTSize: OMGetRenderTargets(1), then the Texture2D of a 2D or 2D multisample view.
@@ -721,7 +743,7 @@ bool GpuResourceRuntime::render_target(CommandListState&,bool& bound,float& widt
         const auto view=original_image_view(b.image_description,Target::RENDER_TARGET,b.view_format).rtv.ViewDimension;
         if(view!=D3D11_RTV_DIMENSION_TEXTURE2D && view!=D3D11_RTV_DIMENSION_TEXTURE2DMS)return true;
         bound=true;width=float(b.image_description.texture.Width);height=float(b.image_description.texture.Height);return true;
-    }catch(const std::exception& e){if(active_)failed_=true;reason=widen(e.what());return false;}
+    }catch(const std::exception& e){reason=widen(e.what());return false;}
 }
 GpuResourceBinding GpuResourceRuntime::binding(wchar_t stage,Target type,unsigned index) const {
     const auto found=slots_.find({stage,type,index});return found==slots_.end()?GpuResourceBinding{}:found->second;

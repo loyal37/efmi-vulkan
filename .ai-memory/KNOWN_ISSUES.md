@@ -1,26 +1,56 @@
 # EFMI Vulkan - Known issues
 
+## BUG-088: The EFMITTL installed on 2026-11-10 refuses every draw it runs on (found by the suite 2026-11-10; two of three causes fixed, OPEN)
+
+- The user's update of Mods\EFMITTL\translucency.ini (2026-11-10 13:15) asks `ps->srv_type(n)` and `srv_dimension(n)` for slots 8 to 21 and in a loop below t24. The layer refused a declaration query on a slot the draw's SPIR-V has no register for (D-124), and a refused query refuses the draw: in the replay with a library call no translucency layer was captured and 226 plans were refused. The binaries of 2026-10-27 fail the same step with the new file, so every build so far is affected in the game, not only this round's.
+- Fixed (D-159): such a slot below t60 is not declared, as the original answers a slot the DXBC does not declare; and a buffer of 32-bit words (structured or raw under DX11, the same SPIR-V) no longer refuses a condition that is the same with either answer.
+- OPEN, the third cause: the library's `[CommandListSlotStep]` then reads the game's texture at each declared slot, `ps-t[$slot_i]->Format`, `->Width`, `->Height`, `->Mips`, to tell the diffuse and normal maps by their formats. The plan path answers no property of the game's resources ("Unadapted original buffer query (target type 4, evaluation mode 0x200)"): 224 plans refused and no translucency layer captured in the replay. The host already describes the game's image for the match_* sections (D-138, RuntimeTexture::description); the query is to be answered from it, and from the file's header for a Mod's own texture bound at the slot. What the library does after that step has not been reached.
+- Until then the suite step "captured frame with a library call" is red with the installed library (on the binaries of 2026-10-27 as well), and in the game this EFMITTL leaves the draws it hooks to the game on every build. The EFMITTL owned-transparency step (the project's own copy of the earlier library) passes.
+
+## BUG-087: `ResourceX = ref ps-tN` took the game's texture after the lists had bound the slot (found by the judge's sweep 2026-11-10, fixed)
+
+- A list that binds `ps-t0 = ResourceRed`, saves the slot (`ResourceSaved = ref ps-t0`), binds something else and puts the saved one back drew with the game's texture: the plan's reference to a pixel slot was always the application's texture of the matched draw. The original reads the slot as it is bound when the line runs (ResourceCopyOperation::run).
+- Fixed: the plan keeps what the lists bound at each pixel slot (`pixel_held` in draw_plan.cpp: a declaration, null after an unbind, the stand-in of another application slot) and the reference holds that; the application's texture where the lists bound nothing. Sweep line `save_restore_pixel`: red as the original (grey before). Sandbox only.
+
+## BUG-086: A matched section's post list ran after the pre list bound an index buffer of its own (found by the judge's sweep 2026-11-10, fixed)
+
+- The original reaches a TextureOverride's post list by checking again: `CheckTextureOverride = ib` stands in both phases of the list that checks, and the post phase looks up the index buffer bound by then (CheckTextureOverrideCommand::run, CommandList.cpp:1389). After `ib = ResourceX` that is the Mod's own buffer, which has no hash and meets no section, so the post list does not run. The layer ran the post lists of the sections matched before the draw. Sweep line `post_draw`: 2 primitives under the original, 3 in the plan.
+- Fixed in DrawPlanAdapter::execute_matches: the post lists run only when the pre lists bound no index buffer. No installed Mod is affected today (209 `post` lines in the Mods folder, none in a TextureOverride or CommandList section). Sandbox only.
+
+## BUG-084: A Mod that assigns no LOD 1 remap was left out whole (found 2026-11-10; fixed on engine-work, checked offline)
+
+- The installed Mod lastrite assigns only `Pool_MergedSkeleton_Component_LodRemaps[c * levels + 0] = null`. Discovery refused it: "Original component has a LOD0 remap or no LOD1 assignment". The original Core binds nothing for a pool element no line assigned and takes no remap (MergedSkeleton.ini: `cs-t1 = ref Pool...`, `z0 = @cs-t1 != 0`). Fixed in load_palette_files: unassigned is no remap. check_mod_states.py on the installed folder: NOT LOADED before, every section plans after. A LOD 0 remap from a file still refuses the Mod.
+
+## BUG-085: The owned GPU runtime's test step is red since D-155 (found 2026-11-10, fixed the same day)
+
+- scripts/check_resource_commands.py on c69c1b6: "FAIL after 119 checks: GPU commands cannot run without explicit host scope". The step asserts that a Present with a refused command fails; since D-155 the command is skipped and the Present goes on. About 16 such assertions; resource_gpu.exe was last built before D-155. Nothing after check 119 had run since.
+- Fixed: the assertions state the per-command rule (the helper `declined` in sandbox/resource_gpu.cpp: the Present goes on, the generation says what it did not do, the scope submits its other work or is dropped when the command failed after recording, and the next scope runs). 11291 checks pass, validation clean; of the declined commands 17 scopes went on and 4 were dropped. Two assertions of the INI runtime test and one of the operand cases said the old rule as well.
+
 ## BUG-079: The INI execution matrix step is red since D-142 (found 2026-11-10, fixed the same day)
 
 - `scripts/check_ini_execution_matrix.py` on the build of 2026-10-30: 32 classes, 41 probed uses, 39 failures. `docs/ini-execution-matrix.json` (2026-10-18) expects the refusals that D-142 to D-155 turned into plans or no-ops ("Planner supports direct indexed draws only" is in no source file).
 - The step is in run_all's `ini` group; the verification lists of those decisions do not name it. The judge step is in no group (docs/architecture-review-2.1.md, V-03 and V-04).
 - Fixed (P3-0): the 11 uses state what the layer does now (a decision `degraded`: the command does nothing, with the warning it leaves, which the check requires); 0 failures. The judge is in the `ini` and `owned` groups; `--only quick` (text, units, evaluation, matrix, judge) takes about a minute.
 
-## BUG-080: A failed activation leaves the character invisible (found by reading 2026-11-10, not reproduced, open)
+## BUG-080: A failed activation leaves the character invisible (found by reading 2026-11-10; reproduced with a test hook and fixed, sandbox)
 
 - `activate()` sets `activated` once; the worker returns when the mesh or the first batch cannot be made or on an exception (character_backend.cpp:1062, :1083, :1090); `ready` stays false and `record()` skips every matched draw (:1898). Neither the Mod's mesh nor the game's until the game restarts. L-01.
+- Fixed (P0-7, D-158): a worker that ends without `ready` marks the package failed; `record()` then leaves the draw to the game, counts it (`activation_failed`) and starts the activation again after a pause that grows with the failures. Live INI rendering: with EFMI_VK_TEST_ACTIVATION_FAILS (test executables only) the counter rises, and once the hook is cleared the Mod draws (`runtime-reactivated.json`). Not run in the game.
 
-## BUG-081: After a folder refused at start, F10 does nothing (found by reading 2026-11-10, not reproduced, open)
+## BUG-081: After a folder refused at start, F10 does nothing (found by reading 2026-11-10; reproduced in the sandbox and fixed)
 
 - The reload request is taken from the folder program only (character_backend.cpp:3580-3581); a refused first load has none. The original always reloads. L-02.
+- Fixed (P0-8, D-158): the host watches F10 itself while the folder has no program and reloads. Live INI rendering: every character Mod disabled, F10 (an empty generation), the Mods enabled again, F10: the Mod draws. Not run in the game.
 
-## BUG-082: One failed owned command ends the folder's owned GPU work until F10 (found by reading 2026-11-10, not reproduced, open)
+## BUG-082: One failed owned command ended the folder's owned GPU work until F10 (found by reading 2026-11-10; fixed on engine-work)
 
 - `GpuResourceRuntime::failed_` is set by any exception in a resource command, by `execution_failed()` and by `discard()` (gpu_resources.cpp:636, :153, gpu_resources.h:50) and is never cleared; `begin` and `finish` then throw. Made for one Mod's generation (BUG-017); the folder generation has one runtime for every Mod (D-131). The per-command rule of D-155 catches `Refused` only (draw_plan.cpp:1604); another exception ends the Present and sets the latch. R-12, R-13.
+- Fixed (P0-4): the failure is the scope's. A command that fails before recording GPU work (ResourceCommands::recorded) leaves the scope as it was; one that fails after recording drops that scope's work, is not run again, and the next scope starts clean (GpuResourceRuntime::failed, discard and suspend clear it; OwnedPresenter::finish discards a failed scope). Every command of a Present, Constants or key list is on its own at every depth (BridgeCommand::run), whatever it raises. Checked by resource_gpu's declined checks and the judge's `failure` case; not yet in the game.
 
-## BUG-083: RegisterMod refuses a Mod that requires more than EFMI 1.48; the installed Core is 1.49 (found by reading 2026-11-10, open)
+## BUG-083: RegisterMod refused a Mod that requires more than EFMI 1.48; the installed Core is 1.49 (found by reading 2026-11-10; fixed on engine-work)
 
 - character_core.cpp:465-470 against `global $version = 1.49` in Core\EFMI\main.ini. No installed Mod requires more than 1.48. R-06.
+- Fixed (P0-2): the native RegisterMod compares with the installed Core's `$version` (CharacterProgram::core_version reads its main.ini) and sets `$mod_id` 1 or -1 as the original's list; a Mod requiring more than the installed Core stays off and is told. check_mod_containment.py: a Mod requiring 1.49 draws, one requiring 9.99 does not and is told (both failing before).
 
 ## LIMIT-047: What makes a Mod a Mod, and the all-or-nothing plan (2026-11-10, docs/architecture-review-2.1.md)
 

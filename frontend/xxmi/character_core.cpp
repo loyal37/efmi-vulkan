@@ -5,6 +5,7 @@
 #include "rabbit_textures.h"
 #include "efmittl_bridge.h"
 #include "buffer_queries.h"
+#include "layer_gap.h"
 #include "globals.h"
 #include "Overlay.h"
 #include <algorithm>
@@ -23,14 +24,41 @@ namespace efmi::frontend {
 namespace {
 const std::wstring core_namespace = L"\\efmiv1\\";
 std::wstring command(const wchar_t* name) { return L"commandlist" + core_namespace + name; }
-CommandListVariable& var(const wchar_t* name) { return command_list_globals.at(L"$" + core_namespace + name); }
-ExplicitCommandListSection& list(const wchar_t* name) { return explicitCommandListSections.at(command(name)); }
 std::string narrow(const std::wstring& value)
 {
     const int n = WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), nullptr, 0, nullptr, nullptr);
     std::string out(size_t(std::max(n, 0)), '\0');
     if (n) WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), out.data(), n, nullptr, nullptr);
     return out;
+}
+// The EFMI Core versions whose lists, variables and resources the native handlers were written against
+// (the installed Mods require 1.41 to 1.48, the installed Core is 1.49). A newer Core is taken with a
+// notice as long as it declares every name the handlers use (check_interface).
+constexpr float kKnownCore = 1.49f;
+// A name of the Core the native handlers use that its files do not declare: said with the name, where a
+// container's lookup error said nothing (a Core release that renames one).
+[[noreturn]] void core_missing(const std::wstring& name)
+{
+    throw std::runtime_error("EFMI Core interface: the Core's files do not declare " + narrow(name) +
+                             "; this layer binds EFMI Core 1.41 to 1.49 by its names");
+}
+CommandListVariable& var(const wchar_t* name)
+{
+    const auto found = command_list_globals.find(L"$" + core_namespace + name);
+    if (found == command_list_globals.end()) core_missing(L"$" + core_namespace + name);
+    return found->second;
+}
+ExplicitCommandListSection& list(const wchar_t* name)
+{
+    const auto found = explicitCommandListSections.find(command(name));
+    if (found == explicitCommandListSections.end()) core_missing(L"[" + command(name) + L"]");
+    return found->second;
+}
+CustomResource& core_resource(const wchar_t* name)
+{
+    const auto found = customResources.find(L"resource" + core_namespace + name);
+    if (found == customResources.end()) core_missing(L"[resource" + core_namespace + name + L"]");
+    return found->second;
 }
 // A name given in UTF-8 (a Mod's namespace from the layer) as the parser spells it. A byte-by-byte
 // widening sign-extended every byte outside ASCII (U+FFE6 for 0xE6), so a Mod named in another script
@@ -146,6 +174,7 @@ class CharacterCore : public RuntimeExtension {
     std::unique_ptr<EfmittlBridge> efmittl; // the library's hooks and capture, when it is loaded (D-113)
     bool rabbit_textures = false;
     bool textures = false;                 // the host answers texture queries (D-077)
+    std::set<std::wstring> version_told_;  // lines whose Mod was told about its required version
     size_t texture_sections = 0;
     // The constant a section's command list assigns to `name`, at its top level or inside its `if`
     // branches (EFMI exports guard the assignments with `if $mod_enabled && DRAW_TYPE == 4`): one
@@ -365,6 +394,8 @@ class CharacterCore : public RuntimeExtension {
             fail(reason, L"Original Core request differs from the resolved native identity, bone or LOD contract");
     }
 public:
+    // The version the installed Core declares (`global $version` of its main.ini), 0 when not known.
+    float core_version_ = 0;
     void set_facts(std::shared_ptr<CharacterDiscovery> out) { mods_[0].facts = std::move(out); }
     CharacterCore(const std::string& name, std::shared_ptr<CharacterDiscovery> output)
         : CharacterCore(name, efvk::CharacterPackage{}, false) { mods_[0].discovery = std::move(output); }
@@ -381,9 +412,11 @@ public:
     }
     std::wstring declarations() override
     {
-        return LR"ini(namespace = EFMIv1
-[Constants]
-global $required_version = 0
+        // What the Core's main.ini declares for registration (the generation loads the Core's API,
+        // skeleton, identification and helper files, not its GUI): `$version` as the installed Core states it.
+        wchar_t version[64];
+        swprintf_s(version, L"global $version = %g\n", double(core_version_ > 0 ? core_version_ : kKnownCore));
+        return std::wstring(L"namespace = EFMIv1\n[Constants]\n") + version + LR"ini(global $required_version = 0
 global $object_guid = 0
 global $mod_id = -1
 [ResourceModName]
@@ -406,9 +439,23 @@ global $mod_id = -1
             names.push_back(L"customshader" + core_namespace + name);
         return names;
     }
+    // Every name of the Core the native handlers use, looked up once: a Core release without one is
+    // said in one statement at load, not found by a draw.
+    void check_interface()
+    {
+        for (const auto* name : {L"initializemergedskeleton", L"component_readconfig", L"mergedskeleton_detectbonedatasource",
+                                 L"spatialidentity_identifycomponentinstances", L"mergedskeleton_attachcomponent", L"component_drawinstances",
+                                 L"callback_mergedskeleton_connectcomponent", L"callback_component_drawcustom"}) list(name);
+        for (const auto* name : {L"bones_count", L"bones_data_source", L"component_id", L"custom_mesh_scale", L"draw_call_has_modded_instance",
+                                 L"draw_call_has_unknown_instance", L"enum_bones_source_vs_t0", L"enum_override_type_custom",
+                                 L"enum_override_type_original", L"enum_override_type_skip", L"gpu_posed", L"instance_config_vs_cb_slot",
+                                 L"lod_level", L"cfg_ms_max_lod_level_count", L"version", L"required_version", L"mod_id"}) var(name);
+        for (const auto* name : {L"outputmergedskeleton_template", L"output_mergedskeleton"}) core_resource(name);
+    }
     std::vector<std::wstring> install(DrawPlanAdapter& a) override
     {
         adapter = &a;
+        check_interface();
         // `Original_VS_CB->SpatialHash(...)` in a replaced draw's plan: the renderer's instance entry.
         a.plan_resource_queries([this](ResourceCopyTarget& target, CommandListState& state, float& value, std::wstring& why) {
             if (target.type == ResourceCopyTargetType::RENDER_TARGET || target.type == ResourceCopyTargetType::DEPTH_STENCIL_TARGET)
@@ -452,6 +499,15 @@ global $mod_id = -1
                     why.append(reason.begin(), reason.end());
                     return false;
                 }
+                // A buffer of 32-bit words: structured or raw, the one the adapter is trying (it evaluates
+                // a condition with each and goes on when they agree).
+                if (type == kWordBufferDeclaration) {
+                    const bool raw = adapter->undecided_words(t.shader_type, slot);
+                    type = raw ? 3 : 2; dimension = raw ? 11 : 1; stride = raw ? 0 : stride;
+                }
+                // A slot that is not declared: type 0, and -1 for its stride and dimension, as the original
+                // (CommandListOperand's shader target evaluation: "Negative one means SRV is not declared").
+                if (!type && t.evaluation_mode != ShaderTargetEvaluationMode::DCL_SRV_TYPE) { value = -1.0f; return true; }
                 value = float(t.evaluation_mode == ShaderTargetEvaluationMode::DCL_SRV_TYPE ? type :
                               t.evaluation_mode == ShaderTargetEvaluationMode::DCL_SRV_STRIDE ? stride : dimension);
                 return true;
@@ -462,17 +518,32 @@ global $mod_id = -1
         auto native = [&](const wchar_t* name, DrawPlanAdapter::NativeCommand callback) {
             boundaries.push_back(command(name)); a.native(list(name), command(name), std::move(callback));
         };
-        native(L"registermod", [this](CommandListState&, unsigned phases, std::wstring& why) {
+        native(L"registermod", [this](CommandListState&, unsigned phases, std::wstring&) {
             if (!(phases & 1)) return true;
-            if (!std::isfinite(v(L"required_version").fval) || v(L"required_version").fval > 1.48f)
-                return fail(why, L"Mod requires a newer EFMIv1 contract");
-            v(L"mod_id").fval = 0; return true;
+            // The Core's CommandListRegisterMod (main.ini): `$mod_id = 1`, and -1 when the installed Core is
+            // older than the Mod requires (`$version < $required_version`) or the Mod names a version below
+            // zero; the Mod then leaves itself off. The comparison is with the installed Core's version, as
+            // the original's: a constant of the layer switched off Mods the user's installation runs.
+            const float required = v(L"required_version").fval;
+            const float installed = var(L"version").fval;
+            const std::wstring* line = adapter ? adapter->current_line() : nullptr;
+            const bool tell = line && version_told_.size() < 256 && version_told_.insert(*line).second;
+            if (!(required <= installed) || required < 0) {
+                v(L"mod_id").fval = -1;
+                if (tell) LayerGap(L"%ls: the Mod requires EFMI %g and the installed EFMI Core is %g; it stays off, as under the original",
+                                   line->c_str(), double(required), double(installed));
+                return true;
+            }
+            if (required > kKnownCore && tell)
+                LayerGap(L"%ls: the Mod requires EFMI %g; this layer was checked with EFMI Cores up to %g",
+                         line->c_str(), double(required), double(kKnownCore));
+            v(L"mod_id").fval = 1; return true;
         });
         native(L"initializemergedskeleton", [this](CommandListState&, unsigned phases, std::wstring& why) {
             if (!(phases & 1)) return true;
             Mod* m = caller();
             if (!m) return fail(why, L"Native skeleton initialization outside a character Mod");
-            auto* target = adapter->referenced_resource(&customResources.at(L"resource" + core_namespace + L"outputmergedskeleton_template"));
+            auto* target = adapter->referenced_resource(&core_resource(L"outputmergedskeleton_template"));
             if (!target || (m->prepared && target != m->skeleton)) return fail(why, L"Unprepared native skeleton output");
             m->skeleton = target; return true;
         });
@@ -516,7 +587,7 @@ global $mod_id = -1
             Mod* m = caller();
             if (!m || m != owner()) return fail(why, L"Native bone attachment outside the draw's Mod");
             if (!m->prepared || !contract(*m, why)) return false;
-            if (!output_skeleton_) output_skeleton_ = &customResources.at(L"resource" + core_namespace + L"output_mergedskeleton");
+            if (!output_skeleton_) output_skeleton_ = &core_resource(L"output_mergedskeleton");
             const auto* output = adapter->referenced_resource(output_skeleton_);
             if (output != m->skeleton) return fail(why, L"Native bone attachment references another skeleton");
             attached = true; return true;
@@ -591,7 +662,8 @@ global $mod_id = -1
     // line for the Mod the section belongs to, which the host shows.
     void gap(const std::wstring& section, const std::wstring& text)
     {
-        LogOverlayW(LOG_WARNING, L"[%ls] %ls\n", section.c_str(), text.c_str());
+        // Through the original's warning channel and the Mod's own list, which the host shows at load.
+        LogOverlayW(LOG_WARNING, const_cast<wchar_t*>(L"[%ls] %ls\n"), section.c_str(), text.c_str());
         Mod* m = folder_ ? mod_of(section, L"textureoverride") : &mods_[0];
         CharacterDiscovery* out = m ? (m->discovery ? m->discovery.get() : m->facts.get()) : nullptr;
         if (out && out->gaps.size() < 16) out->gaps.push_back(narrow(L"[" + section + L"] " + text));
@@ -802,14 +874,23 @@ global $mod_id = -1
                         root_mods_[&entry.command_list] = m; root_mods_[&entry.post_command_list] = m;
                     }
         struct Preparing { Mod*& slot; ~Preparing() { slot = nullptr; } } preparing{preparing_};
+        // Every Mod is tried: one that cannot be prepared is named with its reason (CharacterDiscovery::refused),
+        // so the folder leaves out exactly those and loads again, instead of loading every Mod alone to find it.
+        std::wstring first;
         for (auto& m : mods_) {
             preparing_ = &m;
-            if (!prepare_mod(a, m, state, why)) {
-                if (folder_) why = L"[" + m.mod + L"] " + why;
-                return false;
-            }
+            std::wstring reason;
+            bool prepared = false;
+            try { prepared = prepare_mod(a, m, state, reason); }
+            catch (const std::exception& e) { const std::string text = e.what(); reason.assign(text.begin(), text.end()); }
+            if (prepared) continue;
+            m.prepared = false;
+            if (reason.empty()) reason = L"the Mod's skeleton declarations did not run";
+            if (const auto out = m.discovery ? m.discovery : m.facts) out->refused = narrow(reason);
+            if (first.empty()) first = folder_ ? L"[" + m.mod + L"] " + reason : reason;
         }
-        return true;
+        why = first;
+        return first.empty();
     }
     bool prepare_mod(DrawPlanAdapter& a, Mod& m, CommandListState& state, std::wstring& why)
     {
@@ -919,6 +1000,10 @@ std::shared_ptr<RuntimeExtension> character_discovery(const std::string& mod_nam
 std::shared_ptr<RuntimeExtension> character_folder(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods)
 {
     return std::make_shared<CharacterCore>(mods);
+}
+void character_core_version(RuntimeExtension& core, float version)
+{
+    if (auto* c = dynamic_cast<CharacterCore*>(&core)) c->core_version_ = std::isfinite(version) && version > 0 ? version : 0;
 }
 std::vector<std::string> character_core_libraries()
 {

@@ -85,7 +85,11 @@ data = R32_FLOAT 1 2 3 4
 vb0 = ResourceBuffer
 $value = vb0->hashregion(0, 4)
 )ini");
-        refuses([&]{vertex.present();},"A vertex buffer hash outside a draw is refused, where the original dereferences no draw call");
+        // The command that asks does nothing and the Present goes on, said once (it ended the Present before).
+        vertex.present();
+        bool told=false;
+        for(const auto& gap:vertex.ini->status().gaps)told=told || gap.find("requires a draw context")!=std::string::npos;
+        check(told && vertex.variable("value")==0,"A vertex buffer hash outside a draw leaves its command undone, where the original dereferences no draw call");
         vertex.release();
     }
 }

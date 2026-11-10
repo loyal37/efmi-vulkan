@@ -6,14 +6,16 @@
 
 Run existing EFMI merged-skeleton mods of Arknights: Endfield on the game's native Vulkan renderer, with the mod directories (INI, BUF, DDS) unchanged. Today EFMI works only because the launcher forces the game onto Direct3D 11.
 
-The first acceptance sample is `Mods\arcane fes 1.2`; the inventory includes arcane.ini and the enabled k/1.ini image panel. RabbitFX, shape keys, on-screen text and hunting mode are outside the first version. The full plan, with facts, decisions, gates and milestones, is `docs/plan.md`.
+The goal since 2026-10-19 is general: every installed Mod, and characters never captured, through shared mechanisms; the acceptance bar is the original's experience (the first frame is the Mod, no stand-in, no frame-rate loss). What is in and out of scope today, with the reasons, is `docs/architecture-review-2.1.md`; the full plan with facts, decisions, gates and milestones is `docs/plan.md`.
 
 ## Components and technology
 
-- `layer/`: a Vulkan layer in C++17, MSVC x64. At present it is a read-only probe: memory, buffers, ordinary/template/push descriptors, shader/image metadata, command buffers, submits and captured draws over a named pipe. The current 0.5.0 build is sandbox-verified and available in `dist/` with probe mode configured. Historical game loading evidence is from 0.2.0 passthrough; the user accepts run 3 for initial loading and defers long-duration testing (D-014).
-- `sandbox/`: a deterministic Vulkan test program (`dist/efmi_vk_sandbox.exe`) and the regression scripts. It is the target for everything that can be tested without the game.
-- `server/`: a Python package `efmi_vk` (standard library only) with the pipe client, a command-line tool and a stdio MCP server, so that an agent can query a running Vulkan process the way the EFMI MCP project does for DX11.
-- `scripts/`: dependency fetch, the repository text check, offline analysis of DX11 frame dumps.
+- `layer/`: the injected DLL in C++17, MSVC x64: the Vulkan hooks and tracker, the probe pipe, and the replacement (packages, the folder generation, skeleton import, pipeline variants, textures, the owned Present, notices). The replacement is also built alone as the exchangeable module `efmi_vk_backend.dll`.
+- `frontend/`: the original XXMI parser and interpreter, compiled unchanged from `F:\vulkan\XXMI-Libs-Package\DirectX11`, with the adapters around it (`frontend/xxmi`), the owned GPU runtime (`frontend/gpu`) and file loading (`frontend/assets`).
+- `sandbox/`: deterministic Vulkan test programs and the regression suite (`sandbox/run_all.py`, by groups). Everything that can be tested without the game is tested here.
+- `server/`: the Python package `efmi_vk` (standard library only): pipe client, command line and a stdio MCP server.
+- `scripts/`: builds, checks (among them the original as the judge, `check_dx11_judge.py`), captures and replays.
+- The code's structure as it is now: `.ai-memory/ARCHITECTURE.md`.
 
 ## Entry points on this machine
 

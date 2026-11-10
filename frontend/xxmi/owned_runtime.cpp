@@ -23,6 +23,7 @@ void OwnedRuntime::rebind(VkQueue queue){impl_->gpu->resources().rebind(queue);}
 void OwnedRuntime::suspend(){impl_->gpu->resources().suspend();}
 void OwnedRuntime::discard(){impl_->gpu->resources().discard();}
 bool OwnedRuntime::scope_active() const {return impl_->gpu->resources().scope_active();}
+bool OwnedRuntime::failed() const {return impl_->gpu->resources().failed();}
 std::shared_ptr<gpu::ResourceSubmission> OwnedRuntime::finish(const gpu::ResourceCommands::SubmitSync& sync,VkQueue queue){
     return impl_->gpu->resources().finish(sync,queue);
 }

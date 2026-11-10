@@ -277,9 +277,13 @@ draw = 3, 0
 run = CustomShaderMain
 )ini";
     ShaderFixture f(d,directory,ini.c_str());f.backend->resources().begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!f.ini->present({},1,0,f.why) && f.why.find("topology")!=std::string::npos,"Unsupported source graphics fails the root explicitly");
-    check(f.backend->draws()==1 && f.backend->graphics_state().topology==D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED,"Graphics failure restores nested source state after preceding recorded work");
-    refuses([&]{f.backend->resources().finish();},"Failed original graphics root cannot submit its partial work");f.backend->resources().discard();
+    const bool presented=f.ini->present({},1,0,f.why);
+    check(f.backend->draws()==1 && f.backend->graphics_state().topology==D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED,"A draw the layer cannot make restores nested source state after preceding recorded work");
+    // The nested draw does nothing; the draw recorded before it is the scope's work, submitted unless the
+    // failing draw had recorded part of its own (then the scope is dropped and the target stays as it was).
+    const bool dropped=f.backend->resources().failed();
+    declined(*f.ini,f.backend->resources(),presented,"topology","Unsupported source graphics leaves its draw undone and is said");
     auto output=f.backend->resources().binding(L'\0',ResourceCopyTargetType::RENDER_TARGET,0).image;
-    const auto bytes=f.backend->resources().commands().readback(d.queue,output,image_region(output));check(std::all_of(bytes.begin(),bytes.end(),[](auto b){return !b;}),"Discarded original graphics leaves the committed target unchanged");output.reset();f.release();
+    const auto bytes=f.backend->resources().commands().readback(d.queue,output,image_region(output));
+    check(std::all_of(bytes.begin(),bytes.end(),[](auto b){return !b;})==dropped,"The draw before the refused one is drawn, or a dropped scope leaves the committed target unchanged");output.reset();f.release();
 }

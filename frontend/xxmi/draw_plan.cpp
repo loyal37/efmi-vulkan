@@ -1,5 +1,7 @@
 #include "draw_plan.h"
+#include "layer_gap.h"
 #include "resource_match.h"
+#include <cstdarg>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -13,6 +15,14 @@
 #include "globals.h"
 
 void FrontendRunCommandList(CommandList&,CommandListState&);
+void (*g_layer_gap_sink)(const wchar_t* text) = nullptr;
+void LayerGap(const wchar_t* format, ...)
+{
+    wchar_t text[2048]{}; va_list args; va_start(args, format);
+    _vsnwprintf_s(text, _countof(text), _TRUNCATE, format, args); va_end(args);
+    LogOverlayW(LOG_WARNING, const_cast<wchar_t*>(L"%ls\n"), text);
+    if (g_layer_gap_sink) g_layer_gap_sink(text);
+}
 bool FrontendSlotRange(SlotRangeCopyOperation&,CommandListState&,bool& bind,unsigned& first,std::vector<CustomResource*>&);
 
 namespace efmi::frontend {
@@ -27,6 +37,9 @@ constexpr size_t max_active_depth = 64;
 // declared: a replaced draw's plan answers a declaration operand (`ResourceX !== null`) from its own
 // references (D-112).
 struct QueryService {DrawPlanAdapter::ResourceQuery read,texture,plan_read,declared;DrawPlanAdapter::ShaderQuery shader,plan_shader;size_t count=0;bool general_matches=false;
+    // Registers whose declaration is one of two (undecided_words), as the running command asked them, and
+    // which of them take the second answer in this evaluation (bit i for the i-th).
+    std::vector<std::pair<wchar_t,unsigned>> words;uint32_t words_second=0;bool words_over=false;
     DrawPlanAdapter::HostValue host;DrawPlanAdapter::RenderTargetSize rt;
     // inside: in a draw's scope, within a CustomShader (D-087); drawing: a draw's scope is open.
     std::function<bool()> gate,inside,drawing;bool open() const {return !gate || gate() || (inside && inside());}};
@@ -470,13 +483,26 @@ struct DrawPlanAdapter::Runtime {
     DrawPlanAdapter::DrawPrepare draw_prepare;
     DrawPlanAdapter::ShaderCommand shader_command;
     bool nested_failed=false;
-    bool tolerant=false; // a root list's refused command is skipped with a warning (D-155)
+    // In a Present, Constants or key list the original runs each command on its own: one that cannot act
+    // does nothing and the list goes on, at every depth of called lists (D-155). With this set a command
+    // the planner refuses, or that raises, is skipped and said once (skipped()).
+    bool tolerant=false;
+    void skipped(const CommandListCommand* command,const std::wstring& line,const std::wstring& why)
+    {
+        if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(command).second)
+            LayerGap(L"The Vulkan layer does not take this command, which does nothing: %ls (%ls)",line.c_str(),why.c_str());
+    }
     bool keep_original=false; // a native kept the application's draw (DrawPlanAdapter::keep_original)
     const CommandList* root=nullptr; // the matched root whose commands run (DrawPlanAdapter::current_root)
+    const std::wstring* calling_line=nullptr; // the line that runs a native command, during it (current_line)
     size_t active_depth=0;
     DrawPlanAdapter::TextureQuery texture_query;
     DrawPlanAdapter::ResourceMatchQuery resource_match;
     std::array<DrawPlanAdapter::PixelBinding,128> pixel_bindings;
+    // What the lists bound at a pixel slot so far, as the declaration it came from says (the stand-in of an
+    // application slot for the application's texture of that slot): what `ResourceX = ref ps-tN` holds then.
+    struct PixelHeld {bool planned=false;CustomResource* resource=nullptr;};
+    std::array<PixelHeld,128> pixel_held;
     // The vertex buffers this plan bound, by DX11 slot, for `vb3 = vb0`; not planned where the
     // application's own buffer is still bound.
     struct VertexBinding {bool planned=false;CustomResource* resource=nullptr;std::shared_ptr<const PlanItem::OwnedBuffer> owned;};
@@ -647,7 +673,7 @@ struct DrawPlanAdapter::Runtime {
         auto unknown=[&](){
             bound=true;
             if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(&target).second)
-                LogOverlayW(LOG_WARNING,L"CheckTextureOverride of the game's resource that the Vulkan layer cannot identify meets no section\n");
+                LayerGap(L"CheckTextureOverride of the game's resource that the Vulkan layer cannot identify meets no section");
         };
         switch(target.type){
         case ResourceCopyTargetType::CUSTOM_RESOURCE:
@@ -903,6 +929,13 @@ struct DrawPlanAdapter::Runtime {
         }
         if(auto* shader=as<RunCustomShaderCommand>(original, kinds, K_RunCustomShaderCommand)){
             std::wstring why;
+            if(!shader_command){
+                // No owned GPU runtime in this generation (its tools not deployed, switched off, or the offline
+                // dry run): as a CustomShader the original could not compile, whose runs do nothing.
+                if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(original.get()).second)
+                    LayerGap(L"A CustomShader does nothing without the owned GPU runtime: %ls",original->ini_line.c_str());
+                return;
+            }
             if(shader_command && !owned() && !drawing())refuse(L"CustomShader needs the host's owned GPU scope, which replaced draws do not open");
             // In a draw's scope everything the shader's lists run is owned work (D-087).
             const bool nested=!owned() && drawing();
@@ -1017,7 +1050,7 @@ struct DrawPlanAdapter::Runtime {
                 // replaced draw. The command does nothing, the original's warning says so once, and the draw's
                 // other commands go on (D-146).
                 if (unknown_identity_logged.size() < 64 && unknown_identity_logged.insert(draw).second)
-                    LogOverlayW(LOG_WARNING, L"The Vulkan layer does not issue this command in a replaced draw: %ls\n", original->ini_line.c_str());
+                    LayerGap(L"The Vulkan layer does not issue this command in a replaced draw: %ls", original->ini_line.c_str());
                 return;
             }
             if ((!item.index_count && !item.automatic) || !item.instance_count) return;
@@ -1038,10 +1071,15 @@ struct DrawPlanAdapter::Runtime {
                     source=src.GetCustomResource(state);direct_resource(source);source=referenced(source);
                 }else if(src.type==ResourceCopyTargetType::SHADER_RESOURCE && src.shader_type==L'p' &&
                          binding->options==ResourceCopyOptions::REFERENCE){
-                    // The application's texture at this pixel slot of the matched draw, kept by reference.
+                    // What the slot holds now, kept by reference, as the original reads the slot as it is bound
+                    // when the line runs (ResourceCopyOperation::run, PSGetShaderResources): what the lists bound
+                    // there before, null after their unbind, and the application's texture of the matched draw
+                    // where they bound nothing. The application's was taken always before, so a list that saved
+                    // its own binding and put it back drew with the game's texture (the judge's line
+                    // `save_restore_pixel`).
                     const unsigned slot=src.ResolveSlot(state);
                     if(slot>=128)refuse(L"Pixel slot out of range: "+original->ini_line);
-                    source=&application_textures[slot];
+                    source=pixel_held[slot].planned?pixel_held[slot].resource:&application_textures[slot];
                 }else if(other_slot(src) && binding->options==ResourceCopyOptions::REFERENCE){
                     // The application's binding at another slot, held to be put back (D-152).
                     source=&application_others[other_key(src,*state,original->ini_line)];
@@ -1052,7 +1090,7 @@ struct DrawPlanAdapter::Runtime {
                     // says so once, and the list goes on (D-155). A whole Mod, or the folder, refused for one
                     // such line before. Every other kind of source keeps refusing below.
                     if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(original.get()).second)
-                        LogOverlayW(LOG_WARNING,L"The Vulkan layer does not make this copy; the resource stays null: %ls\n",original->ini_line.c_str());
+                        LayerGap(L"The Vulkan layer does not make this copy; the resource stays null: %ls",original->ini_line.c_str());
                 }else if(src.type!=ResourceCopyTargetType::EMPTY ||
                          (binding->options!=ResourceCopyOptions::REFERENCE && binding->options!=ResourceCopyOptions::COPY))
                     refuse(L"Unsupported declaration reference: "+original->ini_line);
@@ -1119,8 +1157,10 @@ struct DrawPlanAdapter::Runtime {
                         binding->options != ResourceCopyOptions::COPY)) {
                 refuse(L"Unsupported resource source or copy policy: " + original->ini_line);
             }
-            if(item.operation==PlanOperation::BindPixelResource)
+            if(item.operation==PlanOperation::BindPixelResource){
                 pixel_bindings[item.slot]=item.application_slot==int(item.slot)?PixelBinding{}:PixelBinding{false,item.resource};
+                pixel_held[item.slot]={true,item.application_slot>=0?&application_textures[item.application_slot]:item.resource};
+            }
             if(item.operation==PlanOperation::BindVertex)vertex_bindings[item.slot]={true,item.resource,item.owned};
             if(item.operation==PlanOperation::BindIndex)index_binding={true,item.resource,nullptr};
             append(std::move(item));
@@ -1149,6 +1189,8 @@ struct DrawPlanAdapter::Runtime {
                 item.phase_mask = call->run_pre_and_post_together ? 3 : state->post ? 2 : 1;
                 if(found->second.command){
                     std::wstring reason;
+                    struct Calling {const std::wstring*& slot;const std::wstring* before;~Calling(){slot=before;}} calling{calling_line,calling_line};
+                    calling_line=&original->ini_line;
                     if(!found->second.command(*state,item.phase_mask,reason) || nested_failed)
                         refuse(reason.empty()?L"Native command refused: "+found->second.name:reason);
                     return;
@@ -1226,7 +1268,7 @@ struct DrawPlanAdapter::Runtime {
         // source, and a clear does nothing; the warning says so once (D-147).
         if(as<StoreCommand>(original, kinds, K_StoreCommand) || as<ClearViewCommand>(original, kinds, K_ClearViewCommand)){
             if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(original.get()).second)
-                LogOverlayW(LOG_WARNING,L"GPU work of a replaced draw without the owned GPU runtime does nothing: %ls\n",original->ini_line.c_str());
+                LayerGap(L"GPU work of a replaced draw without the owned GPU runtime does nothing: %ls",original->ini_line.c_str());
             return;
         }
         refuse(L"Unsupported frontend operation: " + original->ini_line);
@@ -1250,9 +1292,49 @@ public:
         timing_slot = &runtime->command_timing[typeid(*original).name()];
 #endif
     }
-    void run(CommandListState* state) override {
-        if (!arguments_supported) refuse(L"Unadapted expression query: " + ini_line);
+    // A command that asked a declaration the SPIR-V leaves between two answers (D-159). An `if` goes on
+    // when its condition is the same with every combination of them, as it then is under the original
+    // whichever the DX11 build declares; anything else that asked has a value that depends on it.
+    void checked(CommandListState* state) {
+        auto& q = *runtime->queries;
+        q.words.clear(); q.words_second = 0; q.words_over = false;
+        if (kinds & DrawPlanAdapter::Runtime::K_IfCommand) {
+            auto& condition = static_cast<IfCommand*>(original.get())->expression;
+            const bool first = condition.evaluate(state) != 0.0f;
+            if (!q.words.empty() || q.words_over) {
+                bool same = !q.words_over;
+                const uint32_t combinations = 1u << q.words.size();
+                for (uint32_t second = 1; same && second < combinations; ++second) {
+                    q.words_second = second;
+                    same = (condition.evaluate(state) != 0.0f) == first && !q.words_over;
+                }
+                q.words.clear(); q.words_second = 0; q.words_over = false;
+                if (!same) refuse(L"The condition depends on whether a buffer of 32-bit words is structured or raw, which its SPIR-V does not tell: " + ini_line);
+            }
+            runtime->run(original, state, timing_slot, kinds);
+            q.words.clear(); q.words_over = false;
+            return;
+        }
         runtime->run(original, state, timing_slot, kinds);
+        if (!q.words.empty() || q.words_over) {
+            q.words.clear(); q.words_over = false;
+            refuse(L"A value depends on whether a buffer of 32-bit words is structured or raw, which its SPIR-V does not tell: " + ini_line);
+        }
+    }
+    void run(CommandListState* state) override {
+        if (!runtime->tolerant) {
+            if (!arguments_supported) refuse(L"Unadapted expression query: " + ini_line);
+            checked(state);
+            return;
+        }
+        // Each command on its own, in a called list as in the root: what this one cannot do ends here, and
+        // the commands after it in its list run (before, it ended every list up to the root command).
+        try {
+            if (!arguments_supported) refuse(L"Unadapted expression query: " + ini_line);
+            checked(state);
+        }
+        catch (const Refused& refused) { runtime->skipped(original.get(), ini_line, refused.reason); }
+        catch (const std::exception& e) { const std::string text = e.what(); runtime->skipped(original.get(), ini_line, std::wstring(text.begin(), text.end())); }
     }
 };
 class BridgeLinkedCommand final : public RunLinkedCommandList {
@@ -1373,6 +1455,7 @@ void DrawPlanAdapter::plan_resource_queries(ResourceQuery query)
     runtime_->queries->plan_read=std::move(query);
 }
 const CommandList* DrawPlanAdapter::current_root() const { return runtime_->root; }
+const std::wstring* DrawPlanAdapter::current_line() const { return runtime_->calling_line; }
 void DrawPlanAdapter::keep_original()
 {
     if(!runtime_->active)refuse(L"Keeping the original draw needs an active plan");
@@ -1389,6 +1472,15 @@ void DrawPlanAdapter::fresh_state(FreshState initialize){
 void DrawPlanAdapter::render_target_size(RenderTargetSize query){
     if(runtime_->active || !runtime_->adapted.empty() || !query)refuse(L"Install the render target size before adapting command lists");
     runtime_->queries->rt=std::move(query);
+}
+bool DrawPlanAdapter::undecided_words(wchar_t stage,unsigned slot){
+    auto& q=*runtime_->queries;const auto key=std::make_pair(stage,slot);
+    auto at=std::find(q.words.begin(),q.words.end(),key);
+    if(at==q.words.end()){
+        if(q.words.size()>=4){q.words_over=true;return false;}
+        q.words.push_back(key);at=q.words.end()-1;
+    }
+    return (q.words_second>>(at-q.words.begin()))&1u;
 }
 void DrawPlanAdapter::plan_shader_queries(ShaderQuery query){
     if(runtime_->active || !runtime_->adapted.empty() || !query)refuse(L"Install plan shader queries before adapting command lists");
@@ -1563,9 +1655,9 @@ void DrawPlanAdapter::note_timing(const char* name, uint64_t microseconds)
 }
 bool DrawPlanAdapter::execute_matches(const std::vector<CommandList*>& pre,const std::vector<CommandList*>& post,CommandListState& state,DrawPlan& output,std::wstring& reason)
 {
-    return execute_impl(pre,&post,state,output,reason);
+    return execute_impl(pre,&post,state,output,reason,{},true);
 }
-bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState& state,DrawPlan& output,std::wstring& reason,OriginalCall between)
+bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState& state,DrawPlan& output,std::wstring& reason,OriginalCall between,bool matched)
 {
     reason.clear();
     auto valid=[&](const auto& lists){if(lists.size()>max_items)return false;for(auto* list:lists)
@@ -1589,7 +1681,7 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
     auto saved_layout = state.input_layout_overrides;const auto saved_post=state.post;
     runtime_->active = &candidate; runtime_->steps = runtime_->draws = 0;runtime_->queries->count=0;runtime_->nested_failed=false;runtime_->active_depth=0;
     runtime_->keep_original=false;runtime_->shader_depth=0;
-    runtime_->pixel_bindings={};runtime_->vertex_bindings={};runtime_->index_binding={};runtime_->other_changes.clear();
+    runtime_->pixel_bindings={};runtime_->pixel_held={};runtime_->vertex_bindings={};runtime_->index_binding={};runtime_->other_changes.clear();
     phase("exec setup");
     try {
         auto run=[&](const auto& lists,CommandListState& phase){for(auto* root:lists){
@@ -1601,15 +1693,18 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             for(auto& command:resolved->commands){
                 if(phase.aborted)break;
                 if(!runtime_->tolerant){command->run(&phase);continue;}
+                // As the original's Present and Constants: the command did nothing, the list goes on. Whatever
+                // the command raised: the planner's refusal, or an exception of the original's code or of a
+                // guard (a range bound outside the integers), which ended the whole list for every Mod before.
+                // What reaches here is a command the bridge does not hold (the original's own if or assignment,
+                // whose condition or value raised).
+                auto skipped=[&](const std::wstring& why){
+                    const auto* source=original(*command);
+                    runtime_->skipped(source?source:command.get(),source?source->ini_line:std::wstring(),why);
+                };
                 try{command->run(&phase);}
-                catch(const Refused& refused){
-                    // As the original's Present and Constants: the command did nothing, the list goes on.
-                    if(runtime_->unknown_identity_logged.size()<64 && runtime_->unknown_identity_logged.insert(command.get()).second){
-                        const auto* source=original(*command);
-                        LogOverlayW(LOG_WARNING,L"The Vulkan layer does not take this command, which does nothing: %ls (%ls)\n",
-                                    source?source->ini_line.c_str():L"",refused.reason.c_str());
-                    }
-                }
+                catch(const Refused& refused){skipped(refused.reason);}
+                catch(const std::exception& e){const std::string text=e.what();skipped(std::wstring(text.begin(),text.end()));}
             }
             runtime_->root=nullptr;
             if(runtime_->nested_failed)refuse(L"Nested native callback failed");
@@ -1624,7 +1719,13 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
         if(!candidate.skip_original || runtime_->keep_original)runtime_->others_restored();
         candidate.pre_items=candidate.items.size();
         if(between){std::wstring why;if(!between(state,why))refuse(why.empty()?L"Root phase boundary refused":why);}
-        if(post){
+        // The original reaches a matched section's post list by checking again: the list that checked
+        // (`CheckTextureOverride = ib` stands in both of its phases) looks the index buffer up afresh in its
+        // post phase, CheckTextureOverrideCommand::run, and that is the buffer bound by then. One the pre
+        // lists bound is the Mod's own, which the original keeps no hash for and which meets no section; with
+        // none bound nothing is checked. The post lists of the sections then do not run (the judge's line
+        // `post_draw`: a Mod that replaces `ib` and draws again in `post` draws once under the original).
+        if(post && !(matched && runtime_->index_binding.planned)){
             // RunCommandListComplete creates a fresh state for the independent
             // post root. Applied resource/layout state persists in the backend;
             // pending edits, abort and cached queries do not cross this boundary.
@@ -1665,7 +1766,7 @@ bool DrawPlanAdapter::execute_intercepted(const std::vector<CommandList*>& pre,c
     }
     DrawPlan candidate;candidate.skip_original=state.call_info->skip;
     runtime_->active=&candidate;runtime_->steps=runtime_->draws=runtime_->queries->count=0;
-    runtime_->nested_failed=false;runtime_->active_depth=0;runtime_->pixel_bindings={};runtime_->vertex_bindings={};runtime_->index_binding={};
+    runtime_->nested_failed=false;runtime_->active_depth=0;runtime_->pixel_bindings={};runtime_->pixel_held={};runtime_->vertex_bindings={};runtime_->index_binding={};
     runtime_->other_changes.clear();runtime_->keep_original=false;
     runtime_->shader_depth=0;
     try{
