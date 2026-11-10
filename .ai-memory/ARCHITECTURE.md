@@ -25,7 +25,8 @@ own render passes. Nothing of the game, the launcher or the Mods is changed on d
 | Folder | What |
 | --- | --- |
 | `layer/src/layer.cpp`, `bootstrap.cpp`, `state.*`, `resources.*`, `resource_hooks.h`, `ipc.cpp` | Hooks, device and command-buffer tracking, descriptor and image metadata, the probe's requests. |
-| `layer/src/character_backend.cpp` | The replacement: packages (`CharacterGeneration`), the folder generation, identification of an object by its instance entry, the draw path `record()`, F10, status. |
+| `layer/src/character_backend.h`, `character_module.h` | The replacement's public interface, and the boundary to a module (`CharacterModule`, `HostApi`). |
+| `layer/src/character_backend*.cpp`, `character_backend_internal.h` | The replacement, in parts by concern (the table below); the header holds the types they share. |
 | `layer/src/character_program.cpp` | The layer's side of the INI runtime: which INIs are inputs, the folder's load and its isolation (`discover_folder`), the conversion of a plan into the package's draws (`plan`). |
 | `layer/src/bone_merge.*`, `merged_skeleton.*`, `draw_snapshots.*`, `pipeline_variant.*`, `variant_cache.*`, `spirv_repoint.*`, `texture_residency.*`, `translucency.*`, `character_present.*`, `notices.*` | Skeleton import on the GPU, per-draw snapshots, private pipeline variants, texture loading and residency, EFMITTL's translucency, the owned Present, the overlay's notices. |
 | `frontend/xxmi/ini_module.cpp`, `command_module.cpp` | The original's `IniHandler.cpp` and `CommandList.cpp` (pinned in `F:\vulkan\XXMI-Libs-Package\DirectX11`), included unchanged. |
@@ -35,6 +36,23 @@ own render passes. Nothing of the game, the launcher or the Mods is changed on d
 | `frontend/xxmi/gpu_*.cpp`, `owned_runtime.*`, `frontend/gpu/*` | The owned GPU runtime: D3D11's resource and state semantics on Vulkan resources the layer owns. |
 | `frontend/assets/*` | DDS and WIC decoding, uploads, the file cache. |
 | `sandbox/`, `scripts/` | Test programs, the suite (`sandbox/run_all.py`), builds and checks. |
+
+The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 lines before):
+
+| File | Concern |
+| --- | --- |
+| `character_backend_internal.h` | The types the parts share: `CharacterGeneration` (a package), `FolderGeneration`, `CharacterController`, `CharacterBackend`, `CharacterCommand` (the backend's part of a command buffer), `GpuMesh`, `Identity`, the counters and stages. Shared helpers are in the namespace `character_internal`; a class declares its member functions here and each is defined in the part of its concern. |
+| `character_backend.cpp` | The backend of a device: the configured folders and packages, device setup, creation and stop, the pipeline cache file, a pipeline retired, a pass ended, the submission (`character_submit`), the presentation (`character_frame`), the module's table. |
+| `character_backend_index.cpp` | The device-wide index of sections, the hash of a draw's index region, `character_record` (the draw handed to the package it matches). |
+| `character_backend_generation.cpp` | A package's life: load (`init`, `init_adopted`), activation, the worker with the mesh and the snapshot batches, notes, stop, the Present of a generation of its own (`ini_present`, `generation_frame`). |
+| `character_backend_mesh.cpp` | A package's mesh on the device (`GpuMesh::create`, `copy`). |
+| `character_backend_identity.cpp` | Identity and bones: the instance entry's range, `identify`, the skeleton's ring and import jobs on the device, a pipeline's bone site and Core facts. |
+| `character_backend_materials.cpp` | Materials: the frame gate, the texture queries (`pixel_texture`, `texture_roles`), a fragment shader's rules and derived profiles, `material_draws`, what a retired pipeline leaves (`generation_retire`). |
+| `character_backend_record.cpp` | Recording: `record()`, `record_textures()`, the translucent captures, the plan with its owned scope (`plan_draw`) and that work's submission. |
+| `character_backend_folder.cpp` | The folder generation: `folder_create`, `folder_frame`, the F10 exchange (`folder_frame_and_exchange`), the settings adopted from the Mods' own files. |
+| `character_backend_controller.cpp` | One package's generations (`CharacterController`): its frame, its own F10 exchange outside a folder generation, stop and return; the F10 rescan of configured packages. |
+| `character_backend_twins.cpp` | The application's pipelines without the character dither (D-133): `character_bind`, `character_created`, `prepare_twins`. |
+| `character_backend_status.cpp` | The status: `character_status`, `generation_status`. |
 
 ## The INI runtime
 

@@ -6,6 +6,38 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## P4-2: character_backend.cpp in parts by concern (2026-11-10 night to 2026-11-11, D-160, review H-02)
+
+- A session of its own, as the round before left it: the split between two whole suite runs with nothing else changing. Sandbox only: nothing deployed, nothing loaded into the game, dist/ of the main checkout untouched.
+- Before: `layer/src/character_backend.cpp`, one translation unit of 4326 lines (272076 bytes). After, eleven translation units and one internal header, 4608 lines (281442 bytes) together:
+
+| File | Lines | Bytes |
+| --- | --- | --- |
+| `character_backend_internal.h` (shared types and declarations) | 724 | 45262 |
+| `character_backend.cpp` (the backend of a device, the module's table) | 543 | 31183 |
+| `character_backend_index.cpp` (index of sections, index region hash, `character_record`) | 193 | 11097 |
+| `character_backend_twins.cpp` (D-133) | 128 | 6964 |
+| `character_backend_generation.cpp` (a package's life, its own Present) | 522 | 29170 |
+| `character_backend_mesh.cpp` (`GpuMesh`) | 146 | 10367 |
+| `character_backend_identity.cpp` (identity and bones) | 244 | 14164 |
+| `character_backend_materials.cpp` (materials, texture queries, frame gate) | 440 | 25428 |
+| `character_backend_record.cpp` (`record()`, captures, owned draw work) | 870 | 59908 |
+| `character_backend_folder.cpp` (folder generation, its F10 exchange) | 408 | 25361 |
+| `character_backend_controller.cpp` (one package's generations, per-package F10, rescan) | 190 | 10695 |
+| `character_backend_status.cpp` (status) | 200 | 11843 |
+
+- How: a script moved line ranges of the original; every non-blank line of it is in exactly one part, seven lines were dropped (the unnamed namespace's braces, a repeated forward declaration). A comparison of the parts with the original, read from the result alone, lists what is new: 268 lines of glue (includes, namespaces, the declarations a class keeps, the qualified names of member functions now defined outside their class) and no line of logic. What the split forces is D-160: the shared internals in the named namespace `character_internal`, member functions defined in the part of their concern, the globals defined once.
+- Build scripts: `scripts/build.py` lists the parts once (`BACKEND_SOURCES`) for the module and the two test programs that link the backend; the layer and the release take every `src/*.cpp`. No check names the file (scripts/check_engine_globals.py classifies the frontend runtime's objects only).
+- Verification:
+  - Before, on ef77c03: build, then the whole suite: 54 steps passed, 1 failed, "captured frame with a library call" (BUG-088).
+  - After: build with no new warning and the same stamp of the shared headers (0x4437a4d9119220e0), then the whole suite: 54 passed, 1 failed, the same step. Step for step the results and every reported check count are equal (unit 117, INI runtime 500, resource_gpu 11291, tracker 178, character replacement 377, live INI 118, owned Present 66, the probe's 17 configurations, modes 50, validation 76, and the rest). Two lines differ: the text check counts 524 files (513, eleven new), and the failing replay's counters (224 or 226 refused plans).
+  - That count is the run's, not the build's: the package comes up after five or six frames of the replay (`preparing` 150 or 180), and the two sets of counters differ by exactly one frame's draws (30 matched: 21 replaced, 7 hidden, 2 refused). The step run twice more on each set of binaries: 226 and 226 before the split, 224 and 226 after; the suite runs had 224 before and 226 after.
+  - Plan digests (scripts/check_mod_states.py): 19 as accepted, 0 changed, before and after (352 key actions, 6834 states, 19 Mods).
+  - The parts also compile with the test program's, the timing builds' and the release's definitions (cl /Zs).
+  - The recording path's cost, old and new binaries interleaved on the vk03 replay (300 frames, validation layer on, three rounds each): 50.0, 55.4 and 48.2 us of `character_record` per matched draw before, 50.6, 50.9 and 48.0 after; medians 50.0 and 50.6, inside the spread of one build. The stage timers show nothing either (identify 0.61 and 0.60, plan 9.9 and 10.0, materials 0.63 and 0.60).
+- Found while reading, recorded and left as the split's rules ask: BUG-089 (the twins' owner is taken with the generic `owner_for`, which drops the character packages' owners a recording has not used yet; anti-dither on only; not reproduced).
+- Not verified: nothing of this ran in the real game. The cost comparison is a sandbox replay under the validation layer, not the game's frame time; the effect of D-160's cast between two copies of the code (a module exchange) was not exercised.
+
 ## Architecture review (2026-11-10, docs/architecture-review-2.1.md)
 
 - The user asked for a review of the whole project, the INI interpreter above all, and a plan. Review of c69c1b6 by reading; nothing built, deployed or loaded into the game; one check run. No code changed.

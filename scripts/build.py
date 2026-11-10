@@ -115,8 +115,16 @@ if os.environ.get("EFMI_VK_PHASE_TIMING") == "1":
 # The replacement code as a module of its own (docs/hot-swap.md): what decides and records
 # character replacements, without hooks and tracker. The layer DLL has the same code built in.
 MODULE_DLL = "efmi_vk_backend.dll"
+# The character backend's translation units (docs/architecture-review-2.1.md, P4-2): the parts of what was
+# one file, which share layer/src/character_backend_internal.h. A binary with the backend links them all.
+BACKEND_SOURCES = [
+    "character_backend.cpp", "character_backend_controller.cpp", "character_backend_folder.cpp",
+    "character_backend_generation.cpp", "character_backend_identity.cpp", "character_backend_index.cpp",
+    "character_backend_materials.cpp", "character_backend_mesh.cpp", "character_backend_record.cpp",
+    "character_backend_status.cpp", "character_backend_twins.cpp",
+]
 MODULE_SOURCES = [
-    "module/module_main.cpp", "src/character_backend.cpp", "src/translucency.cpp", "src/shader_hooks.cpp", "src/character_package.cpp", "src/character_materials.cpp",
+    "module/module_main.cpp", *["src/" + name for name in BACKEND_SOURCES], "src/translucency.cpp", "src/shader_hooks.cpp", "src/character_package.cpp", "src/character_materials.cpp",
     "src/character_program.cpp", "src/character_present.cpp",
     "src/merged_skeleton.cpp", "src/pipeline_variant.cpp", "src/spirv_repoint.cpp",
     "src/variant_cache.cpp", "src/draw_snapshots.cpp", "src/pipeline_recipe.cpp", "../frontend/gpu/fragment_images.cpp", "../frontend/gpu/dither_kills.cpp",
@@ -384,7 +392,7 @@ def build_tracker_test(vcvars: str, include: str, out: str) -> str:
                      "../frontend/gpu/fragment_images.cpp", "../frontend/gpu/dither_kills.cpp",
                      "../layer/src/variant_cache.cpp", "../layer/src/draw_snapshots.cpp",
                      "../layer/src/merged_skeleton.cpp", "../layer/src/m2_mesh.cpp", "../layer/src/m2_backend.cpp",
-                     "../layer/src/character_package.cpp", "../layer/src/character_backend.cpp", "../layer/src/translucency.cpp", "../layer/src/shader_hooks.cpp", "../layer/src/character_program.cpp", "../layer/src/character_present.cpp", "../layer/src/texture_identity.cpp", "../layer/src/texture_residency.cpp", "../layer/src/character_materials.cpp",
+                     "../layer/src/character_package.cpp", *["../layer/src/" + name for name in BACKEND_SOURCES], "../layer/src/translucency.cpp", "../layer/src/shader_hooks.cpp", "../layer/src/character_program.cpp", "../layer/src/character_present.cpp", "../layer/src/texture_identity.cpp", "../layer/src/texture_residency.cpp", "../layer/src/character_materials.cpp",
                      "../layer/src/bone_merge.cpp", "../layer/build/bone_merge_spirv.cpp", "../layer/src/notices.cpp", generate_overlay_shaders()] + MATERIAL_SOURCES + runtime_link() + [
                      "/Fe:" + exe, "/link", "/NOLOGO", "/DEBUG", "/SUBSYSTEM:CONSOLE",
                      "/PDB:build\\tracker\\test.pdb", "user32.lib", "gdi32.lib"]
@@ -419,7 +427,7 @@ def build_recipe_tests(vcvars: str, include: str, out: str, only: tuple = ()) ->
             sources += ["../layer/src/state.cpp", "../layer/src/resources.cpp", "../layer/src/render_targets.cpp", "../layer/src/util.cpp",
                         "../layer/src/variant_cache.cpp", "../layer/src/draw_snapshots.cpp",
                         "../layer/src/merged_skeleton.cpp", "../layer/src/m2_mesh.cpp", "../layer/src/m2_backend.cpp",
-                        "../layer/src/character_package.cpp", "../layer/src/character_backend.cpp", "../layer/src/translucency.cpp", "../layer/src/shader_hooks.cpp", "../layer/src/character_program.cpp", "../layer/src/character_present.cpp", "../layer/src/texture_identity.cpp", "../layer/src/texture_residency.cpp", "../layer/src/character_materials.cpp",
+                        "../layer/src/character_package.cpp", *["../layer/src/" + name for name in BACKEND_SOURCES], "../layer/src/translucency.cpp", "../layer/src/shader_hooks.cpp", "../layer/src/character_program.cpp", "../layer/src/character_present.cpp", "../layer/src/texture_identity.cpp", "../layer/src/texture_residency.cpp", "../layer/src/character_materials.cpp",
                         "../layer/src/bone_merge.cpp", "../layer/build/bone_merge_spirv.cpp", "../layer/src/notices.cpp", generate_overlay_shaders()] + MATERIAL_SOURCES + runtime_link()
         args = COMMON + ["/I" + include, "/Fobuild\\" + name + "\\", "/Fdbuild\\" + name + "\\test_cl.pdb"]
         if name == "recipe_test":

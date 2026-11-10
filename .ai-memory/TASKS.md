@@ -2,14 +2,15 @@
 
 ## Active: the architecture review's plan (2026-11-10, docs/architecture-review-2.1.md section 8)
 
-- Done without the game (2026-11-10, sandbox only): P3-0; Phase 0 (P0-1 to P0-9 except the game-facts notice of L-07); P3-1 (the matched-draw judge); P3-2 as the one-line sweep; P4-1 (documents).
+- Done without the game (2026-11-10, sandbox only): P3-0; Phase 0 (P0-1 to P0-9 except the game-facts notice of L-07); P3-1 (the matched-draw judge); P3-2 as the one-line sweep; P4-1 (documents); P4-2 (character_backend.cpp in eleven parts and an internal header, D-160, between two whole suite runs with equal results).
 - Open without the game:
   - FIRST: BUG-088, the EFMITTL of 2026-11-10. Answer `ps-t[N]->Format`, `->Width`, `->Height`, `->Mips` (and `->Array`) of the game's texture at a pixel slot from the host's description of the image (D-138), and of a Mod's own texture bound there from its file; the original's process_texture_filter says what an empty slot reads. Then follow the replay with a library call (`sandbox/run_all.py --no-build --only "library call"`) to the next thing the new translucency.ini asks, until its layer is captured; then the game.
   - The sweep's 12 recorded differences (sandbox/judge_draw_sweep.json, class `layer`): slots of other kinds refuse the whole draw (D-152), `<slot> = copy Resource`, `unless_null`, slot to slot, `ResourceX = ref vb0`, `o0 = null`, a copy between declared resources. Most belong to Phase 1 (the draw state); `copy` of a never-written resource, slot to slot and `unless_null` can be done before it.
   - The sweep's 3 lines the scene does not judge (`vbN->stride`, a query on `ib`, `vs`): the layer's side needs a generation with the character Core's extension.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
   - P3-4: hashed textures in the state check, so texture-hash sections run offline (the exclusions are listed in docs/ini-semantics.md).
-  - P4-2: character_backend.cpp split between two green runs; P4-3 and P4-4.
+  - P4-3 and P4-4.
+  - BUG-089 (read while splitting, not reproduced): with RabbitFX's anti-dither on, a twin's bind drops the character packages' owners a recording has not used yet. First a check that shows it (the status with the gate set against unset: `batches_made_at_draw`, the arenas a worker makes per recording), then the fix from what the original does.
   - L-07: a notice when the game's facts (shader contract, slot table) are not known for the running game version.
 - Needs game sessions and the user's choice: Phase 1 (a replaced draw's lists against a draw state; what Vulkan cannot honour decided per record and slot), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).
 - To check in the game when the user next plays on Vulkan: the notices at the first load, F10 without a generation, nothing else changed for the installed Mods (every section of 19 Mods plans in every state offline). The EFMITTL of 2026-11-10 is not expected to work yet (BUG-088).

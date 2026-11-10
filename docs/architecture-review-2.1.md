@@ -379,7 +379,9 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > P3-0 done. Phase 0 done (D-156 for the frontend, D-158 for the host) except the game-facts notice of
 > L-07. P3-1 done (D-157). P3-2 done as the judge's one-line sweep: 50 lines, 35 as the original's, 12
 > recorded differences of the plan path, 3 not judged by its scene; it found two wrong plans, fixed
-> (BUG-086, BUG-087). P4-1 done. Open: P3-3, P3-4, P4-2 to P4-4, and Phases 1 and 2, which need the game.
+> (BUG-086, BUG-087). P4-1 done. P4-2 done (D-160): `character_backend.cpp` is eleven files by concern and
+> `character_backend_internal.h`; the `character_backend.cpp:NNN` references in this document are lines of
+> the reviewed commit c69c1b6. Open: P3-3, P3-4, P4-3, P4-4, and Phases 1 and 2, which need the game.
 
 Each step test first, as the working agreement says: the check that fails before, the change, the
 touched area. Phases 0 and 3a come first: they are small, and they make the rest measurable.
