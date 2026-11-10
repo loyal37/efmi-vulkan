@@ -21,7 +21,7 @@ MATRIX = ROOT / "docs/ini-execution-matrix.json"
 OUT = ROOT / "build/ini-execution"
 PROBE = ROOT / "build/xxmi-runtime/runtime_test.exe"
 CENSUS = ROOT / "build/ini-operations/report.json"
-CPU = {"original", "plan", "noop", "removed", "refused", "not-created"}
+CPU = {"original", "plan", "noop", "removed", "degraded", "refused", "not-created"}
 OWNED = CPU | {"gpu"}
 ORIGINS = {"parser", "optimiser", "shader-regex", "base", "none"}
 # Placeholder files: a CPU plan names file resources and never reads them.
@@ -59,8 +59,13 @@ def compare(decision: str, expect: dict, actual: dict) -> list[str]:
     complete = actual.get("stage") == "complete"
     if decision == "refused" and complete:
         problems.append("decision refused, but the probe completed")
-    if decision in ("original", "plan", "noop", "removed") and not complete:
+    if decision in ("original", "plan", "noop", "removed", "degraded") and not complete:
         problems.append(f"decision {decision}, but the probe stopped at {actual.get('stage')}: {actual.get('reason')}")
+    # A degraded command says so through the original's warning channel (D-137); nothing is silent.
+    if decision == "degraded" and "warning" not in expect:
+        problems.append("decision degraded needs the warning it leaves")
+    if "warning" in expect and not any(expect["warning"] in text for text in actual.get("diagnostic_messages", [])):
+        problems.append(f"warnings {actual.get('diagnostic_messages')} lack {expect['warning']!r}")
     if expect.get("stage") != actual.get("stage"):
         problems.append(f"stage {actual.get('stage')!r}, expected {expect.get('stage')!r}")
     if "reason" in expect and expect["reason"] not in actual.get("reason", ""):

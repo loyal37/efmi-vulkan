@@ -144,8 +144,11 @@ GROUPS = {
     "replay": ["captured frame"],
     "textures": ["texture first-use", "live INI rendering", "character replacement", "full card", "Mods folder"],
     "submission": ["two queues, bones", "bone regions reused", "probe end to end", "Vulkan validation", "live INI rendering"],
-    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "offline plans"],
-    "owned": ["owned", "GPU resources", "HLSL", "Present compute"],
+    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "offline plans", "as the judge"],
+    "owned": ["owned", "GPU resources", "HLSL", "Present compute", "as the judge"],
+    # A minute or so, for every change: text, the Python units, the expression cases, what each command
+    # class does in a replaced draw, and the original as the judge.
+    "quick": ["text check", "unit tests", "source-defined INI evaluation", "INI execution matrix", "as the judge"],
 }
 
 

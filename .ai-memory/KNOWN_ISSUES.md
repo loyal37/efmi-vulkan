@@ -1,9 +1,10 @@
 # EFMI Vulkan - Known issues
 
-## BUG-079: The INI execution matrix step is red since D-142 (found 2026-11-10, open)
+## BUG-079: The INI execution matrix step is red since D-142 (found 2026-11-10, fixed the same day)
 
 - `scripts/check_ini_execution_matrix.py` on the build of 2026-10-30: 32 classes, 41 probed uses, 39 failures. `docs/ini-execution-matrix.json` (2026-10-18) expects the refusals that D-142 to D-155 turned into plans or no-ops ("Planner supports direct indexed draws only" is in no source file).
 - The step is in run_all's `ini` group; the verification lists of those decisions do not name it. The judge step is in no group (docs/architecture-review-2.1.md, V-03 and V-04).
+- Fixed (P3-0): the 11 uses state what the layer does now (a decision `degraded`: the command does nothing, with the warning it leaves, which the check requires); 0 failures. The judge is in the `ini` and `owned` groups; `--only quick` (text, units, evaluation, matrix, judge) takes about a minute.
 
 ## BUG-080: A failed activation leaves the character invisible (found by reading 2026-11-10, not reproduced, open)
 

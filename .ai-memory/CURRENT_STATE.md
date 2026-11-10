@@ -15,6 +15,11 @@
 - Plan in the document's section 8, waiting for the user's choice: P3-0 (matrix and judge groups) and Phase 0 (containment, P0-1 to P0-9) first, then the matched-draw judge (P3-1), then the draw state in place of the whitelist (Phase 1) and Mods by what they do (Phase 2).
 - Not verified: everything marked "read" or "reported" there was not reproduced by a test.
 
+## The review's plan, the parts without the game (2026-11-10, docs/architecture-review-2.1.md section 8)
+
+- The user, 2026-11-10: push, then do the parts that need no game session.
+- P3-0 done: `docs/ini-execution-matrix.json` states the current behaviour of the 11 stale uses (new decision `degraded`, with its warning required), `scripts/check_ini_execution_matrix.py` 0 failures (39 before); the judge in the `ini` and `owned` groups; `sandbox/run_all.py --only quick` (text 492 files, unit 117/117, evaluation 65/65, matrix, judge): all passed, 56 s.
+
 ## Every enabled INI an input (2026-10-30, D-155, docs/ini-semantics.md)
 
 - The user: the parsing must take every INI under Mods as the original does, and handle a parse error the original's way. Now the folder generation's inputs are every enabled INI (except the native libraries' files and the folders of left-out character Mods): a plain Mod's Present and keys run, its settings persist, its texture-hash sections act in replaced draws; LIMIT-046 lifted. A declaration reference the layer does not take (`copy_desc`) leaves the destination null with the original-style warning once instead of refusing the generation or the draw.
