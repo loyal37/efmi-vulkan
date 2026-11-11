@@ -1,5 +1,11 @@
 # EFMI Vulkan - Known issues
 
+## BUG-091: With two Mods of one character and one namespace installed, a part of one kept the game's look (seen in the game 2026-11-11, 2.1.3; OPEN, not analysed, not reproduced)
+
+- Seen: the user added `last rite Ethereal Prayer 2.3` (`namespace = last rite`) beside the installed `lastrite` (its `last rite.ini`; the folder is gone now, its namespace was not read) and pressed F10 at 19:37:10. The exchange completed for 20 packages; 0.1 s later the package `lastrite` logged "INI plan: INI image not in prepared resource catalogue" and the notice said that part keeps the game's look. The user removed the old folder and pressed F10 at 19:37:39; the notice did not come again.
+- The message is BUG-076's (`layer/src/character_program.cpp`: a planned image that is not in the package's prepared catalogue). A guess, not checked: both INIs define the same resource names in one namespace, the shared INI runtime keeps one definition, and the other Mod's package is asked for an image of a file it never prepared.
+- To do, offline: read what the original does with two INIs of one namespace and the same TextureOverride hashes (IniHandler.cpp: duplicate sections and duplicate hashes), then two copies of a small Mod with one namespace in the Mods-folder scene, then the same result as the original's. Counters of the moment are lost (the next F10 reset them); no frame was captured.
+
 ## BUG-090: `vs` as a value reads 0 in a character generation and 1 under the original with the EFMI Core (found by the judge's sweep 2026-11-11, OPEN, no installed Mod affected)
 
 - The original's `process_shader_filter`: a bound shader that a ShaderOverride or ShaderRegex section matches reads that section's `filter_index`, or 1 without one; 0 only when no section matches. The EFMI Core's main.ini has `[ShaderRegexEnableTextureOverrides]` with `shader_model = vs_4_0 vs_4_1 vs_5_0 vs_5_1` and no pattern, which matches every vertex shader, so under the user's DX11 installation `vs` reads 1 for every draw. The judge's d3dx.ini has the same kind of section, and its sweep line `if vs == 0` takes the other branch under the original.
@@ -630,6 +636,8 @@ Game, 2026-10-13 with 0.9.8. The dithered fade (camera close to the character; d
 Seen in captures/flicker-0.9.8-20261013/ (frame 150562 and others): character draws on four-set pipelines whose vertex shaders (8d5133a1, 2cf51393) have no storage buffer; the variant preflight says `spirv_required_buffer_missing` and the draw is refused under `refused_variant` (954 in that session). Where these shaders take the pose from is not known. The after-image therefore has the shape of the original model.
 
 1.0.1 follow-up, PID 19452: the user reports that dashing also seems fine. In a requested 24.156-second dash interval, 58 captured frames contain 3,766 character matches on 98 supported pipelines; runtime refusal, pending and identification deltas are all zero while sibling/inherited material rules execute. Neither historical after-image vertex shader appears in these draws. Other parts of the session have variant refusals with the same retained missing-buffer reason, but were not captured at draw level. Keep the historical path as unsupported/uncovered; do not describe the sampled dash as visually broken or this path as newly fixed. Evidence: captures/stability-1.0.1-20261013-204259-19452/dash/.
+
+2026-11-11, 2.1.3 in the game: the reason was noticed on screen for the first time (notices exist since 2.1.2): Zhuangfangyi Summer Collection 1.1 at 19:35:20, "character variant: vertex_rewrite:spirv_required_buffer_missing", and 58 ms later "character draw reads bones of a component no device import wrote" for the same Mod, both once (a notice is shown once per Mod and reason). What the user was doing, how many draws and whether it showed is not known; no frame was captured and the counters were reset by a later F10. To take it further a frame with such a draw has to be captured in the game: its vertex shader and where it takes the pose from.
 
 ## ISSUE-009: The normal-state flicker has no measured cause (2026-10-13; answered the same day, see BUG-011)
 
