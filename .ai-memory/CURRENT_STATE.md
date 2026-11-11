@@ -6,6 +6,15 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.4: notices on every presented image (BUG-092, 2026-11-11)
+
+- The user, in the 2.1.3 session: while refreshing, the error texts flicker all the time. The status had the cause: `notices.busy` 1290 beside `drawn` 4211, a presented image without the notices whenever the overlay's three slots were all pending, which a frame generator's four presentations per rendered frame bring about.
+- From the original: `Overlay::DrawOverlay` in the Present hook draws the notices with the immediate context at every Present; D3D11 orders the draws behind the frame and keeps what they use. The layer's own work per presentation needs objects of its own, and as many of them as presentations are pending: a slot is made when none is free (up to 32), and the text images are released when no notice is shown (`layer/src/notices.cpp`, docs/ini-semantics.md).
+- The sandbox program presents further images behind a slow frame (`--present-burst K`): the one way to have several presentations pending that Vulkan allows (KNOWN_ISSUES, BUG-092).
+- Failing first: `owned_present_test.py` notices_on_every_presentation, 24 of 48 presentations without the notice on the build before; 42 of 42 with it now, six slots, the text images released after, validation clean, both entries.
+- Verified in the work tree's build of 2.1.4 (sandbox): the whole build, shared header stamp unchanged; text, unit 117, the original INI runtime 514, INI evaluation 65, the INI execution matrix, the judge and the judge of replaced draws, owned Present on a swap chain 80 (the 14 new among them), probe end to end, modes 50, character replacement 377 and its package checks 114, live INI rendering 122, Vulkan validation 76. All passed.
+- Not done: 2.1.4 is not in the main checkout's `dist`. The game was running 2.1.3 while this was made, and the layer's DLL is replaced only while the game is closed; then `scripts/build.py` in the main checkout, and the user's next start loads it. Nothing of 2.1.4 has run in the game.
+
 ## 2.1.3: the development build for the next Vulkan session (2026-11-11)
 
 - The user, 2026-11-11: build 2.1.3, to play on Vulkan next and see Phase 1 and the EFMITTL work in the game. The commit changes `EFVK_VERSION` only.

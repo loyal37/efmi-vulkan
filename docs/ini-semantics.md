@@ -52,9 +52,14 @@ in the level's colour (DIRE red 20 s, WARNING orange-red 10 s, NOTICE orange 5 s
 the time from the first showing), on a black backing of 75 %, at most ten, in Arial (3DMigoto's
 notifications font) drawn by GDI, so a Mod's name shows in any script. `layer/src/notices.cpp` draws them
 with a render pass of its own on the presenting queue after the presentation's other work (the Mods'
-Present work), the presentation then waiting for it; three slots, never a wait for the GPU in the
-presentation (BUG-062): with all three in use the notices wait a presentation. The notices are kept by
-util.cpp (`notice()`, also the module's through HostApi).
+Present work), the presentation then waiting for it, and never a wait for the GPU in the presentation
+(BUG-062). Every presented image carries them, as the original draws them at every Present with the
+immediate context. What the layer owns for one presentation (a command buffer, a fence and a text image:
+a slot) is made when none is free, because the work on an image waits for that image's rendering: as many
+are pending as the swap chain has images in flight, and a frame generator presents several images for
+one rendered frame (BUG-092; `notices.slots` in the status, and `busy` for what a limit of 32 would leave
+out). The text images are given back when no notice is shown (`notices.text_bytes`). The notices are kept
+by util.cpp (`notice()`, also the module's through HostApi).
 
 - F10: `> Reloaded config in N.NNNs`, as the original after ReloadConfig (IniHandler.cpp), timed from the
   key to the exchange of the folder generation.

@@ -173,8 +173,12 @@ struct Overlay {
     VkShaderModule vertex = VK_NULL_HANDLE, fragment = VK_NULL_HANDLE;
     std::map<VkFormat, Pass> passes;
     std::map<VkImage, Target> targets;
-    Slot slots[3];
-    uint32_t next = 0;
+    // One per presentation whose overlay work the GPU has not finished. The work on a presented image
+    // waits for that image's own rendering, so as many are pending as the swap chain has images in
+    // flight, and a frame generator presents several for one rendered frame: a slot is made when none
+    // is free, never waited for (BUG-092, BUG-062).
+    std::vector<std::unique_ptr<Slot>> slots;
+    bool holding = false; // a slot has a text image
     std::vector<NoticeLine> lines;
     uint64_t version = 0;   // of the lines
     uint64_t rastered = 0;  // the raster's number
@@ -182,6 +186,9 @@ struct Overlay {
     VkExtent2D raster_bounds = {};
     Raster raster;
 };
+
+// More than any swap chain has images; past it a presentation goes without the notices and is counted.
+constexpr uint32_t kSlotLimit = 32;
 
 std::mutex g_mx; // the overlays; one presenting thread at a time per device in practice
 std::map<Device*, std::unique_ptr<Overlay>> g_overlays;
@@ -219,6 +226,38 @@ uint32_t memory_type(const VkPhysicalDeviceMemoryProperties& memory, uint32_t bi
     return UINT32_MAX;
 }
 
+// One more slot: a fence (signalled), a command buffer of its own pool and a descriptor set; its text
+// image comes with its first use. Null when the device gives none, or at the limit.
+Slot* make_slot(Overlay& o)
+{
+    if (o.slots.size() >= kSlotLimit) return nullptr;
+    auto made = std::make_unique<Slot>();
+    Slot& s = *made;
+    VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    VkCommandPoolCreateInfo ci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    ci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; ci.queueFamilyIndex = o.dev->material_family;
+    VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
+    VkDescriptorSetAllocateInfo di = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    di.descriptorPool = o.descriptors; di.descriptorSetCount = 1; di.pSetLayouts = &o.set_layout;
+    bool ok = o.f.CreateFence(o.device, &fi, nullptr, &s.fence) == VK_SUCCESS &&
+              o.f.CreateCommandPool(o.device, &ci, nullptr, &s.pool) == VK_SUCCESS;
+    if (ok) {
+        ai.commandPool = s.pool;
+        ok = o.f.AllocateCommandBuffers(o.device, &ai, &s.cb) == VK_SUCCESS &&
+             (!o.dev->set_loader_data || o.dev->set_loader_data(o.device, s.cb) == VK_SUCCESS) &&
+             o.f.AllocateDescriptorSets(o.device, &di, &s.set) == VK_SUCCESS; // last: the pool frees no single set
+    }
+    if (!ok) {
+        if (s.pool) o.f.DestroyCommandPool(o.device, s.pool, nullptr);
+        if (s.fence) o.f.DestroyFence(o.device, s.fence, nullptr);
+        return nullptr;
+    }
+    o.slots.push_back(std::move(made));
+    return o.slots.back().get();
+}
+
 bool init(Overlay& o)
 {
     auto fail = [&o](const char* why) { o.error = why; return false; };
@@ -233,30 +272,16 @@ bool init(Overlay& o)
     VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1; pl.pSetLayouts = &o.set_layout; pl.pushConstantRangeCount = 1; pl.pPushConstantRanges = &push;
     if (o.f.CreatePipelineLayout(o.device, &pl, nullptr, &o.layout) != VK_SUCCESS) return fail("pipeline layout");
-    VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3};
+    VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSlotLimit};
     VkDescriptorPoolCreateInfo dp = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    dp.maxSets = 3; dp.poolSizeCount = 1; dp.pPoolSizes = &size;
+    dp.maxSets = kSlotLimit; dp.poolSizeCount = 1; dp.pPoolSizes = &size;
     if (o.f.CreateDescriptorPool(o.device, &dp, nullptr, &o.descriptors) != VK_SUCCESS) return fail("descriptor pool");
     VkShaderModuleCreateInfo sm = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     sm.codeSize = overlay_vertex_spirv_words * 4; sm.pCode = overlay_vertex_spirv;
     if (o.f.CreateShaderModule(o.device, &sm, nullptr, &o.vertex) != VK_SUCCESS) return fail("vertex shader");
     sm.codeSize = overlay_fragment_spirv_words * 4; sm.pCode = overlay_fragment_spirv;
     if (o.f.CreateShaderModule(o.device, &sm, nullptr, &o.fragment) != VK_SUCCESS) return fail("fragment shader");
-    for (auto& s : o.slots) {
-        VkFenceCreateInfo fi = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        if (o.f.CreateFence(o.device, &fi, nullptr, &s.fence) != VK_SUCCESS) return fail("fence");
-        VkCommandPoolCreateInfo ci = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        ci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; ci.queueFamilyIndex = o.dev->material_family;
-        if (o.f.CreateCommandPool(o.device, &ci, nullptr, &s.pool) != VK_SUCCESS) return fail("command pool");
-        VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        ai.commandPool = s.pool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandBufferCount = 1;
-        if (o.f.AllocateCommandBuffers(o.device, &ai, &s.cb) != VK_SUCCESS) return fail("command buffer");
-        if (o.dev->set_loader_data && o.dev->set_loader_data(o.device, s.cb) != VK_SUCCESS) return fail("command buffer dispatch");
-        VkDescriptorSetAllocateInfo di = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        di.descriptorPool = o.descriptors; di.descriptorSetCount = 1; di.pSetLayouts = &o.set_layout;
-        if (o.f.AllocateDescriptorSets(o.device, &di, &s.set) != VK_SUCCESS) return fail("descriptor set");
-    }
+    if (!make_slot(o)) return fail("command buffer, fence or descriptor set");
     return true;
 }
 
@@ -403,15 +428,17 @@ bool draw(Overlay& o, PresentWork* present, const SwapchainInfo& chain, VkImage 
     if (!pass) { g_stats.error = "overlay pipeline for the swap chain's format"; return false; }
     Target* target = target_for(o, image, chain, *pass);
     if (!target) { g_stats.error = "overlay target of the swap chain image"; return false; }
-    // A slot the GPU is done with; with none, the notices wait a presentation (no wait here, BUG-062).
+    // The first slot the GPU is done with, or one more: every presented image carries the notices, as
+    // the original draws them at every Present. Nothing waits here (BUG-062); the first free one keeps
+    // the text images to as many as were pending at once.
     Slot* slot = nullptr;
-    for (uint32_t i = 0; i < 3 && !slot; ++i) {
-        Slot& s = o.slots[(o.next + i) % 3];
-        if (o.f.GetFenceStatus(o.device, s.fence) == VK_SUCCESS) { slot = &s; o.next = (o.next + i + 1) % 3; }
-    }
+    for (auto& s : o.slots)
+        if (o.f.GetFenceStatus(o.device, s->fence) == VK_SUCCESS) { slot = s.get(); break; }
+    if (!slot) slot = make_slot(o);
     if (!slot) { ++g_stats.busy; return true; }
     const Raster& r = o.raster;
     if (!slot_sized(o, *slot, r)) { g_stats.error = "overlay text image"; return false; }
+    o.holding = true;
     if (o.f.ResetCommandPool(o.device, slot->pool, 0) != VK_SUCCESS) return false;
     VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -473,7 +500,9 @@ bool draw(Overlay& o, PresentWork* present, const SwapchainInfo& chain, VkImage 
             b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT; b.dstAccessMask = 0;
             o.f.CmdPipelineBarrier(slot->cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-            g_readback.recorded = true; g_readback.slot = static_cast<int>(slot - o.slots);
+            g_readback.recorded = true;
+            for (size_t i = 0; i < o.slots.size(); ++i)
+                if (o.slots[i].get() == slot) g_readback.slot = static_cast<int>(i);
             g_readback.width = chain.extent.width; g_readback.height = chain.extent.height; g_readback.format = chain.format;
         }
     }
@@ -502,7 +531,19 @@ bool draw(Overlay& o, PresentWork* present, const SwapchainInfo& chain, VkImage 
 void idle(Overlay& o)
 {
     for (auto& s : o.slots)
-        if (s.fence) o.f.WaitForFences(o.device, 1, &s.fence, VK_TRUE, 1000000000ull);
+        if (s->fence) o.f.WaitForFences(o.device, 1, &s->fence, VK_TRUE, 1000000000ull);
+}
+
+// No notice is shown any more: the text images of the slots the GPU is done with are given back.
+void release_text(Overlay& o)
+{
+    bool held = false;
+    for (auto& s : o.slots) {
+        if (!s->image && !s->staging) continue;
+        if (o.f.GetFenceStatus(o.device, s->fence) == VK_SUCCESS) release_slot_image(o, *s);
+        else held = true;
+    }
+    o.holding = held;
 }
 
 void destroy(Overlay& o)
@@ -512,11 +553,11 @@ void destroy(Overlay& o)
     for (auto& t : o.targets) destroy_target(o, t.second);
     o.targets.clear();
     for (auto& s : o.slots) {
-        release_slot_image(o, s);
-        if (s.pool) o.f.DestroyCommandPool(o.device, s.pool, nullptr);
-        if (s.fence) o.f.DestroyFence(o.device, s.fence, nullptr);
-        s = {};
+        release_slot_image(o, *s);
+        if (s->pool) o.f.DestroyCommandPool(o.device, s->pool, nullptr);
+        if (s->fence) o.f.DestroyFence(o.device, s->fence, nullptr);
     }
+    o.slots.clear(); o.holding = false;
     for (auto& p : o.passes) {
         if (p.second.pipeline) o.f.DestroyPipeline(o.device, p.second.pipeline, nullptr);
         if (p.second.pass) o.f.DestroyRenderPass(o.device, p.second.pass, nullptr);
@@ -547,7 +588,8 @@ void notices_present(Device* dev, PresentWork* present)
     std::lock_guard<std::mutex> lock(g_mx);
     auto& slot = g_overlays[dev];
     if (slot && slot->usable && g_readback.recorded && !g_readback.written && g_readback.slot >= 0 &&
-        slot->f.GetFenceStatus(slot->device, slot->slots[g_readback.slot].fence) == VK_SUCCESS) {
+        size_t(g_readback.slot) < slot->slots.size() &&
+        slot->f.GetFenceStatus(slot->device, slot->slots[size_t(g_readback.slot)]->fence) == VK_SUCCESS) {
         void* data = nullptr;
         const size_t bytes = size_t(g_readback.width) * g_readback.height * 4;
         if (slot->f.MapMemory(slot->device, g_readback.memory, 0, VK_WHOLE_SIZE, 0, &data) == VK_SUCCESS) {
@@ -573,6 +615,7 @@ void notices_present(Device* dev, PresentWork* present)
     Overlay& o = *slot;
     notices_visible(o.lines, o.version);
     g_stats.lines = o.lines.size();
+    if (o.usable && o.lines.empty() && o.holding) release_text(o);
     if (!o.usable || o.lines.empty()) return;
     // The presenting queue draws it: one of the graphics family the layer's work knows.
     if (std::find(dev->material_queues.begin(), dev->material_queues.end(), present->queue) == dev->material_queues.end()) {
@@ -639,6 +682,15 @@ void notices_status(JsonWriter& w)
     for (const auto& text : recent) w.str(text);
     w.end_array();
     w.kn("lines", g_stats.lines); w.kn("drawn", g_stats.drawn); w.kn("busy", g_stats.busy);
+    // The slots made (as many as were pending at once at most) and what their text images hold now.
+    uint64_t slots = 0, text_bytes = 0;
+    for (const auto& overlay : g_overlays) {
+        if (!overlay.second) continue;
+        slots += overlay.second->slots.size();
+        for (const auto& s : overlay.second->slots)
+            text_bytes += s->staging_size + (s->image ? uint64_t(s->width) * s->height * 4 : 0);
+    }
+    w.kn("slots", slots); w.kn("text_bytes", text_bytes);
     w.kn("unsupported", g_stats.unsupported); w.kn("failed", g_stats.failed);
     w.kv("last", g_stats.last); w.kv("error", g_stats.error);
     w.kb("readback", g_readback.written);

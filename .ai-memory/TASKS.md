@@ -1,6 +1,11 @@
 # EFMI Vulkan - Tasks
 
-## Next: 2.1.3 in the game (the user's session; built 2026-11-11)
+## Next: 2.1.4 into the main checkout's dist, then the game (BUG-092)
+
+- Once the user has closed the game: `scripts/build.py` in the main checkout (the game not running, checked), the status' version through the inject entry with dist's configuration, the suite steps that load it. The 2.1.3 files in `dist` are the same code but for `layer/src/notices.cpp` and the version.
+- In the game then: with frame generation on, the notices of an F10 stand still (no flicker); `notices.busy` stays 0 and `notices.slots` says how many presentations were pending at once; `text_bytes` 0 again some seconds after the last notice.
+
+## 2.1.3 in the game (the user's session; built 2026-11-11)
 
 - First session, 2026-11-11 19:24 (the user's start through the EFMI Vulkan Launcher; CURRENT_STATE has the figures): 2.1.3 loaded, 19 Mods in the folder, four characters replaced, EFMITTL's translucency capturing with no error, no refusal counter, no notice of a degraded line, no crash line. The user on what was on screen (Si Lunabelle, Yvonne, Zhuangfangyi, arcane by the status): the characters and the translucent parts all normal. Later in the session the status showed ardelia replaced with its translucency capturing and the new last rite Mod (2.3, no library call) replaced; the user has not said yet how those two looked. Three notices to follow: LIMIT-027's reason for Zhuangfangyi (needs a captured frame of such a draw in the game) and BUG-091 (two Mods of one character and namespace; offline). Open from it: the Mods not on screen in that session; the first frame of an appearance and the frame rate as the user feels them; a frame-rate comparison, which needs an interleaved A/B in the game (`scripts/ab_game.py`) at the user's word.
 - What to look at is in the lists below (Phase 1, BUG-088, the review's Phase 0, and the older items from 1.9.7 on). One finding at a time: a notice's text, a character that is missing or wrong, the status counters.

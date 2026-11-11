@@ -12,11 +12,17 @@
 //                   [--descriptors ordinary|template|push|push-template]
 //                   [--draws N] [--timings FILE --warmup N --frames N]
 //                   [--validation] [--validation-canary] [--readable-swapchain] [--api 1.1|1.3]
+//                   [--present-burst K]
 //
 // --inject loads a DLL before the program touches Vulkan, the way a launcher injects one at
 // process start. --inject-late loads it after the device exists, which is too late to intercept.
 // --inject-late-exports does the same and then looks every device function up again through the
 // exports of vulkan-1.dll, like a second Vulkan user in the process that resolves its functions late.
+//
+// --present-burst K presents K further images behind every frame while the frame's own work has not
+// finished on the GPU, the way a frame generator presents several images for one rendered frame. Vulkan
+// has no valid way to hold a presentation's semaphore from the host, so the frame is made slow in earnest:
+// image blits, as many as take about 300 ms on this GPU (measured at the start).
 //
 // When the trigger file appears, the indices of the second mesh are rewritten through a staging
 // buffer that is unmapped before the copy is recorded, and FILE.done is created.
@@ -33,6 +39,7 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <cstdio>
@@ -69,7 +76,7 @@
     X(ResetCommandBuffer) X(CmdBeginRenderPass) X(CmdEndRenderPass) X(CmdBindPipeline) X(CmdBindVertexBuffers)         \
     X(CmdBindIndexBuffer) X(CmdBindDescriptorSets) X(CmdDrawIndexed) X(CmdCopyBuffer) X(CmdExecuteCommands)            \
     X(CmdSetViewport) X(CmdSetScissor) X(QueueSubmit) X(QueueWaitIdle) X(CreateSemaphore) X(DestroySemaphore)          \
-    X(CreateFence) X(DestroyFence) X(WaitForFences) X(ResetFences)
+    X(CreateFence) X(DestroyFence) X(WaitForFences) X(ResetFences) X(CmdBlitImage) X(CmdClearColorImage)
 
 #define VK_PUSH_FUNCS(X) X(CmdPushDescriptorSetKHR) X(CmdPushDescriptorSetWithTemplateKHR)
 
@@ -195,6 +202,12 @@ struct App {
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     bool primary_screen = false;
     bool readable_swapchain = false; // test readback of what the layer drew into the image
+    int present_burst = 0;           // --present-burst: further presentations behind each frame's GPU work
+    int load_blits = 0;              // the blits that make a frame's GPU work about 300 ms long
+    VkImage load_src = VK_NULL_HANDLE, load_dst = VK_NULL_HANDLE;
+    VkDeviceMemory load_src_memory = VK_NULL_HANDLE, load_dst_memory = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> burst_cbs;
+    std::vector<VkSemaphore> burst_acquire;
     uint32_t api_version = VK_API_VERSION_1_1; // --api 1.3: the version the game asks for, with float controls core
     std::wstring expected_path;
     std::wstring trigger_path;
@@ -542,8 +555,16 @@ static bool create_swapchain()
     }
 
     uint32_t image_count = caps.minImageCount + 1;
+    // A burst has the frame's image and its own in flight, while the images of the frame before may
+    // still wait for their turn on the screen: two more than it holds.
+    if (g.present_burst)
+        image_count = std::max<uint32_t>(image_count, static_cast<uint32_t>(g.present_burst) + 3);
     if (caps.maxImageCount && image_count > caps.maxImageCount)
         image_count = caps.maxImageCount;
+    if (g.present_burst && image_count < static_cast<uint32_t>(g.present_burst) + 3) {
+        g.present_burst = image_count > 3 ? static_cast<int>(image_count) - 3 : 0;
+        printf("present burst reduced to %d: the surface allows %u images\n", g.present_burst, image_count);
+    }
 
     VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     if (!(caps.supportedCompositeAlpha & alpha)) {
@@ -1281,9 +1302,128 @@ static bool write_timings()
     return fclose(f) == 0 && ok && g.timings.size() == static_cast<size_t>(g.measured_frames);
 }
 
+// The slow part of a frame with a burst: `blits` scaled copies between two images of its own.
+static void record_load(VkCommandBuffer cb, int blits)
+{
+    VkImageBlit region = {};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffsets[1] = {1024, 1024, 1};
+    region.dstOffsets[1] = {4096, 4096, 1};
+    VkMemoryBarrier between = {};
+    between.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    between.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    between.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    for (int i = 0; i < blits; i++) {
+        vkCmdBlitImage(cb, g.load_src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g.load_dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &region, VK_FILTER_LINEAR);
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &between, 0, nullptr, 0, nullptr);
+    }
+}
+
+static bool make_load_image(uint32_t size, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory)
+{
+    VkImageCreateInfo ii = {};
+    ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ii.extent = {size, size, 1};
+    ii.mipLevels = 1;
+    ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = usage;
+    CHECK(vkCreateImage(g.device, &ii, nullptr, &image));
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(g.device, image, &req);
+    VkMemoryAllocateInfo ai = {};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    if (!find_memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, &ai.memoryTypeIndex)) {
+        printf("FAILED: no memory type for the burst's images\n");
+        return false;
+    }
+    CHECK(vkAllocateMemory(g.device, &ai, nullptr, &memory));
+    CHECK(vkBindImageMemory(g.device, image, memory, 0));
+    return true;
+}
+
+// --present-burst: the burst's own command buffers and semaphores, the two images of the slow part,
+// and how many blits take about 300 ms here.
+static bool prepare_present_burst()
+{
+    if (!g.present_burst) return true;
+    const size_t count = static_cast<size_t>(g.present_burst);
+    g.burst_cbs.resize(count);
+    g.burst_acquire.resize(count);
+    VkCommandBufferAllocateInfo ca = {};
+    ca.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ca.commandPool = g.pool;
+    ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ca.commandBufferCount = static_cast<uint32_t>(count);
+    CHECK(vkAllocateCommandBuffers(g.device, &ca, g.burst_cbs.data()));
+    VkSemaphoreCreateInfo si = {};
+    si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    for (auto& semaphore : g.burst_acquire) CHECK(vkCreateSemaphore(g.device, &si, nullptr, &semaphore));
+    if (!make_load_image(1024, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, g.load_src, g.load_src_memory) ||
+        !make_load_image(4096, VK_IMAGE_USAGE_TRANSFER_DST_BIT, g.load_dst, g.load_dst_memory))
+        return false;
+    const VkCommandBuffer cb = g.burst_cbs[0];
+    VkCommandBufferBeginInfo begin = {};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkSubmitInfo submit = {};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cb;
+    // The source filled and readable, the destination writable; then a first batch that is not timed.
+    CHECK(vkBeginCommandBuffer(cb, &begin));
+    VkImageMemoryBarrier b[2] = {};
+    for (auto& one : b) {
+        one.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        one.srcQueueFamilyIndex = one.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        one.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        one.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        one.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        one.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+    b[0].image = g.load_src;
+    b[1].image = g.load_dst;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, b);
+    const VkClearColorValue grey = {{0.4f, 0.5f, 0.6f, 1.0f}};
+    const VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cb, g.load_src, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &grey, 1, &whole);
+    b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, b);
+    record_load(cb, 16);
+    CHECK(vkEndCommandBuffer(cb));
+    CHECK(vkQueueSubmit(g.queue, 1, &submit, VK_NULL_HANDLE));
+    CHECK(vkQueueWaitIdle(g.queue));
+    const int timed = 64;
+    CHECK(vkResetCommandBuffer(cb, 0));
+    CHECK(vkBeginCommandBuffer(cb, &begin));
+    record_load(cb, timed);
+    CHECK(vkEndCommandBuffer(cb));
+    LARGE_INTEGER hz, before, after;
+    QueryPerformanceFrequency(&hz);
+    QueryPerformanceCounter(&before);
+    CHECK(vkQueueSubmit(g.queue, 1, &submit, VK_NULL_HANDLE));
+    CHECK(vkQueueWaitIdle(g.queue));
+    QueryPerformanceCounter(&after);
+    const double each_ms = std::max(0.001, (after.QuadPart - before.QuadPart) * 1000.0 / hz.QuadPart / timed);
+    g.load_blits = std::clamp(static_cast<int>(300.0 / each_ms) + 1, 16, 20000);
+    printf("present burst: %d images behind a frame of %d blits (%.3f ms each)\n", g.present_burst, g.load_blits, each_ms);
+    return true;
+}
+
 static bool render_frame()
 {
     const double start = clock_ms();
+    // The burst of the frame before has left the queue: its command buffers and semaphores are free.
+    if (g.present_burst) CHECK(vkQueueWaitIdle(g.queue));
     CHECK(vkWaitForFences(g.device, 1, &g.fence, VK_TRUE, UINT64_MAX));
     uint32_t image = 0;
     VkResult acquired = vkAcquireNextImageKHR(g.device, g.swapchain, UINT64_MAX, g.sem_acquire, VK_NULL_HANDLE, &image);
@@ -1329,6 +1469,7 @@ static bool render_frame()
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CHECK(vkBeginCommandBuffer(g.primary, &begin));
+    if (g.present_burst) record_load(g.primary, g.load_blits);
 
     if (rewrite_now) {
         VkBufferCopy region = {0, 3 * sizeof(uint16_t), sizeof(kRewriteA)};
@@ -1408,6 +1549,38 @@ static bool render_frame()
         printf("FAILED: vkQueuePresentKHR = %d\n", static_cast<int>(presented));
         return false;
     }
+    // Further images presented while the frame's work is still running on the GPU: each of them is
+    // queued behind it, and so is whatever a layer adds to each presentation.
+    for (int k = 0; k < g.present_burst && !g.quit; k++) {
+        uint32_t extra = 0;
+        const VkResult got = vkAcquireNextImageKHR(g.device, g.swapchain, UINT64_MAX, g.burst_acquire[static_cast<size_t>(k)], VK_NULL_HANDLE, &extra);
+        if (got != VK_SUCCESS && got != VK_SUBOPTIMAL_KHR) { g.quit = true; break; }
+        const VkCommandBuffer cb = g.burst_cbs[static_cast<size_t>(k)];
+        CHECK(vkResetCommandBuffer(cb, 0));
+        CHECK(vkBeginCommandBuffer(cb, &begin));
+        rp.framebuffer = g.framebuffers[extra];
+        vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(cb);
+        CHECK(vkEndCommandBuffer(cb));
+        VkSubmitInfo more = {};
+        more.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        more.waitSemaphoreCount = 1;
+        more.pWaitSemaphores = &g.burst_acquire[static_cast<size_t>(k)];
+        more.pWaitDstStageMask = &wait_stage;
+        more.commandBufferCount = 1;
+        more.pCommandBuffers = &cb;
+        more.signalSemaphoreCount = 1;
+        more.pSignalSemaphores = &g.sem_render[extra];
+        CHECK(vkQueueSubmit(g.queue, 1, &more, VK_NULL_HANDLE));
+        present.pWaitSemaphores = &g.sem_render[extra];
+        present.pImageIndices = &extra;
+        const VkResult shown = vkQueuePresentKHR(g.queue, &present);
+        if (shown == VK_ERROR_OUT_OF_DATE_KHR) g.quit = true;
+        else if (shown != VK_SUCCESS && shown != VK_SUBOPTIMAL_KHR) {
+            printf("FAILED: vkQueuePresentKHR of a burst image = %d\n", static_cast<int>(shown));
+            return false;
+        }
+    }
 
     if (rewrite_now) {
         g.rewritten = true;
@@ -1430,6 +1603,11 @@ static void cleanup()
         return;
     vkDeviceWaitIdle(g.device);
     vkDestroyFence(g.device, g.fence, nullptr);
+    for (auto semaphore : g.burst_acquire) vkDestroySemaphore(g.device, semaphore, nullptr);
+    if (g.load_src) vkDestroyImage(g.device, g.load_src, nullptr);
+    if (g.load_dst) vkDestroyImage(g.device, g.load_dst, nullptr);
+    if (g.load_src_memory) vkFreeMemory(g.device, g.load_src_memory, nullptr);
+    if (g.load_dst_memory) vkFreeMemory(g.device, g.load_dst_memory, nullptr);
     for (auto semaphore : g.sem_render) vkDestroySemaphore(g.device, semaphore, nullptr);
     vkDestroySemaphore(g.device, g.sem_acquire, nullptr);
     for (Worker& w : g.workers)
@@ -1522,6 +1700,8 @@ int wmain(int argc, wchar_t** argv)
             g.primary_screen = true;
         else if (a == L"--readable-swapchain")
             g.readable_swapchain = true;
+        else if (a == L"--present-burst" && i + 1 < argc)
+            g.present_burst = std::clamp(_wtoi(argv[++i]), 0, 16);
         else if (a == L"--api" && i + 1 < argc) {
             std::wstring version = argv[++i];
             if (version == L"1.1") g.api_version = VK_API_VERSION_1_1;
@@ -1557,7 +1737,7 @@ int wmain(int argc, wchar_t** argv)
     if (!g.inject_path.empty() && !g.inject_late)
         ok = load_injected();
     ok = ok && load_vulkan() && create_instance() && create_window() && create_device() && create_swapchain() &&
-         create_pipeline() && create_resources();
+         create_pipeline() && create_resources() && prepare_present_burst();
     if (ok && !g.inject_path.empty() && g.inject_late)
         ok = load_injected();
     if (ok && g.reresolve_exports)

@@ -186,10 +186,41 @@ def notices_drawn(checks, entry):
     checks.equal(far, 0, label + " nothing of it in the middle of the image")
 
 
+def notices_on_every_presentation(checks, entry):
+    """BUG-092: the original draws its notices at every Present. With several presentations waiting on the
+    GPU at once (a frame generator presents a few images for one rendered frame) every presented image
+    still carries them, and the text images are given back when no notice is shown any more."""
+    folder = Path(test_dir("owned-present-notices-burst-"))
+    package = fixture(folder)
+    extra = dict(EFMI_VK_M2_PACKAGE=str(package), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_SETTINGS=str(folder / "settings"),
+                 EFMI_VK_TEST_NOTICE="> Reloaded config in 0.123s")
+    label = entry + ", notices with five presentations behind a frame:"
+    shown, after = {}, {}
+    with Sandbox(seconds=6, env_extra=extra, entry=entry, extra_args=["--present-burst", "5"], validation=True) as sandbox:
+        with ProbeClient(sandbox.pid) as probe:
+            time.sleep(1.0)
+            shown = probe.status().get("notices", {})
+            time.sleep(3.0)  # an information notice stays two seconds
+            after = probe.status().get("notices", {})
+        sandbox.proc.wait(timeout=90)
+        output = sandbox.output()
+    checks.equal(sandbox.proc.returncode, 0, label + " the sandbox exits normally")
+    checks.check("validation: errors=0 warnings=0" in output, label + " clean core and synchronization validation", output[-3000:])
+    checks.check("present burst reduced" not in output, label + " the surface gave the images the burst needs", output[-600:])
+    checks.check(shown.get("drawn", 0) > 6 and not shown.get("failed") and not shown.get("error"),
+                 label + " the notice was drawn into presented images", shown)
+    checks.equal(after.get("busy"), 0, label + " no presented image went without the notice")
+    checks.check(after.get("slots", 0) > 3, label + " more of the overlay's own work was pending than three slots hold", after)
+    checks.check(after.get("lines") == 0 and after.get("text_bytes") == 0,
+                 label + " the text images are released once no notice is shown", after)
+
+
 def main():
     checks = Checks("owned Present on a swap chain")
     for entry in ("layer", "inject"):
         notices_drawn(checks, entry)
+    for entry in ("layer", "inject"):
+        notices_on_every_presentation(checks, entry)
     for entry in ("layer", "inject"):
         long_elif_chain(checks, entry)
     for entry in ("layer", "inject"):
