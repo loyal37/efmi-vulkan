@@ -613,10 +613,12 @@ drawindexed = 3,0,0
         // input with a CustomShader and remains explicitly outside this fixture.
         const auto project = folder.parent_path().parent_path().parent_path();
         const auto package_path = project / "build/character/arcane-materials.bin";
-        if (std::filesystem::exists(package_path)) {
+        // Only while the checkout has the package and the Mod it was made from is installed: the user
+        // removes and replaces Mods, and a checkout that still has the package must not fail for that.
+        const std::filesystem::path mod = L"D:/XXMI-Launcher-Portable-v2.1.6/EFMI/Mods/arcane fes 1.2";
+        if (std::filesystem::exists(package_path) && std::filesystem::exists(mod / "arcane.ini")) {
             efvk::CharacterPackage package;
             check(package.load(package_path.u8string(), reason), "Load actual material profile");
-            const std::filesystem::path mod = L"D:/XXMI-Launcher-Portable-v2.1.6/EFMI/Mods/arcane fes 1.2";
             const std::filesystem::path core = L"D:/XXMI-Launcher-Portable-v2.1.6/EFMI/Core/EFMI";
             RuntimeConfig actual{mod, {core / "API.ini", core / "MergedSkeleton.ini", core / "SpatialIdentification.ini", core / "Helpers.ini", mod / "arcane.ini"}, settings, "actual"};
             std::filesystem::remove(settings / "actual.ini");

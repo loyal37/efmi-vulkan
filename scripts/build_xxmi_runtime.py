@@ -129,9 +129,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     build_runtime(args.out, test=True)
     package = ROOT / "build/character/arcane-materials.bin"
-    if package.is_file():
+    mod = Path("D:/XXMI-Launcher-Portable-v2.1.6/EFMI/Mods/arcane fes 1.2")
+    # A fixture from an installed Mod: only while the checkout has its package and the Mod is installed
+    # (the user removes and replaces Mods; a checkout that still has the package must not fail for that).
+    if package.is_file() and (mod / "arcane.ini").is_file():
         from prepare_runtime import prepare
-        mod = Path("D:/XXMI-Launcher-Portable-v2.1.6/EFMI/Mods/arcane fes 1.2")
         prepare(package, package.with_suffix(".json"), mod / "arcane.ini", mod.parents[1] / "Core/EFMI",
                 "arcane_fes", args.out / "fixture/actual-live.bin")
     result = subprocess.run([str(args.out.resolve() / "runtime_test.exe"), str(args.out.resolve())],
