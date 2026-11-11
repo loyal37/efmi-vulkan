@@ -76,6 +76,15 @@ def main() -> int:
         # would act once per generation, D-112); the folder generation loads it, as the original does. Such
         # a Mod's two runs are two different inputs: listed, not compared (the folder's is the one that plays).
         unloaded = [n for n in a.get("library_notes", []) if "acts on game resources by hash" in n]
+        # In the folder generation the library is one of its inputs, loaded once as the original loads it, and a
+        # Mod that calls it keeps it as its library: the renderer compiles the library's shaders from that
+        # folder (EFMITTL's capture, D-113). It was left out there as well (BUG-088's fourth cause).
+        for note in unloaded + [n for n in a.get("library_notes", []) if n.startswith("library called: ")]:
+            path = note.split(": ", 1)[1].rsplit(" (namespace ", 1)[0]
+            name = note.rsplit("(namespace ", 1)[1].split(")", 1)[0]
+            if b.get("libraries", {}).get(name) != path:
+                differences.append("%s: calls the library %s (%s), which the folder generation does not record for it: %s" %
+                                   (ini, name, path, [n for n in b.get("library_notes", []) if name in n][:1]))
         if unloaded:
             not_compared.append("%s: %s" % (ini, unloaded[0]))
             continue

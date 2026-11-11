@@ -36,6 +36,7 @@ public:
     bool before_draw(const RuntimeDraw& draw,CommandListState& state,std::wstring& why) override {
         return native_->before_draw(draw,state,why) && gpu_->before_draw(draw,state,why);
     }
+    void draw_hooks(const RuntimeDraw& draw,DrawHooks& hooks) override {native_->draw_hooks(draw,hooks);}
     void after_draw() noexcept override {native_->after_draw();gpu_->after_draw();}
     void after_dispatch() noexcept override {native_->after_dispatch();gpu_->after_dispatch();}
     void library_hook(LibraryHook hook) noexcept override {native_->library_hook(hook);gpu_->library_hook(hook);}

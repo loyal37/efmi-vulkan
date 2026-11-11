@@ -4,6 +4,10 @@
 #include "shader_state.h"
 
 namespace efmi::frontend {
+// Lists of a library's shader groups that the original runs around a draw's matched lists (D-171), in its
+// order: `before` ahead of them (the vertex stage's lists come first), `between` after them and ahead of the
+// application's draw (the pixel stage's), `after` once the draw is done (post lists).
+struct DrawHooks { std::vector<CommandList*> before, between, after; };
 // Extensions mediate named native Core boundaries, never reinterpret INI text.
 // Execution methods run with the generation's original globals installed.
 // Cleanup/failure notifications may also run after that scope has unwound.
@@ -21,6 +25,8 @@ public:
     virtual bool prepare(DrawPlanAdapter&, CommandListState&, std::wstring&) { return true; }
     virtual bool validate_overrides(std::wstring&) { return true; }
     virtual bool before_draw(const RuntimeDraw&, CommandListState&, std::wstring&) { return true; }
+    // After before_draw: the hook lists of this draw, adapted lists the extension registered at install.
+    virtual void draw_hooks(const RuntimeDraw&, DrawHooks&) {}
     // After all matched pre/post lists, on either success or failure. Present
     // and key roots do not have the original HackerContext::AfterDraw lifetime.
     virtual void after_draw() noexcept {}

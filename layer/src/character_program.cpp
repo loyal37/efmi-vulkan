@@ -445,7 +445,8 @@ std::vector<std::filesystem::path> CharacterProgram::native_library_files(const 
     return found;
 }
 std::vector<std::filesystem::path> CharacterProgram::libraries(const std::filesystem::path& mods, const std::vector<std::filesystem::path>& inputs,
-                                                              const std::vector<std::string>& known, std::vector<std::string>& notes)
+                                                              const std::vector<std::string>& known, std::vector<std::string>& notes,
+                                                              bool one_generation)
 {
     std::set<std::string> declared(known.begin(), known.end());
     std::string calls;
@@ -495,8 +496,9 @@ std::vector<std::filesystem::path> CharacterProgram::libraries(const std::filesy
                 continue;
             }
             // A section acting on the game's resources by hash would act once for every generation that
-            // loads the library, where the original acts once.
-            if (has_section(c.text, "textureoverride", true)) {
+            // loads the library, where the original acts once. In the folder's one generation the library is
+            // one of its inputs and acts once, as in the original (D-155): the Mod calls it all the same.
+            if (!one_generation && has_section(c.text, "textureoverride", true)) {
                 notes.push_back("library not called: " + c.path.u8string() + " (namespace " + c.name + ") acts on game resources by hash");
                 continue;
             }
@@ -670,15 +672,15 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
             std::transform(name.begin(), name.end(), name.begin(), ::towlower);
             names[i] = std::move(name);
             mod_inputs[i].push_back(inis[i]);
-            if (gpu) {
-                // As a generation of one Mod: with the owned runtime the Mod folder's other enabled INIs
-                // join, and the libraries it calls by namespace (D-112).
-                std::error_code error;
-                for (const auto& other : enabled_inis(inis[i].parent_path(), source.settings))
-                    if (!std::filesystem::equivalent(other, inis[i], error)) mod_inputs[i].push_back(other);
-                for (const auto& library : libraries(source.mods, mod_inputs[i], efmi::frontend::character_core_libraries(), notes[i]))
-                    called[i][declared_namespace(library)] = library;
-            }
+            // The libraries the Mod calls by namespace (D-112) from any INI of its folder: a fact of its text,
+            // whatever runtime runs it. Every enabled INI is an input of the folder's generation (D-155), so the
+            // library is loaded there in any case; what is recorded here is the Mod's use of it (the folder its
+            // shaders and files are read from, BUG-088's fourth cause).
+            std::error_code error;
+            for (const auto& other : enabled_inis(inis[i].parent_path(), source.settings))
+                if (!std::filesystem::equivalent(other, inis[i], error)) mod_inputs[i].push_back(other);
+            for (const auto& library : libraries(source.mods, mod_inputs[i], efmi::frontend::character_core_libraries(), notes[i], true))
+                called[i][declared_namespace(library)] = library;
             out.push_back(std::move(m));
         }
         // Two enabled INIs under one namespace (a second Mod for one character): the original parses both in

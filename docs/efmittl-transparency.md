@@ -93,6 +93,28 @@ fallback, as before.
 
 Verification: Replay vk01 (Yvonne, 120 frames, --copy-passes): 456 captures, 114 composites, the library's $fallback staying 0, Vulkan validation 0 errors (4 performance notes); against 1.7.8's opaque fallback 30265 forward-target pixels differ, the sleeves (alpha 0.2) most, the dress (0.7) less (build/replay-1.7.9/). vk02 (TangTang, translucent variant on): 114 captures, 114 composites. Hook rules on the paired catalogue: the 7 Vulkan vertex shaders pairing with 1479b2b5 lit, 57 others not; copy rule names 4b4220a1 alone. Sandbox only.
 
+## The library of 2026-11-10 (D-170 to D-172)
+
+The user's update of EFMITTL (development 0.5.5) changed what the library asks of a draw and added groups.
+
+- **Texture slots.** `CommandListSetTextures` finds where a part's diffuse, light and normal maps go from the
+  pixel shader: its declarations (`ps->srv_type(n)`, `srv_dimension(n)`, D-124, D-159) and the format, size
+  and mip count of the game's texture at each declared slot (`ps-t[N]->Format` and the like, D-170). The
+  host answers both from the pipeline's SPIR-V and the image and view the draw binds.
+- **More groups (D-171).** A lit group for skin (`$vs_kind = 1`), an outline group (`$vs_kind = 4`), and
+  pixel groups: ClipFirst and one DiffuseAt per slot t8 to t23, which write the slot the pixel shader
+  samples its colour from for the key the part's first SetTextures call left. Every vertex group also
+  clears the per-draw marks. The bridge runs each group's own lists where the original runs them (the
+  vertex group's ahead of the Mod's lists and after the draw, the pixel groups' after the Mod's lists);
+  which groups a draw's shaders stand for is read off SPIR-V (layer/src/shader_hooks.cpp), checked
+  against the groups' own patterns on the paired catalogue's DX11 listings (scripts/check_shader_hooks.py).
+- **A hash section (D-172).** `[TextureOverrideEFMITTLNormalSlot_36d7856a]` marks the game's default normal
+  map. The folder generation now records the library as called by the Mods that call it, whatever sections
+  it has; its shaders are compiled from that folder.
+
+Replays with the installed Mods (sandbox): last rite (vk10), ardelia (vk11) and Zhuangfangyi (vk08)
+captured and composited once per frame, no refused plan, validation clean. Not seen in the game.
+
 Limits: shadows stay full (the Vulkan shadow vertex shaders output no UV the
 library's shadow shaders could read, docs/efmittl-compatibility.md); the
 composite runs at the end of the capturing pass, which for the forward pass is

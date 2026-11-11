@@ -1,5 +1,6 @@
 #include "../frontend/xxmi/runtime.h"
 #include "../frontend/xxmi/character_core.h"
+#include "../frontend/xxmi/efmittl_bridge.h"
 #include "../layer/src/character_program.h"
 #include <fstream>
 #include <cstdarg>
@@ -328,6 +329,7 @@ int wmain(int argc, wchar_t** argv)
         runtime_regex_assembly_cases(folder);
         runtime_window_cases(folder);
         runtime_library_cases(folder);
+        runtime_library_hook_cases(folder);
         runtime_host_value_cases(folder);
         runtime_concurrency_cases(folder);
         const auto ini = folder / "mod.ini"; write(ini, fixture);

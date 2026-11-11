@@ -113,11 +113,17 @@ STEPS = [
     ("captured frame on two queues, bones on the GPU and the CPU", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
                                                                    r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk03", "--frames", "120", "--check",
                                                                    "--two-queues", "--bones-identical"]),
-    # Yvonne calls the EFMITTL library from its draws (D-112): the library is loaded and every plan runs,
-    # and with the game's copy pass after the forward pass its calls are captured and composited (D-113).
+    # ardelia calls the EFMITTL library's translucent draw (D-112): the library is loaded, every plan runs, its
+    # shader groups run as the host reads them off SPIR-V (D-171) with the textures' properties it asks (D-170),
+    # and with the game's copy pass after the forward pass its calls are captured and composited (D-113). The
+    # step used Yvonne until the user's update of 2026-11-10 left out Yvonne's translucent call (BUG-088).
     ("captured frame with a library call", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
-                                            r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk01", "--frames", "120", "--check", "--no-refusal",
+                                            r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk11", "--frames", "120", "--check", "--no-refusal",
                                             "--copy-passes", "--expect-translucency"]),
+    # Yvonne calls the library's texture slots only (SetTextures, D-170, D-171): every plan runs.
+    ("captured frame with a library's texture slots", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
+                                                       r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk01", "--frames", "120", "--check",
+                                                       "--no-refusal", "--copy-passes"]),
     ("EFMITTL hook rules on the paired catalogue", [os.path.join(ROOT, "scripts", "check_shader_hooks.py")]),
     ("original INI GPU resources", [os.path.join(ROOT, "scripts", "check_resource_commands.py")]),
     # D-150: the original as the judge: INI cases under the pinned XXMI 3DMigoto in a D3D11 program and under the

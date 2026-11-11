@@ -64,16 +64,23 @@ bool CharacterGeneration::capture(CmdBuf* cb, const DrawRec& r, uint32_t own, co
     return true;
 }
 
-bool CharacterGeneration::lit_vertex(const PipeInfo& pipe)
+// Which of the library's shader groups the pipeline's vertex and pixel shaders stand for (shader_hooks.h).
+const CharacterGeneration::LibraryHooks& CharacterGeneration::library_hooks(const PipeInfo& pipe)
 {
-    const auto found = lit_vertex_facts.find(pipe.id);
-    if (found != lit_vertex_facts.end()) return found->second;
-    bool lit = false;
+    const auto found = library_hook_facts.find(pipe.id);
+    if (found != library_hook_facts.end()) return found->second;
+    LibraryHooks hooks;
     if (pipe.recipe)
-        for (const auto& stage : pipe.recipe->stages)
-            if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT && stage.shader) lit = lit_character_vertex(stage.shader->code);
-    if (lit_vertex_facts.size() >= 8192) lit_vertex_facts.clear();
-    return lit_vertex_facts.emplace(pipe.id, lit).first->second;
+        for (const auto& stage : pipe.recipe->stages) {
+            if (!stage.shader) continue;
+            if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT) hooks.vertex = character_vertex_hook(stage.shader->code);
+            else if (stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+                const PixelHook pixel = character_pixel_hook(stage.shader->code);
+                hooks.pixel = pixel.known; hooks.colour_slot = pixel.colour_slot; hooks.narrow_first = pixel.narrow_first;
+            }
+        }
+    if (library_hook_facts.size() >= 8192) library_hook_facts.clear();
+    return library_hook_facts.emplace(pipe.id, hooks).first->second;
 }
 
 // `vbN->stride` of a replaced draw (RuntimeDraw::vertex_stride): the pipeline's binding N, as DX11's
@@ -423,8 +430,13 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                      pipe->second.recipe ? "yes" : "no", pipe->second.recipe && pipe->second.recipe->render_pass ? "yes" : "no",
                      cb->pass.info ? "known" : "unknown", cb->pass.area.extent.width, cb->pass.area.extent.height);
             }
-            // EFMITTL's lit vertex shader hook (D-113).
-            if (translucency && program->efmittl()) { request.lit_vertex = lit_vertex(pipe->second); translucency->listen(); }
+            // EFMITTL's shader groups (D-113, D-171).
+            if (translucency && program->efmittl()) {
+                const LibraryHooks& hooks = library_hooks(pipe->second);
+                request.vertex_hook = efmi::frontend::VertexHook(hooks.vertex);
+                request.pixel_hooks = hooks.pixel; request.uv_colour_slot = hooks.colour_slot; request.uv_narrow_first = hooks.narrow_first;
+                translucency->listen();
+            }
             request.seconds = ini_seconds();
             request.frame_seconds = frame_seconds.load(std::memory_order_relaxed);
             request.pixel_texture = [this, &r](unsigned slot, efmi::frontend::RuntimeTexture& texture, std::string& why) {

@@ -271,6 +271,8 @@ struct IniRuntime::Impl {
     std::vector<DirectX::XMFLOAT4> pre_parameters;
     bool replayable = false;
     // The plans of the last draw, kept for their capacity (D-108).
+    DrawHooks draw_hooks; // a library's shader group lists of the draw (D-171)
+    std::vector<CommandList*> draw_pre, draw_post;
     DrawPlan draw_plan;
     assets::FilePlan draw_result;
     TextureOverrideMatches draw_matches;
@@ -622,8 +624,15 @@ bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::s
         if (p.extension && !p.extension->before_draw(input, s, why)) throw std::runtime_error(utf8(why));
         phase("phase before_draw");
         if(!matches.empty()){
-            std::vector<CommandList*> pre,post;pre.reserve(matches.size());post.reserve(matches.size());
+            // A library's shader groups (D-171), in the original's order around the matched lists: the vertex
+            // stage's lists ahead of them (the Core's check of `ib` is a later group of the same stage), the
+            // pixel stage's after them, all before the application's draw.
+            DrawHooks& hooks = p.draw_hooks; hooks.before.clear(); hooks.between.clear(); hooks.after.clear();
+            if (p.extension) p.extension->draw_hooks(input, hooks);
+            std::vector<CommandList*>& pre = p.draw_pre; std::vector<CommandList*>& post = p.draw_post; pre.clear(); post.clear();
+            pre.insert(pre.end(), hooks.before.begin(), hooks.before.end());
             for(auto* match:matches){pre.push_back(&match->command_list);post.push_back(&match->post_command_list);}
+            pre.insert(pre.end(), hooks.between.begin(), hooks.between.end());
             DrawPlan& plan = p.draw_plan;
             const auto began = std::chrono::steady_clock::now();
             const bool executed = p.adapter.execute_matches(pre,post,s,plan,why);
@@ -632,6 +641,14 @@ bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::s
             p.stats.draw_execute_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(ran - began).count());
             p.stats.draw_compile_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - ran).count());
             if (!executed || !compiled) throw std::runtime_error("Original draw command refused: " + utf8(why));
+            // A group's post list that is more than constants (none in the libraries known): on its own, after
+            // the draw's lists.
+            for (auto* list : hooks.after) {
+                auto after = p.command_state(); after.call_info = &call; after.post = true;
+                DrawPlan unused;
+                if (!p.adapter.execute(*list, after, unused, why) || !unused.items.empty())
+                    throw std::runtime_error("A library's shader group list was refused: " + utf8(why));
+            }
             phase("phase execute+compile");
         }
         ++p.stats.draws; std::swap(output, result); return true;

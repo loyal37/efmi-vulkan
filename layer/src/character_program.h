@@ -79,9 +79,12 @@ public:
     // `$\NS\...`) and that neither an input nor `known` (the extension's own libraries) declares; then
     // those they call. `notes` names the ones left out and why.
     static std::vector<std::filesystem::path> libraries(const std::filesystem::path& mods, const std::vector<std::filesystem::path>& inputs,
-                                                        const std::vector<std::string>& known, std::vector<std::string>& notes);
+                                                        const std::vector<std::string>& known, std::vector<std::string>& notes,
+                                                        bool one_generation = false);
     // The libraries the generation loaded and those it left out (D-112), for the log.
     const std::vector<std::string>& library_notes() const { return library_notes_; }
+    // The libraries the Mod calls by namespace (D-112), by namespace: what library_folder answers from.
+    const std::map<std::string, std::filesystem::path>& called_libraries() const { return libraries_; }
     // What the original does for the Mod's sections and the layer does not (CharacterDiscovery::gaps).
     const std::vector<std::string>& gaps() const { return gaps_; }
     // What the layer did not do as the original does while the generation runs (IniRuntime::gap_count):

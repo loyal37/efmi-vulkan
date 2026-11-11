@@ -30,6 +30,16 @@ void HostCompileList(const wchar_t* name,CommandList* pre,CommandList* post)
 {
     ParseCommandList(name,pre,post,nullptr,true);
 }
+// The command lists of a ShaderRegex group's main section as the original parses them
+// (parse_shader_regex_section_main): its other keys (shader_model, temps, filter_index) are not commands.
+// False when the generation has no such section; `name` is matched as the original matches section names.
+bool HostCompileShaderRegexList(const wchar_t* name,CommandList* pre,CommandList* post)
+{
+    const auto section=ini_sections.find(name);
+    if(section==ini_sections.end())return false;
+    ParseCommandList(section->first.c_str(),pre,post,ShaderRegexIniKeys);
+    return true;
+}
 void HostParseConstants() { ParseConstantsSection(); }
 void HostEnumerateLists() { EnumerateExplicitCommandListSections(); }
 void HostParseResources() { ParseResourceSections(); }

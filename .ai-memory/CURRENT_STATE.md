@@ -6,6 +6,17 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## BUG-088: the EFMITTL of 2026-11-10 in the layer (2026-11-11, D-170 to D-172)
+
+- A session of its own, on branch claude/efmittl-compat-cc233f, beside the Phase 1 session (draw state). Sandbox only: nothing deployed, nothing loaded into the game, dist/ of the main checkout untouched.
+- What the new library needed, each found by following the replay with a library call, each read off the original first, each with a check that failed before:
+  - D-170: `ps-t[N]->Format`, `->Width`, `->Height`, `->Mips`, `->Array` in a replaced draw's plan, as the original's getters (CommandList.cpp GetResourceFormat and its neighbours), over the host's description of the image and view the draw binds and the header of a Mod's own file (frontend/xxmi/texture_properties.h). The original as the judge: a new case of 34 values (`properties`) and six sweep lines; the paired catalogue: scripts/check_texture_properties.py (a suite step), 2239 slots with the same texture on both sides, all five answers equal.
+  - D-171: the library's shader groups run their own lists, as the original runs a group's lists around a draw; which groups a draw's shaders stand for is read off SPIR-V (lit, lit skin, outline; the pixel groups' diffuse slot and clip), checked by scripts/check_shader_hooks.py against the groups' own patterns on the catalogue's DX11 listings.
+  - D-172: the folder generation records the libraries each Mod calls whatever their hash sections and the runtime (the library's new TextureOverride section had left every Mod without it, and the capture without its shaders).
+- The suite step "captured frame with a library call" replays ardelia (vk11) now: the installed Yvonne no longer calls the library's translucent draw (the user's update of 2026-11-10 13:46). Yvonne's scene is the step "captured frame with a library's texture slots".
+- Verification: see the round's commits and SESSION_LOG; the whole suite on the merged tree before the merge into main.
+- Not verified: nothing of this ran in the game.
+
 ## Phase 1 of the review: a replaced draw's lists against a draw state (2026-11-11, D-161 to D-163, docs/ini-semantics.md)
 
 - A session of its own in a worktree (branch `claude/phase1-draw-state-ab9740`), merged into main after the whole suite. Sandbox only: nothing deployed, nothing loaded into the game.

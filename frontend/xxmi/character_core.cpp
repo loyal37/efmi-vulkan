@@ -863,6 +863,7 @@ global $mod_id = -1
     }
     bool prepare(DrawPlanAdapter& a, CommandListState& state, std::wstring& why) override
     {
+        if (efmittl) efmittl->prepare();
         // The lists of each Mod's TextureOverrides: a native tells its caller by the root that runs.
         for (auto& m : mods_) m.roots.clear();
         root_mods_.clear();
@@ -972,6 +973,7 @@ global $mod_id = -1
         if (efmittl) efmittl->before_draw(draw);
         return true;
     }
+    void draw_hooks(const RuntimeDraw& draw, DrawHooks& hooks) override { if (efmittl) efmittl->draw_hooks(draw, hooks); }
     void after_draw() noexcept override
     {
         // The host's answers refer to its draw: none of them outlives it.
@@ -1033,6 +1035,7 @@ public:
     bool prepare(DrawPlanAdapter& adapter, CommandListState& state, std::wstring& why) override { return inner_->prepare(adapter, state, why); }
     bool validate_overrides(std::wstring& why) override { return inner_->validate_overrides(why); }
     bool before_draw(const RuntimeDraw& draw, CommandListState& state, std::wstring& why) override { return inner_->before_draw(draw, state, why); }
+    void draw_hooks(const RuntimeDraw& draw, DrawHooks& hooks) override { inner_->draw_hooks(draw, hooks); }
     void after_draw() noexcept override { inner_->after_draw(); }
     void library_hook(LibraryHook hook) noexcept override { inner_->library_hook(hook); }
     void after_dispatch() noexcept override { inner_->after_dispatch(); }

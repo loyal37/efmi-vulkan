@@ -89,6 +89,10 @@ struct RuntimeTexture {
     uint32_t width = 0, height = 0, levels = 0, layers = 0;
 };
 constexpr uint32_t kWordBufferDeclaration = 0xFFFFFFFFu;
+// The vertex shader groups of the EFMITTL library a draw's vertex shader stands for (D-113, D-171): the lit
+// pass of cloth, the lit pass of skin, an outline. The shadow groups are never met (the Vulkan shadow vertex
+// shaders output no UV).
+enum class VertexHook : uint32_t { None = 0, Lit = 1, LitSkin = 2, Outline = 3 };
 struct RuntimeDraw {
     uint32_t hash = 0, count = 0, first = 0, instances = 1, first_instance = 0;
     int32_t base = 0;
@@ -143,9 +147,17 @@ struct RuntimeDraw {
     // bind at a slot the pipeline does not read is nothing to the draw, as under D3D11). Every bit when
     // the host does not know the pipeline's vertex input.
     uint32_t vertex_slots = UINT32_MAX;
-    // What a library's shader hooks see of this draw under DX11, from the host's Vulkan pipeline
-    // (D-113): its vertex shader has the output interface of the game's lit character vertex shader.
-    bool lit_vertex = false;
+    // What a library's shader groups (ShaderRegex) match of this draw under DX11, read off the host's Vulkan
+    // pipeline (D-113, D-171): the group of the game's vertex shader, and of its pixel shader the facts the
+    // library's pixel groups decide by. `pixel_hooks` false: the host did not read the pixel shader, and no
+    // pixel group runs.
+    VertexHook vertex_hook = VertexHook::None;
+    bool pixel_hooks = false;
+    // The DX11 t register of the first 2D texture below t24 whose colour (three or four channels) the pixel
+    // shader samples at an interpolated input, -1 for none; and whether a sample of one or two channels at
+    // such an input comes ahead of every other one (the hair's alpha clip in an outline).
+    int32_t uv_colour_slot = -1;
+    bool uv_narrow_first = false;
     // The size of the draw's colour target 0 as the host knows it (the original's rt_width and
     // rt_height, read off the bound render target); -2 when none is bound (the queries answer -1);
     // -1 when the host does not know it.

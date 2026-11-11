@@ -20,7 +20,8 @@
 
 - Done without the game (2026-11-10, sandbox only): P3-0; Phase 0 (P0-1 to P0-9 except the game-facts notice of L-07); P3-1 (the matched-draw judge); P3-2 as the one-line sweep; P4-1 (documents); P4-2 (character_backend.cpp in eleven parts and an internal header, D-160, between two whole suite runs with equal results).
 - Open without the game:
-  - FIRST: BUG-088, the EFMITTL of 2026-11-10. Answer `ps-t[N]->Format`, `->Width`, `->Height`, `->Mips` (and `->Array`) of the game's texture at a pixel slot from the host's description of the image (D-138), and of a Mod's own texture bound there from its file; the original's process_texture_filter says what an empty slot reads. Then follow the replay with a library call (`sandbox/run_all.py --no-build --only "library call"`) to the next thing the new translucency.ini asks, until its layer is captured; then the game.
+  - Done 2026-11-11 (sandbox): BUG-088, the EFMITTL of 2026-11-10 (D-170 to D-172). To see in the game (below).
+  - D-170's property query reads the target through the draw state (`named()`, `context`, `held()`), ahead of `from_state`: at a slot a Mod's file reads its own format, which `of_declaration` would answer with the declaration's (the judge's `properties` case).
   - Done 2026-11-11 (Phase 1, above): the sweep's 12 recorded differences. No line refuses a draw; what is left differs for one draw or one slot, each recorded with what may differ (`only`).
   - The sweep's line the scene does not judge: `vs` as a value (BUG-090). `vbN->stride` and a query on `ib` are answered from the draw state now.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
@@ -29,7 +30,8 @@
   - BUG-089 (read while splitting, not reproduced): with RabbitFX's anti-dither on, a twin's bind drops the character packages' owners a recording has not used yet. First a check that shows it (the status with the gate set against unset: `batches_made_at_draw`, the arenas a worker makes per recording), then the fix from what the original does.
   - L-07: a notice when the game's facts (shader contract, slot table) are not known for the running game version.
 - Needs game sessions and the user's choice: Phase 1's game session (its offline part is done, above), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).
-- To check in the game when the user next plays on Vulkan: the notices at the first load, F10 without a generation, nothing else changed for the installed Mods (every section of 19 Mods plans in every state offline). The EFMITTL of 2026-11-10 is not expected to work yet (BUG-088).
+- To check in the game when the user next plays on Vulkan: the notices at the first load, F10 without a generation, nothing else changed for the installed Mods (every section of 19 Mods plans in every state offline).
+- EFMITTL of 2026-11-10 in the game (BUG-088, D-170 to D-172): last rite's, ardelia's and Zhuangfangyi's translucent parts see-through from the first frame (not opaque, not missing); the library's `$\EFMITTL\fallback` 0 in the status's variables; `translucency` captures and composites rising with no `last_error`; the Mods that use SetTextures (most installed ones) drawn with their own textures in the lit pass and the outline's colour from the Mod's diffuse; frame time with those characters on screen against without.
 
 ## Active: the design review after 1.9.2 (2026-10-26, docs/design-review-1.9.md)
 

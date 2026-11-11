@@ -849,11 +849,14 @@ int main(int argc, char** argv)
         return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "--shader-hooks")) {
-        // EFMITTL's hook facts (D-113) of SPIR-V modules: "<file> <lit vertex 0/1> <copy fragment 0/1>".
+        // EFMITTL's hook facts (D-113, D-171) of SPIR-V modules: "<file> <lit vertex 0/1> <copy fragment 0/1>
+        // <vertex group 0-3> <pixel groups known 0/1> <colour slot or -1> <narrow first 0/1>".
         for (int i = 2; i < argc; ++i) {
             std::ifstream in(argv[i], std::ios::binary | std::ios::ate);
             std::vector<uint32_t> code(size_t(in.tellg()) / 4); in.seekg(0); in.read(reinterpret_cast<char*>(code.data()), code.size() * 4);
-            printf("%s %d %d\n", argv[i], efvk::lit_character_vertex(code) ? 1 : 0, efvk::copy_fragment(code) ? 1 : 0);
+            const auto pixel = efvk::character_pixel_hook(code);
+            printf("%s %d %d %u %d %d %d\n", argv[i], efvk::lit_character_vertex(code) ? 1 : 0, efvk::copy_fragment(code) ? 1 : 0,
+                   efvk::character_vertex_hook(code), pixel.known ? 1 : 0, pixel.colour_slot, pixel.narrow_first ? 1 : 0);
         }
         return 0;
     }
@@ -995,6 +998,12 @@ int main(int argc, char** argv)
                 w.end_object(); printf("%s\n", w.out.c_str()); continue;
             }
             w.kn("warnings", m.program->status().diagnostics);
+            // The libraries the Mod calls (their folders hold what the renderer compiles for them, D-113) and
+            // those it was found not to call, with why.
+            w.key("libraries"); w.begin_object();
+            for (const auto& library : m.program->called_libraries()) w.kv(library.first.c_str(), library.second.u8string());
+            w.end_object();
+            w.key("library_notes"); w.begin_array(); for (const auto& note : m.program->library_notes()) w.str(note); w.end_array();
             write_plans(w, *m.program, *presenter, m.package, vertex, frame);
             w.key("variables"); w.begin_object();
             for (const auto& v : m.program->status().variables)

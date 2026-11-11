@@ -350,7 +350,8 @@ public:
     // EFMITTL (D-113): the device's layers and captures, when the generation loaded the library with
     // its bridge; under the mod lock, which game pipelines have the lit character vertex shader.
     Translucency* translucency = nullptr;
-    std::unordered_map<uint32_t, bool> lit_vertex_facts;
+    struct LibraryHooks { uint32_t vertex = 0; bool pixel = false; int32_t colour_slot = -1; bool narrow_first = false; };
+    std::unordered_map<uint32_t, LibraryHooks> library_hook_facts;
     std::vector<std::shared_ptr<const PipelineVariant>> scratch_captures[kCaptureKinds];
     std::vector<uint8_t> capturing, capture_t4;               // per list draw: captured; its ps-t4 neutral
     std::vector<SnapshotImage> capture_masks;                 // per list draw: the opacity mask, if any
@@ -366,7 +367,7 @@ public:
     using AppendBones = std::function<bool(DrawSnapshots&, const std::vector<SnapshotImage>&, SnapshotSlot&)>;
     bool capture(CmdBuf* cb, const DrawRec& r, uint32_t own, const CharacterDraw& d, uint32_t i, const SnapshotSlot& colour,
                  const DrawGeometry& geometry, const IndexedDraw& args, const AppendBones& append_bones, CharacterCommand* owner);
-    bool lit_vertex(const PipeInfo& pipe);
+    const LibraryHooks& library_hooks(const PipeInfo& pipe);
     std::atomic<bool> enabled{false}, ready{false};
     std::atomic<uint64_t> frame{1};
     std::atomic<uint64_t> presents{0}; // every presentation, the INI's frame counter (BUG-036)
