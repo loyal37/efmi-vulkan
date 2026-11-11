@@ -4,9 +4,11 @@ import time
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 from harness import Checks, DIST, INJECT_DLL, Sandbox, inject_env, layer_env, test_dir
 from runtime_fixture import APP_TEXTURE_HASH, CORE, fixture
+from efmi_vk.hashes import crc32c
 from efmi_vk.probe_client import ProbeClient
 
 
@@ -391,6 +393,16 @@ def directory_generation(checks, validation):
     # have): its persistent variable's name is too, and the original writes it as UTF-8 with the rest.
     (folder / "k\uff1apanel").mkdir()
     (folder / "k\uff1apanel" / "1.ini").write_text("[Constants]\nglobal persist $q = 4\n", encoding="ascii")
+    # docs/architecture-review-2.1.md R-03, P2-1 (D-173): a section of another INI of the character Mod's
+    # folder (as an installed Mod's `Texture\hair.ini` beside its character INI) for a draw no section of
+    # the character's INI matches: the scene's unmatched draw, three indices at 30, whose index region has
+    # the bytes of component A's. The original looks every indexed draw up in the whole registry by its
+    # index count and its region's hash (CheckTextureOverride = ib, BuildTextureOverrideDrawMaps), whichever
+    # INI declares the section; the layer matched the sections of the character INI's namespace only.
+    (folder / "parts").mkdir()
+    (folder / "parts" / "part.ini").write_text(
+        "[Constants]\nglobal persist $part_seen = 0\n[TextureOverridePart]\nhash = %08x\nmatch_index_count = 3\nmatch_first_index = 30\n"
+        "$part_seen = 1\n" % crc32c(struct.pack("<3H", 0, 1, 2)), encoding="ascii")
     # D-133: RabbitFX's anti-dither. The layer provides RabbitFX natively (D-082); the installed file's key
     # and ShaderRegex sections join: its replacement keeps the shader's discard behind `if_z
     # IniParams[172].w`, its section assigns `w172 = $censor`, a persistent toggle the player left on.
@@ -540,6 +552,10 @@ def directory_generation(checks, validation):
                      label + ": an INI with a copy_desc in its post-Constants loads and its Present runs")
         checks.equal(variables.get("$\\mods\\fixture\\k\\1.ini\\z"), 7,
                      label + ": a panel INI's setting saved by the Mod's own generation is read under the folder's name")
+        checks.equal(variables.get("$\\mods\\fixture\\parts\\part.ini\\part_seen"), 1,
+                     label + ": a section of another INI of the Mod's folder runs at the draw it matches, which no section of the character INI matches (R-03)")
+        checks.check(own.get("sections", 0) == 6,
+                     label + ": that section is one of the package's, beside the character INI's five (four, one of them in two branches by stride): %s" % own.get("sections"))
     checks.check(not any(Path(m.get("ini", "")).parent.name in ("plain", "bad") for m in left_out), label + ": neither plain INI is left out")
     # One generation for the folder (D-131) keeps one settings file for every Mod, as the original's
     # d3dx_user.ini; a generation per Mod kept the namespace and the Mod folder (BUG-039).

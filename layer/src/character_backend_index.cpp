@@ -46,6 +46,9 @@ namespace character_internal {
 // (a copy into the buffer, anywhere in it), the edge fingerprint changed, or the periodic repeat.
 std::atomic<uint64_t> g_hash_full{0}, g_hash_bytes{0}, g_hash_new{0}, g_hash_gen{0}, g_hash_quick{0}, g_hash_due{0}, g_quick_reads{0}, g_quick_skipped{0};
 std::atomic<uint64_t> g_quick_read_us{0}; // microseconds of the edge fingerprint reads (write-combined memory)
+// The plans this thread ran for replaced draws (CharacterGeneration::plan_draw): character_record tells by it
+// whether a draw's lists ran (D-173).
+thread_local uint64_t t_draw_plans = 0;
 } // namespace character_internal
 
 void CharacterBackend::rebuild_index()
@@ -163,29 +166,43 @@ bool character_record(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
     }
     const auto found = index->by_hash.find(hash);
     if (found == index->by_hash.end()) { ++b.hash_misses; return false; }
-    for (const auto& candidate : found->second) {
-        auto& c = *b.controllers[candidate.package];
-        std::shared_lock<std::shared_mutex> lock(c.mutex);
-        // A generation exchanged since the index was built sees the draw once the index is rebuilt.
-        if (c.stopped || !c.active || c.generation != index->generations[candidate.package]) continue;
-        const auto& section = c.active->package.sections[candidate.section];
-        if (section.match_count == kCharacterNone) {
-            // Hash-only sections (hidden game meshes) act for an activated character only.
-            if (!c.active->activated.load(std::memory_order_relaxed)) continue;
-        } else if (section.match_count != r.count || (section.match_first != kCharacterNone && section.match_first != r.first)) {
-            continue;
+    // The sections of the draw's hash in two rounds (D-173). First those with a component, a character's
+    // parts: the package records the draw as its character's, and the lists of every section the draw matches
+    // run with it, whichever INI declares them. Only a draw none of them matches goes to the sections without
+    // a component (another INI's of a Mod's folder, a Mod's own without one): their lists run once, with the
+    // first package that has such a section, and the plan says what the draw becomes.
+    bool component_matched = false;
+    for (const bool components : {true, false}) {
+        if (!components && component_matched) return false;
+        for (const auto& candidate : found->second) {
+            auto& c = *b.controllers[candidate.package];
+            std::shared_lock<std::shared_mutex> lock(c.mutex);
+            // A generation exchanged since the index was built sees the draw once the index is rebuilt.
+            if (c.stopped || !c.active || c.generation != index->generations[candidate.package]) continue;
+            const auto& section = c.active->package.sections[candidate.section];
+            if ((section.component != kCharacterNone) != components) continue;
+            if (section.match_count == kCharacterNone) {
+                // Hash-only sections (hidden game meshes) act for an activated character only.
+                if (!c.active->activated.load(std::memory_order_relaxed)) continue;
+            } else if (section.match_count != r.count || (section.match_first != kCharacterNone && section.match_first != r.first)) {
+                continue;
+            }
+            if (section.stride_slot != kCharacterNone) {
+                // A branch of a list that chooses the component by `vbN->stride` (LIMIT-041): the original
+                // reads the bound vertex buffer's stride, the layer the draw's pipeline binding.
+                std::shared_lock<std::shared_mutex> resources(b.device->res_mx);
+                const auto pipe = b.device->pipes.find(r.pipeline);
+                uint32_t stride = 0;
+                std::string why;
+                if (pipe == b.device->pipes.end() || !CharacterGeneration::vertex_stride(pipe->second, section.stride_slot, stride, why) ||
+                    stride != section.stride) continue;
+            }
+            if (components) component_matched = true;
+            const uint64_t plans_before = t_draw_plans;
+            if (generation_record(*c.active, cb, r, candidate.section)) return true;
+            // The draw's lists ran and left the draw to the game: they do not run again for another package.
+            if (!components && t_draw_plans != plans_before) return false;
         }
-        if (section.stride_slot != kCharacterNone) {
-            // A branch of a list that chooses the component by `vbN->stride` (LIMIT-041): the original
-            // reads the bound vertex buffer's stride, the layer the draw's pipeline binding.
-            std::shared_lock<std::shared_mutex> resources(b.device->res_mx);
-            const auto pipe = b.device->pipes.find(r.pipeline);
-            uint32_t stride = 0;
-            std::string why;
-            if (pipe == b.device->pipes.end() || !CharacterGeneration::vertex_stride(pipe->second, section.stride_slot, stride, why) ||
-                stride != section.stride) continue;
-        }
-        if (generation_record(*c.active, cb, r, candidate.section)) return true;
     }
     return false;
 }

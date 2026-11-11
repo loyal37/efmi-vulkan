@@ -17,6 +17,7 @@
 #include <unordered_set>
 
 void HostCompileGraph(const std::wstring&, const std::vector<std::wstring>&);
+bool HostSectionFolder(const wchar_t* section, std::wstring& folder);
 // Pinned original resource identity encoding in ResourceHash.cpp.
 float EncodeFloat30(const uint32_t hash);
 
@@ -76,7 +77,8 @@ uint32_t integer(float value)
     return uint32_t(value);
 }
 class CharacterCore : public RuntimeExtension {
-    struct FoundSection { efvk::CharacterSection section; uint32_t original = efvk::kCharacterNone; };
+    // `beside`: a section of another INI of the Mod's folder (D-173), never a component.
+    struct FoundSection { efvk::CharacterSection section; uint32_t original = efvk::kCharacterNone; bool beside = false; };
     // One character Mod of the generation (D-131): its contract, what discovery found of it and what
     // its preparation made. A generation of one Mod has one, a folder generation one per character Mod.
     struct Mod {
@@ -86,6 +88,10 @@ class CharacterCore : public RuntimeExtension {
         // component id and LOD they assign; the contract is completed once the skeleton is known.
         std::shared_ptr<CharacterDiscovery> discovery, facts;
         std::vector<FoundSection> found;
+        // The folder of the Mod's character INI (the one that declares its initializer), as the parser names
+        // it from the root; known while the generation loads (D-173).
+        std::wstring folder;
+        bool folder_known = false;
         size_t outside_package = 0;
         std::vector<uint32_t> original_components;
         CustomResource* skeleton = nullptr;
@@ -751,9 +757,27 @@ global $mod_id = -1
     // part of its contract; the component it assigns decides what it draws, none makes it a candidate
     // to hide the game's mesh, which the live plan decides. Everything else stays the game's or, with
     // texture identities, runs against them, as for a package.
+    // The Mod whose folder holds the INI a section was parsed from (D-173): in a folder generation the Mod with
+    // the deepest such folder, in a generation of one Mod that Mod (its inputs are its folder's INIs and the
+    // libraries it calls); null for none.
+    Mod* holder_of(const std::wstring& section)
+    {
+        if (!folder_) return &mods_[0];
+        std::wstring path;
+        if (!HostSectionFolder(section.c_str(), path)) return nullptr;
+        Mod* best = nullptr;
+        for (auto& m : mods_)
+            if (m.folder_known && path.size() >= m.folder.size() && !_wcsnicmp(path.c_str(), m.folder.c_str(), m.folder.size()) &&
+                (!best || m.folder.size() > best->folder.size())) best = &m;
+        return best;
+    }
     bool discover_sections(std::wstring& why)
     {
         const std::wstring component_id = L"$" + core_namespace + L"component_id";
+        for (auto& m : mods_) {
+            m.folder.clear();
+            m.folder_known = HostSectionFolder((L"commandlist" + m.mod + L"initializemergedskeleton").c_str(), m.folder) && !m.folder.empty();
+        }
         for (const auto& hashed : G->mTextureOverrideMap) {
             for (const auto& entry : hashed.second) {
                 const bool mesh = entry.match_index_count.op != FuzzyMatchOp::ALWAYS;
@@ -790,13 +814,33 @@ global $mod_id = -1
                     m->found.push_back(s);
                     continue;
                 }
-                if (mesh) { if (m) ++m->outside_package; continue; }
+                if (mesh) {
+                    // A mesh section of another INI (D-173, review R-03). The original looks an indexed draw up
+                    // among every section of the registry whose match_index_count is the draw's, by the hash of
+                    // the draw's index region (CheckTextureOverride = ib; BuildTextureOverrideDrawMaps), whichever
+                    // INI declares it. It joins the Mod whose folder holds its INI, without a component: its
+                    // lists run at the draws it matches, and their plan says what the draw becomes.
+                    FoundSection beside;
+                    beside.section.hash = hashed.first; beside.beside = true;
+                    const bool first_known = entry.match_first_index.op == FuzzyMatchOp::ALWAYS || constant(entry.match_first_index, beside.section.match_first);
+                    Mod* holder = constant(entry.match_index_count, beside.section.match_count) && beside.section.match_count && first_known
+                                      ? holder_of(entry.ini_section) : nullptr;
+                    if (holder && holder->discovery) { holder->found.push_back(beside); continue; }
+                    if (m) ++m->outside_package;
+                    continue;
+                }
                 if (!textures) return fail(why, L"Generation contains an unprofiled override; source-image identity is unavailable");
                 ++texture_sections;
             }
         }
         for (auto& m : mods_) {
             if (!m.discovery) continue;
+            // A section beside the Mod's own with the same draw keys adds nothing: the lists of every section a
+            // draw matches run with it, whichever of them the host found the draw by.
+            std::set<std::tuple<uint32_t, uint32_t, uint32_t>> keys;
+            for (const auto& f : m.found) if (!f.beside) keys.insert({f.section.hash, f.section.match_count, f.section.match_first});
+            m.found.erase(std::remove_if(m.found.begin(), m.found.end(), [&](const FoundSection& f) {
+                return f.beside && !keys.insert({f.section.hash, f.section.match_count, f.section.match_first}).second; }), m.found.end());
             if (m.found.size() > efvk::kCharacterSections) return fail(why, L"More mesh sections than one character contract holds");
             // In one order whatever else the generation holds: the registry is a hash table, whose order
             // changes with the other Mods' sections in it (D-131).

@@ -113,6 +113,7 @@ bool CharacterGeneration::plan_draw(const efmi::frontend::RuntimeDraw& request, 
     // A folder generation's packages share its INI generation and owned runtime: one plan at a time.
     std::unique_lock<std::mutex> shared;
     if (plan_mx) shared = std::unique_lock<std::mutex>(*plan_mx);
+    ++t_draw_plans;
     if (presenter && !draw_work_failed && program->gpu() && !program->gpu()->scope_active()) {
         try { program->gpu()->begin_draw(); gpu = program->gpu().get(); } catch (const std::exception&) {}
     }
@@ -213,23 +214,30 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     {
         std::shared_lock<std::shared_mutex> lock(device->res_mx);
         const CharacterSection* const section = &package.sections[section_index];
-        if (!activated.load(std::memory_order_relaxed)) {
-            if (!memory_allows_activation()) { ++counters[C_MEMORY]; return false; }
-            // The package goes to the GPU now; this draw is skipped, as the Core skips a new object's
-            // first frame (D-103): the character is never the game's mesh before the Mod's.
-            activate(); ++counters[C_PREPARING]; return true;
-        }
-        if (!ready.load(std::memory_order_relaxed)) {
+        // A draw that needs the package on the device while it is not there: what the draw becomes.
+        const auto bring_up = [&] {
+            if (!activated.load(std::memory_order_relaxed)) {
+                if (!memory_allows_activation()) { ++counters[C_MEMORY]; return false; }
+                // The package goes to the GPU now; this draw is skipped, as the Core skips a new object's
+                // first frame (D-103): the character is never the game's mesh before the Mod's.
+                activate(); ++counters[C_PREPARING]; return true;
+            }
             // The worker ended without the package: the game's draw stays, and the activation is tried again
             // at its time. While the mesh and arenas are on their way the draw is skipped, as before.
             if (worker_failed.load(std::memory_order_acquire)) { retry_activation(); ++counters[C_ACTIVATION]; return false; }
             ++counters[C_PREPARING]; return true;
+        };
+        const bool on_device = activated.load(std::memory_order_relaxed) && ready.load(std::memory_order_relaxed);
+        if (!on_device && section->component != kCharacterNone) return bring_up();
+        if (on_device) {
+            ++counters[C_MATCHED];
+            if (present != gate_frame) begin_gate_frame(present);
         }
-        ++counters[C_MATCHED];
-        if (present != gate_frame) begin_gate_frame(present);
         if (section->component == kCharacterNone) {
-            // Exact IB-only override: no fabricated identity or bone import.
-            // Live conditions still run; a changed rule may only emit an empty skip.
+            // A section without a component (D-173): no identity, no bone import. Its lists run whatever the
+            // package's state, as the original's run at every draw the section matches (a variable they set
+            // is set); only a draw their plan makes the Mod's, hidden or drawn with its textures, needs the
+            // package on the device and brings it up.
             if (program) {
                 efmi::frontend::RuntimeDraw request;
                 request.hash = section->hash; request.count = r.count; request.first = r.first;
@@ -247,16 +255,18 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 }
                 bool skip = false, added = false, textures = false; std::string reason;
                 if (!plan_draw(request, runtime_list, skip, added, reason, nullptr, &textures)) return refuse(C_STATE, "INI hide: " + reason);
+                if (!skip && !textures) return false;
+                // A draw the plan added gets its material plans now: a later plan of the same state adds nothing.
+                if (added && !refresh_materials()) return false;
+                if (!on_device) return bring_up();
                 if (!skip) {
-                    if (!textures) return false;
-                    if (added && !refresh_materials()) return false;
                     const auto pipe = device->pipes.find(r.pipeline);
                     if (pipe == device->pipes.end() || !pipe->second.recipe || !pipe->second.layout)
                         return refuse(C_PIPELINE, "texture-only draw pipeline metadata missing");
                     return record_textures(cb, r, pipe->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
                 }
                 if (runtime_list.count) return refuse(C_STATE, "INI hide override unexpectedly emits geometry");
-            }
+            } else if (!on_device) return bring_up();
             // With the package's mesh left to the game this frame, what it would hide stays as well.
             if (!gate_open) return gated();
             ++counters[C_HIDDEN]; return true;

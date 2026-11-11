@@ -91,7 +91,7 @@
 
 ## LIMIT-047: What makes a Mod a Mod, and the all-or-nothing plan (2026-11-10, docs/architecture-review-2.1.md)
 
-- A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections match no draw, without a notice. A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
+- A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections matched no draw (since D-173, 2026-11-11, those of the INIs of a character Mod's folder are matched; those of an INI outside every such folder still are not, with a notice). A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
 
 ## BUG-077: A broken buffer file dropped the whole Mod (fixed in the 2.1.2 tree)
 

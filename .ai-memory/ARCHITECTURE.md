@@ -97,11 +97,17 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
 ## What makes a Mod a Mod (the gates)
 
 1. An enabled INI with a section `[CommandListInitializeMergedSkeleton]` is a character Mod
-   (`CharacterProgram::mods_characters`). Any other INI is an input without draws of its own.
+   (`CharacterProgram::mods_characters`) and has a package. Any other INI is an input: its lists and keys
+   run, and its mesh sections are matched as the next gate says.
 2. The folder loads (above).
-3. Discovery (`CharacterCore::discover_sections`, `discover_contract`): mesh sections are
-   TextureOverrides with a constant `match_index_count` whose list assigns a constant component and LOD;
-   the skeleton comes from the Mod's initializer and its pools. A LOD no line assigned has no remap.
+3. Discovery (`CharacterCore::discover_sections`, `discover_contract`): the host's sections are the
+   registry's TextureOverrides with a constant `match_index_count`, as the original's draw maps hold them
+   (D-173). One of the Mod's namespace whose list assigns a constant component and LOD is a part of the
+   character; one that assigns none, and one of another INI of the Mod's folder, is a section without a
+   component (its lists run at the draws it matches, and the plan says whether the draw is hidden, drawn
+   with the Mod's textures, or left). The skeleton comes from the Mod's initializer and its pools. A LOD
+   no line assigned has no remap. Not matched yet: the mesh sections of an INI outside every character
+   Mod's folder.
 4. Registration: `RegisterMod` compares the Mod's required version with the installed Core's `$version`
    (read from the Core's main.ini), as the original's.
 5. Each draw: `record()`.
@@ -109,7 +115,8 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
 ## The draw path (`CharacterGeneration::record`)
 
 `vkCmdDrawIndexed` hook, then the device-wide index of sections (prefiltered by index count, the index
-region hashed with CRC-32C), then per matched draw: activation of the package on its first match,
+region hashed with CRC-32C; the sections of the hash in two rounds, those with a component first, and a
+draw's lists run once: `character_record`, D-173), then per matched draw: activation of the package on its first match,
 identification of the object from the instance entry (set 2 binding 0), skeleton import for the
 component (GPU dispatches in front of the recording's batch, D-127), `IniRuntime::draw` (the matched
 sections' lists into a plan, with an owned scope for owned work), `CharacterProgram::plan` (the plan

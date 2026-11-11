@@ -469,7 +469,8 @@ around it is held to the original's code:
 Every enabled INI of the folder is an input (D-155), as the original's `include_recursive`: a Mod
 that is no character Mod runs its [Present] and keys as owned work, keeps its persistent variables in
 mods-folder.ini, and its TextureOverride sections by texture hash act in replaced draws' pixel slot
-checks; it acts on no other draw (the layer matches none) and is no package. The native libraries'
+checks; it is no package. Its mesh sections are matched at draws where its INI lies in a character Mod's
+folder ("Which sections a draw is looked up in", below); elsewhere not yet. The native libraries'
 files (RabbitFX) still join by their key and ShaderRegex sections only. A copy between declared
 resources the plan does not make (`ResourceA = copy ResourceB`, `= copy_desc`, in a [Constants] list or
 a draw's) no longer refuses the generation or the draw: the destination stays null, as the original
@@ -675,6 +676,42 @@ Checks: plan_test (67 checks; the lists `copyslot`, `unlessnull`, `slottoslot`, 
 `postskip` are new, and the checks that asserted a whole refusal state the new rule); the Core pool, native
 bridge, texture query and resource planner tests; the INI runtime test (502); the judge of the section
 before, whose cases and sweep were run on the build before with the new records and failed there.
+
+## Which sections a draw is looked up in (D-173; docs/architecture-review-2.1.md Phase 2, P2-1)
+
+The original (XXMI with `track_region_hashes = 1`, as EFMI sets it): the Core's
+`[ShaderRegexEnableTextureOverrides]` runs `CheckTextureOverride = ib` at every indexed draw of a vertex
+shader of model 4 or 5. The candidates are the registry's TextureOverrides whose `match_index_count` is
+`= N` for the draw's index count (BuildTextureOverrideDrawMaps, IniHandler.cpp:4427); the draw's index
+region is hashed only when there are candidates; those of that hash whose other draw keys match run
+their lists (FindTextureOverrides, CommandList.cpp:10304; CheckTextureOverrideCommand::run). The INI a
+section is written in plays no part, and a section without `match_index_count` is no candidate for an
+index buffer.
+
+The layer:
+
+- The device's index holds the registry's sections with a constant `match_index_count` and a constant
+  or no `match_first_index`. A section of a character Mod's namespace whose list assigns a component is
+  a part of that character. Every other one is a section without a component of the package whose
+  folder holds its INI: the Mod's own that assign no component (as before), and since 2026-11-11 those
+  of the other INIs of the Mod's folder (an installed Mod's `Texture\hair.ini`, the panels' `k\1.ini`).
+  One with the draw keys of a section the package already has is not added.
+- A draw's candidates are taken in two rounds: the sections with a component first. Only a draw none of
+  them matches goes to the sections without one, and its lists run once.
+- The frontend's matcher is the original's (`find_texture_override_for_hash` with the draw's call
+  information): once the host hands a draw over, the lists of every section it matches run, whichever
+  package took the draw.
+- A section without a component runs its lists whatever the package's state. The plan says what the
+  draw becomes: left to the game (the lists set a variable), drawn again with the Mod's textures
+  (D-083), or hidden. Only the last two need the package on the device and bring it up.
+- Not yet: the sections of an INI outside every character Mod's folder (it has no package to carry
+  them), a Mods folder without any character Mod, a section without a component that draws a mesh of
+  its own (refused: "INI hide override unexpectedly emits geometry"), and a texture of another package's
+  folder bound in a draw ("INI image not in prepared resource catalogue").
+- Checked: the live INI scene's Mods folder has `fixture\parts\part.ini` with a section for the scene's
+  draw that no section of the character INI matches (three indices at 30); its variable is 1 after the
+  scene, and the package has that section. Offline, the installed Mods in every key state: 277 sections
+  plan as before, 11 are new (nine panels' marks, last rite's two hair sections), none changed.
 
 ## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
 

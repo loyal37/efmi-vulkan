@@ -450,14 +450,36 @@ static void register_tests()
           "a truncated or foreign module is refused and the output stays");
 }
 
+// The first index of the draw a section is planned with (D-173): its own; for a section without a component
+// that takes any, the lowest no section with a component of the same hash and count takes, because the backend
+// hands a draw such a section matches to it (its plan runs this section's lists as well). False when every
+// draw of the section is one of those: it has no plan of its own.
+template <typename Sections, typename Section>
+static bool section_first(const Sections& all, const Section& s, uint32_t& first)
+{
+    first = s.match_first == kCharacterNone ? 0 : s.match_first;
+    if (s.component != kCharacterNone) return true;
+    for (;;) {
+        bool taken = false;
+        for (const auto& other : all) {
+            if (other.component == kCharacterNone || other.hash != s.hash || other.match_count != s.match_count) continue;
+            if (other.match_first == kCharacterNone) return false;
+            taken |= other.match_first == first;
+        }
+        if (!taken) return true;
+        if (s.match_first != kCharacterNone) return false;
+        first += 3;
+    }
+}
+
 // A section's draw as the backend hands it to the plan, with what offline stands in for the game.
 template <typename Section>
-static efmi::frontend::RuntimeDraw section_draw(const Section& s, uint32_t lod, uint64_t frame, CharacterProgram& program,
+static efmi::frontend::RuntimeDraw section_draw(const Section& s, uint32_t first, uint32_t lod, uint64_t frame, CharacterProgram& program,
                                                 const std::vector<efmi::gpu::SourceRegister>& vertex)
 {
     efmi::frontend::RuntimeDraw request;
     request.hash = s.hash; request.count = s.match_count == kCharacterNone ? 0 : s.match_count;
-    request.first = s.match_first == kCharacterNone ? 0 : s.match_first;
+    request.first = first;
     request.frame = frame; request.seconds = float(frame) / 60.0f;
     request.mod = program.folder_index();
     if (s.component != kCharacterNone) { request.component = s.component; request.lod = lod; request.identity = 1; }
@@ -541,10 +563,12 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
             for (const auto& s : m.package.sections) {
                 if (s.lod != kCharacterNone) current_lod = s.lod;
                 const uint32_t lod = s.component == kCharacterNone ? kCharacterNone : current_lod;
+                uint32_t first = 0;
+                if (!section_first(m.package.sections, s, first)) continue;
                 char section_key[96];
                 snprintf(section_key, sizeof(section_key), "%04zu %08x count %u first %u c%u lod%u", size_t(&s - m.package.sections.data()), s.hash,
                          s.match_count, s.match_first, s.component, lod);
-                auto request = section_draw(s, lod, frame, *m.program, vertex);
+                auto request = section_draw(s, first, lod, frame, *m.program, vertex);
                 CharacterList list; bool skip = false, added = false, textures = false; std::string why;
                 ++plans[i];
                 auto& digest = digests[i];
@@ -704,6 +728,8 @@ static void write_plans(JsonWriter& w, CharacterProgram& program, CharacterProgr
     uint32_t current_lod = 0; // as the backend: a section that assigns the LOD changes it for those that do not
     for (const auto& s : package.sections) {
         if (s.lod != kCharacterNone) current_lod = s.lod;
+        uint32_t first = 0;
+        if (!section_first(package.sections, s, first)) continue;
         for (uint32_t lod : {s.component == kCharacterNone ? kCharacterNone : current_lod}) {
             efmi::frontend::RuntimeInput input;
             ++frame;
@@ -716,7 +742,7 @@ static void write_plans(JsonWriter& w, CharacterProgram& program, CharacterProgr
             // Nor are its vertex buffers: a list that tells LODs apart by `vbN->stride` is refused here, unless
             // the section is one of its branches (LIMIT-041), which the backend matches only to a draw whose
             // pipeline binds that stride.
-            auto request = section_draw(s, lod, frame, program, vertex);
+            auto request = section_draw(s, first, lod, frame, program, vertex);
             CharacterList list; bool skip = false, added = false, textures = false; std::string refused;
             const bool ok = program.plan(request, package, list, skip, added, refused, nullptr, &textures);
             // A list that tells LODs apart by `vbN->stride` plans once the host answers it, as the game's

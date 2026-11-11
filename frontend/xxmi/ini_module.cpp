@@ -115,6 +115,10 @@ void HostVisitShaderSources(const std::function<void(const std::wstring&,const s
         visit(entry.first,path,UINT(entry.second.compile_flags),recursive,sources);
     }
 }
+// The folder of the INI a section was parsed from, as the original keeps it for the files the section names
+// (get_namespaced_section_path: from the root, with its separator; empty for an INI at the root). False for a
+// section the parser does not hold. Valid while the generation loads.
+bool HostSectionFolder(const wchar_t* section, std::wstring& folder) { return get_namespaced_section_path(section, &folder); }
 void HostParseTextureOverrides() { ParseTextureOverrideSections(); }
 void HostParseResourceMatching() {
     G->track_region_hashes=GetIniBool(L"Rendering",L"track_region_hashes",false,nullptr);

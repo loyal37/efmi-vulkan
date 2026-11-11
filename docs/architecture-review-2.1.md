@@ -396,6 +396,15 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > lines before, each able to refuse a draw; 101 now, each a command that does nothing, and 7
 > `refuse_draw(`. Phase 1 still ends in a deployment and a user-started session.
 
+> Progress, 2026-11-11, Phase 2 begun (sandbox only, nothing deployed; D-173, docs/ini-semantics.md "Which
+> sections a draw is looked up in"): P2-1, first part. The host's sections are the registry's with a
+> constant `match_index_count`, as the original's draw maps; one of another INI of a character Mod's
+> folder is a section without a component of that Mod's package, and a draw's lists run once. Found in
+> the installed Mods: last rite's `Texture\hair.ini` (two hair draws no character section matches) and 21
+> panel INIs' marks. Open of P2-1: INIs outside every character Mod's folder, a Mods folder without a
+> character Mod. P2-2 to P2-4 not begun. The gate A of section 2 is thereby no longer a gate for an INI
+> beside a character INI; it still decides which INIs have a package.
+
 Each step test first, as the working agreement says: the check that fails before, the change, the
 touched area. Phases 0 and 3a come first: they are small, and they make the rest measurable.
 

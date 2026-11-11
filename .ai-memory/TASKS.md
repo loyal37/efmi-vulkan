@@ -1,5 +1,16 @@
 # EFMI Vulkan - Tasks
 
+## Active: Phase 2 of the review, a Mod by what it does (2026-11-11, D-173; the user: this is the point)
+
+- Done (sandbox only, not deployed): P2-1's first part, the sections of every INI of a character Mod's folder (D-173, CURRENT_STATE).
+- Next, each test first:
+  - P2-1, second part: the mesh sections of an INI outside every character Mod's folder. The frontend reports them with the folder of their INI; the layer makes a package without a skeleton per such folder (no components, no bones: the package validator and the mesh upload take that), and a Mods folder without any character Mod loads (the folder's program is the generation's own, not a package's view). The notice "its mesh sections replace nothing" and `unmatched` go. Check: a scene with a Mods folder that holds the fixture and a plain INI for the scene's unmatched draw; one without any character Mod.
+  - P2-2: a section without a component that draws a mesh of its own (refused today: "INI hide override unexpectedly emits geometry"). The game's pipeline with its vertex stage kept (as the texture-only draw, `keep_vertex`), the Mod's buffers by `CharacterPackage::vertex_input`, no merged skeleton: the blend stream's bones are the game's own and are not validated against a merged one. Check: the scene's unmatched draw replaced by a Mod's triangle elsewhere (the scene needs a switch for what it expects at that place).
+  - A texture of another package's folder bound in a draw (the catalogue is per package; BUG-091's message may be this).
+  - P2-3: the character contract from the executed lists instead of the exporter's shape at load (R-04).
+  - P2-4: instanced character draws (R-05).
+- To see in the game (nothing of it has run there): last rite's hair with the Mod's diffuse texture; no new notice for any installed Mod; the panels' `$active` marks as before.
+
 ## Next: 2.1.4 in the game (BUG-092; in the main checkout's dist since 2026-11-11 20:16)
 
 - In the game, at the user's next start: with frame generation on, the notices of an F10 stand still (no flicker); `notices.busy` stays 0 and `notices.slots` says how many presentations were pending at once; `text_bytes` 0 again some seconds after the last notice.

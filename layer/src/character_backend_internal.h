@@ -164,6 +164,8 @@ struct Identity {
 // The index hashing's counters (character_backend_index.cpp).
 extern std::atomic<uint64_t> g_hash_full, g_hash_bytes, g_hash_new, g_hash_gen, g_hash_quick, g_hash_due, g_quick_reads, g_quick_skipped;
 extern std::atomic<uint64_t> g_quick_read_us;
+// The plans this thread ran for replaced draws (character_backend_index.cpp, D-173).
+extern thread_local uint64_t t_draw_plans;
 // Meshes uploaded and kept (character_backend_generation.cpp).
 extern std::atomic<uint64_t> g_mesh_uploads, g_meshes_kept;
 // The discard gates' state and the pipelines with the character dither (character_backend_twins.cpp).
