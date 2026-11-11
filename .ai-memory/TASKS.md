@@ -1,5 +1,11 @@
 # EFMI Vulkan - Tasks
 
+## Next: 2.1.3 in the game (the user's session; built 2026-11-11)
+
+- The user starts the game on Vulkan through the EFMI Vulkan Launcher, whose layer folder names `F:\efmi vulkan\dist`. First check: the log's first line names 2.1.3. Nothing of 2.1.3 has run in the game.
+- What to look at is in the lists below (Phase 1, BUG-088, the review's Phase 0, and the older items from 1.9.7 on). One finding at a time: a notice's text, a character that is missing or wrong, the status counters.
+- It is a large step for the game (2.0.8 and the release 2.0.9 were the last builds there): if something that worked is broken, the 2.0.8 files in `build/dist-2.0.8-20261027` of the main checkout tell an old fault from a new one (copied back over `dist` while the game is closed, or run offline from there).
+
 ## Active: Phase 1 of the review, a replaced draw's lists against a draw state (2026-11-11, D-161 to D-163)
 
 - Done offline (sandbox only, nothing deployed, nothing loaded into the game): P1-1 (`frontend/xxmi/draw_state.h`, every resource assignment total), P1-2 (a draw recorded with the state it sees, one table per slot), P1-3 (the lists run to their end; a command that cannot act does nothing; what the host cannot draw leaves the draw to the game afterwards), P1-4 (operands nothing answers read one table; both tables generated into docs/ini-execution-matrix.json), and of P1-5: a vertex slot the pipeline does not read is ignored, the blend-index edit is optional.

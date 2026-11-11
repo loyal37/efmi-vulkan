@@ -6,6 +6,14 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.3: the development build for the next Vulkan session (2026-11-11)
+
+- The user, 2026-11-11: build 2.1.3, to play on Vulkan next and see Phase 1 and the EFMITTL work in the game. The commit changes `EFVK_VERSION` only.
+- What the game has loaded before it: the development folder `F:\efmi vulkan\dist` held 2.0.8 (built 2026-10-27 20:44; its log's last load is 2.0.8 on 2026-10-28 19:37), not 2.1.2. The user's start of 2026-11-11 09:51 through the EFMI Vulkan Launcher loaded the release 2.0.9 from the launcher's own folder (that project's record); since 10:13 the launcher's layer folder names `F:\efmi vulkan\dist`. The project records no game session of 2.1.0 to 2.1.2.
+- So 2.1.3 is the first build in the game with all of: 2.1.0 to 2.1.2 (the proxy loader, meshes copied without resizable BAR, the overlay's notices), D-137 and D-138 (2026-10-28), D-154 (the INI parsing review), the review plan's offline parts (ef77c03), the backend in parts (144abc0), Phase 1 (f9e6230) and the EFMITTL of 2026-11-10 (67073a5). A difference seen in the game has all of these as candidates; the 2.0.8 files are kept for a comparison (below).
+- Verified on the work tree's build of this commit (sandbox): the whole build, shared header stamp unchanged (0x4437a4d9119220e0); text, unit 117, the original INI runtime 514 checks, INI evaluation 65, the INI execution matrix, the judge and the judge of replaced draws; loaded through the inject entry with dist's configuration the status reports version 2.1.3, entry inject, mode probe. The whole suite ran on this tree before the version line changed (67073a5, the EFMITTL session: 57 steps passed).
+- `scripts/smoke_m2_config.py` (of 2026-10-13, not a suite step) passes its version line and fails the next (`resources`, `counts.image_content`); not looked into, not repaired.
+
 ## BUG-088: the EFMITTL of 2026-11-10 in the layer (2026-11-11, D-170 to D-172)
 
 - A session of its own, on branch claude/efmittl-compat-cc233f, beside the Phase 1 session (draw state). Sandbox only: nothing deployed, nothing loaded into the game, dist/ of the main checkout untouched.
