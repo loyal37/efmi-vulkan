@@ -2,7 +2,7 @@
 
 ## Next: 2.1.3 in the game (the user's session; built 2026-11-11)
 
-- The user starts the game on Vulkan through the EFMI Vulkan Launcher, whose layer folder names `F:\efmi vulkan\dist`. First check: the log's first line names 2.1.3. Nothing of 2.1.3 has run in the game.
+- First session, 2026-11-11 19:24 (the user's start through the EFMI Vulkan Launcher; CURRENT_STATE has the figures): 2.1.3 loaded, 19 Mods in the folder, four characters replaced, EFMITTL's translucency capturing with no error, no refusal counter, no notice of a degraded line, no crash line. Open from it: what the user saw (the characters, the translucent parts, the first frame, the frame rate felt); the characters not on screen in that session (last rite and ardelia for the translucency, every other installed Mod); a frame-rate comparison, which needs an interleaved A/B in the game (`scripts/ab_game.py`) at the user's word.
 - What to look at is in the lists below (Phase 1, BUG-088, the review's Phase 0, and the older items from 1.9.7 on). One finding at a time: a notice's text, a character that is missing or wrong, the status counters.
 - It is a large step for the game (2.0.8 and the release 2.0.9 were the last builds there): if something that worked is broken, the 2.0.8 files in `build/dist-2.0.8-20261027` of the main checkout tell an old fault from a new one (copied back over `dist` while the game is closed, or run offline from there).
 
