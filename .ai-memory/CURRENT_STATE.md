@@ -13,7 +13,8 @@
 - The sandbox program presents further images behind a slow frame (`--present-burst K`): the one way to have several presentations pending that Vulkan allows (KNOWN_ISSUES, BUG-092).
 - Failing first: `owned_present_test.py` notices_on_every_presentation, 24 of 48 presentations without the notice on the build before; 42 of 42 with it now, six slots, the text images released after, validation clean, both entries.
 - Verified in the work tree's build of 2.1.4 (sandbox): the whole build, shared header stamp unchanged; text, unit 117, the original INI runtime 514, INI evaluation 65, the INI execution matrix, the judge and the judge of replaced draws, owned Present on a swap chain 80 (the 14 new among them), probe end to end, modes 50, character replacement 377 and its package checks 114, live INI rendering 122, Vulkan validation 76. All passed.
-- Not done: 2.1.4 is not in the main checkout's `dist`. The game was running 2.1.3 while this was made, and the layer's DLL is replaced only while the game is closed; then `scripts/build.py` in the main checkout, and the user's next start loads it. Nothing of 2.1.4 has run in the game.
+- Deployed for the development setup, 2026-11-11 20:16: the user had closed the game; the main checkout's `dist` built from bbccf73 with the game not running, `efmi_vk.cfg` and the saved settings as they were. In the sandbox through the inject entry with dist's configuration and the installed Mods at Vulkan 1.3: version 2.1.4, mode probe, 19 packages, none left out, validation clean; the step "owned Present on a swap chain" on that dist 80 checks passed.
+- Not done: nothing of 2.1.4 has run in the game. The user's next start loads it; what to look at is in TASKS.
 
 ## 2.1.3: the development build for the next Vulkan session (2026-11-11)
 

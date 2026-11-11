@@ -1,9 +1,8 @@
 # EFMI Vulkan - Tasks
 
-## Next: 2.1.4 into the main checkout's dist, then the game (BUG-092)
+## Next: 2.1.4 in the game (BUG-092; in the main checkout's dist since 2026-11-11 20:16)
 
-- Once the user has closed the game: `scripts/build.py` in the main checkout (the game not running, checked), the status' version through the inject entry with dist's configuration, the suite steps that load it. The 2.1.3 files in `dist` are the same code but for `layer/src/notices.cpp` and the version.
-- In the game then: with frame generation on, the notices of an F10 stand still (no flicker); `notices.busy` stays 0 and `notices.slots` says how many presentations were pending at once; `text_bytes` 0 again some seconds after the last notice.
+- In the game, at the user's next start: with frame generation on, the notices of an F10 stand still (no flicker); `notices.busy` stays 0 and `notices.slots` says how many presentations were pending at once; `text_bytes` 0 again some seconds after the last notice.
 
 ## 2.1.3 in the game (the user's session; built 2026-11-11)
 
