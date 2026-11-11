@@ -139,13 +139,29 @@ bool CharacterGeneration::pixel_texture_uncached(const DrawRec& r, unsigned slot
     if (!registers_known->readable) return unknown("the fragment module is not read by the register rule");
     const auto* reg = efmi::gpu::find_source_register(registers_known->list, 't', slot);
     if (!reg) return true;
-    if (reg->kind != efmi::gpu::SourceRegister::ImageSrv || reg->count != 1 || reg->set >= kMaxSets)
+    if (reg->kind != efmi::gpu::SourceRegister::ImageSrv || reg->count != 1 || reg->set >= kMaxSets) {
+        // A buffer behind the slot (D-170): the original's size queries read "not a texture" of it. The view
+        // of a structured buffer has no format; a buffer of words is structured or raw (R32_TYPELESS) and a
+        // typed buffer's view format is not tracked, so those are not told.
+        if (reg->count == 1 && (reg->kind == efmi::gpu::SourceRegister::BufferSrv || reg->kind == efmi::gpu::SourceRegister::TexelSrv)) {
+            texture.dimension = 1; // D3D11_RESOURCE_DIMENSION_BUFFER
+            texture.format_known = reg->kind == efmi::gpu::SourceRegister::BufferSrv && !reg->words;
+        }
         return unknown("a pixel slot is not a single image");
+    }
     const char* why = nullptr;
     bool empty = false;
-    const ImageInfo* image = bound_image(r, reg->set, reg->binding, empty, why);
+    const ImageViewInfo* view = nullptr;
+    const ImageInfo* image = bound_image(r, reg->set, reg->binding, empty, why, &view);
     if (empty) return true; // a null view: an empty slot
     if (!image) return unknown(why);
+    // What the original's property getters read of the resource behind the view (D-170): its kind and its
+    // own size, mip levels and array size, and the format of the DX11 view of the same resource.
+    texture.dimension = image->type == VK_IMAGE_TYPE_1D ? 2u : image->type == VK_IMAGE_TYPE_2D ? 3u : image->type == VK_IMAGE_TYPE_3D ? 4u : 0u;
+    texture.width = image->extent.width; texture.height = image->extent.height;
+    texture.levels = image->levels; texture.layers = image->layers;
+    texture.view_format = view ? dxgi_view_format(view->format, view->range.aspectMask) : 0u;
+    texture.format_known = texture.view_format != 0;
     texture.described = dx11_texture_desc(*image, texture.description);
     if (!dx11_texture_hash(*image, hash)) return unknown("an image without a known original hash");
     bound = true;
@@ -154,7 +170,8 @@ bool CharacterGeneration::pixel_texture_uncached(const DrawRec& r, unsigned slot
 
 // Caller holds res_mx. The image the draw binds at element 0 of (set, binding): null with `empty`
 // for a null view, null with `why` when the layer cannot tell.
-const ImageInfo* CharacterGeneration::bound_image(const DrawRec& r, uint32_t set_index, uint32_t binding, bool& empty, const char*& why)
+const ImageInfo* CharacterGeneration::bound_image(const DrawRec& r, uint32_t set_index, uint32_t binding, bool& empty, const char*& why,
+                                                  const ImageViewInfo** bound_view)
 {
     empty = false;
     if (set_index >= kMaxSets) { why = "a set outside the tracked slots"; return nullptr; }
@@ -176,6 +193,7 @@ const ImageInfo* CharacterGeneration::bound_image(const DrawRec& r, uint32_t set
     if (view == device->image_views.end() || view->second.id != value->second.image_view_id) { why = "unknown image view"; return nullptr; }
     const auto image = device->images.find(view->second.image);
     if (image == device->images.end() || image->second.id != view->second.image_id) { why = "unknown image"; return nullptr; }
+    if (bound_view) *bound_view = &view->second;
     return &image->second;
 }
 

@@ -7,6 +7,7 @@
 #include "../layer/src/character_materials.h"
 #include "../layer/src/character_program.h"
 #include "../layer/src/shader_hooks.h"
+#include "../layer/src/texture_identity.h"
 #include "../frontend/gpu/source_registers.h"
 #include "../frontend/gpu/texture_roles.h"
 #include "../layer/src/json.h"
@@ -838,6 +839,14 @@ int main(int argc, char** argv)
             w.end_array(); w.end_object();
         }
         w.end_array(); w.end_object(); printf("%s\n", w.out.c_str()); return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--view-formats")) {
+        // D-170: the DXGI format the layer answers for a view of each Vulkan format, per aspect (1 colour,
+        // 2 depth): "<VkFormat> <aspect> <DXGI_FORMAT>" for those it maps (scripts/check_texture_properties.py).
+        for (uint32_t format = 1; format < 185; ++format)
+            for (uint32_t aspect : {1u, 2u})
+                if (const uint32_t dxgi = efvk::dxgi_view_format(VkFormat(format), VkImageAspectFlags(aspect))) printf("%u %u %u\n", format, aspect, dxgi);
+        return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "--shader-hooks")) {
         // EFMITTL's hook facts (D-113) of SPIR-V modules: "<file> <lit vertex 0/1> <copy fragment 0/1>".

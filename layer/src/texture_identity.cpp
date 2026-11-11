@@ -50,6 +50,17 @@ uint32_t dxgi_format(VkFormat format)
     }
 }
 
+uint32_t dxgi_view_format(VkFormat format, VkImageAspectFlags aspect)
+{
+    if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) return dxgi_format(format);
+    if (aspect != VK_IMAGE_ASPECT_DEPTH_BIT) return 0;
+    switch (format) {
+    case VK_FORMAT_D16_UNORM: return 56;          // DXGI_FORMAT_R16_UNORM
+    case VK_FORMAT_D32_SFLOAT_S8_UINT: return 65; // DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
+    default: return 0;
+    }
+}
+
 bool dx11_texture_desc(const ImageInfo& image, uint32_t desc[11])
 {
     if (image.type != VK_IMAGE_TYPE_2D) return false;

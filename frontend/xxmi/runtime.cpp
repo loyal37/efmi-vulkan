@@ -250,6 +250,7 @@ struct IniRuntime::Impl {
     std::filesystem::path settings;
     std::shared_ptr<RuntimeExtension> extension;
     DrawPlanAdapter adapter;
+    ModTextures mod_textures; // what the loader makes of the Mods' image files, for the property queries (D-170)
     SourceShaderContext source_shaders;
     SourceShaderRegex source_regex;
     std::unique_ptr<FilePlanCompiler> files;
@@ -443,14 +444,26 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
         if (config.texture_identity && !config.shader_hooks) {
             p.adapter.texture_queries([&p](unsigned slot, const DrawPlanAdapter::PixelBinding& binding, CommandListState&,
                                            DrawPlanAdapter::TextureIdentity& id, std::wstring& why) {
-                // A resource of the generation: the original keeps no hash for what it creates itself.
-                if (!binding.application) { id.bound = binding.resource != nullptr; id.hash = 0; return true; }
+                // A resource of the generation: the original keeps no hash for what it creates itself. Its
+                // properties are its file's (D-170); a file the loader makes nothing of is the null resource.
+                if (!binding.application) {
+                    id.bound = binding.resource != nullptr; id.hash = 0;
+                    if (binding.resource && id.properties_wanted) {
+                        bool loads = false; std::wstring unknown;
+                        if (p.mod_textures.describe(*binding.resource, id.properties, loads, unknown)) id.bound = loads;
+                    }
+                    return true;
+                }
                 if (!p.current_draw || !p.current_draw->pixel_texture) { why = L"Source texture identity unavailable outside a draw"; return false; }
                 RuntimeTexture texture; std::string reason;
                 if (!p.current_draw->pixel_texture(slot, texture, reason)) { why.assign(reason.begin(), reason.end()); return false; }
                 static_assert(sizeof(texture.description) == sizeof(D3D11_TEXTURE2D_DESC), "the description is D3D11_TEXTURE2D_DESC's fields");
                 id.bound = texture.bound; id.hash = texture.hash; id.described = texture.described;
                 if (texture.described) memcpy(&id.description, texture.description, sizeof(id.description));
+                id.properties.dimension = D3D11_RESOURCE_DIMENSION(texture.dimension);
+                id.properties.format_known = texture.format_known; id.properties.format = DXGI_FORMAT(texture.view_format);
+                id.properties.width = texture.width; id.properties.height = texture.height;
+                id.properties.mips = texture.levels; id.properties.array = texture.layers;
                 return true;
             });
         }

@@ -43,6 +43,9 @@ STEPS = [
     ("INI execution matrix", [os.path.join(ROOT, "scripts", "check_ini_execution_matrix.py")]),
     ("DX11 registers from SPIR-V", [os.path.join(ROOT, "scripts", "check_source_slots.py")]),
     ("DX11 declarations from SPIR-V", [os.path.join(ROOT, "scripts", "check_source_declarations.py")]),
+    # D-170: what `ps-tN->Format`, `->Width`, `->Height`, `->Mips` and `->Array` read of the game's texture,
+    # against the DX11 side of every paired draw of the catalogue.
+    ("DX11 texture properties from Vulkan images", [os.path.join(ROOT, "scripts", "check_texture_properties.py")]),
     ("Core facts from SPIR-V", [os.path.join(ROOT, "scripts", "check_core_facts.py")]),
     ("RabbitFX texture roles", [os.path.join(ROOT, "scripts", "check_texture_roles.py")]),
     ("installed Mods offline plans", [os.path.join(ROOT, "scripts", "check_mods_dry_run.py")]),
@@ -156,8 +159,8 @@ GROUPS = {
     "replay": ["captured frame"],
     "textures": ["texture first-use", "live INI rendering", "character replacement", "full card", "Mods folder"],
     "submission": ["two queues, bones", "bone regions reused", "probe end to end", "Vulkan validation", "live INI rendering"],
-    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "offline plans", "as the judge",
-            "one line at a time"],
+    "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "texture properties", "offline plans",
+            "as the judge", "one line at a time"],
     "owned": ["owned", "GPU resources", "HLSL", "Present compute", "as the judge"],
     # A minute or so, for every change: text, the Python units, the expression cases, what each command
     # class does in a replaced draw, and the original as the judge.

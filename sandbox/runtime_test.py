@@ -124,7 +124,7 @@ def main():
     for entry in ("layer", "inject"):
         for queues in (1, 2):
             folder = Path(test_dir("runtime-"))
-            package = fixture(folder)
+            package = fixture(folder, texture_properties=True)
             extra = dict(EFMI_VK_M2_PACKAGE=str(package), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1", EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_KEYS=str(folder / "keys.txt"),
                          VK_LAYER_PATH=os.pathsep.join([DIST, validation]), VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0",
                          XDG_CACHE_HOME=str(folder), TEMP=str(folder), TMP=str(folder), TMPDIR=str(folder))
@@ -158,6 +158,9 @@ def main():
             checks.equal((variables.get("$\\runtime_fixture\\texture_seen"), variables.get("$\\runtime_fixture\\texture_other")), (1, 0),
                          label + " Core's OverrideTextures finds the application texture by its original hash, and only that (D-077)")
             checks.check(status.get("texture_queries", 0) > 0, label + " the layer answered texture queries")
+            checks.equal(tuple(variables.get("$\\runtime_fixture\\texture_" + name) for name in ("format", "width", "height", "mips", "array", "absent")),
+                         (28, 64, 64, 1, 1, -2), label + " a list reads the application texture's format, size, levels and layers as the "
+                         "original's getters, and no resource at a slot without a register (D-170)")
             checks.equal(variables.get("$\\runtime_fixture\\stored"), 7,
                          label + " a store in a replaced draw reads its Mod's buffer, an execution late (D-147)")
             saved = folder / "settings/fixture.ini"

@@ -48,7 +48,7 @@ local $levels = $\EFMIv1\cfg_ms_max_lod_level_count
 """
 
 
-def fixture(folder, salt=0, settings="fixture", name="character.bin", namespace="runtime_fixture"):
+def fixture(folder, salt=0, settings="fixture", name="character.bin", namespace="runtime_fixture", texture_properties=False):
     package = folder / name
     fixture_package(package, salt)
     data = package.read_bytes()
@@ -77,6 +77,12 @@ global $lod_level = 0
 global $merged_skeleton_initialized = 0
 global $texture_seen = 0
 global $texture_other = 0
+global $texture_format = -9
+global $texture_width = -9
+global $texture_height = -9
+global $texture_mips = -9
+global $texture_array = -9
+global $texture_absent = -9
 global $stored = 0
 [KeyTint]
 key = ctrl 5
@@ -94,6 +100,17 @@ post $active = 0
             text += f"match_first_index = {first}\n"
         if lod != NONE:
             text += f"$lod_level = {lod}\n"
+        # What the lists read of the application's texture at t1 before they bind their own (D-170), and of a
+        # slot the fragment module has no register for. Only where the layer is the host: the offline planner's
+        # stand-in does not describe the game's textures.
+        if texture_properties:
+            text += """$texture_format = ps-t1->Format
+$texture_width = ps-t1->Width
+$texture_height = ps-t1->Height
+$texture_mips = ps-t1->Mips
+$texture_array = ps-t1->Array
+$texture_absent = ps-t9->Width
+"""
         text += fr"""$\EFMIv1\component_id = {component}
 $\EFMIv1\gpu_posed = 1
 CommandList\EFMIv1\Callback_Component_DrawCustom = ref CommandListDraw{component}

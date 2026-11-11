@@ -422,7 +422,8 @@ def build_recipe_tests(vcvars: str, include: str, out: str, only: tuple = ()) ->
             # --plan-mods runs the directory generation's planning (D-078) offline: the program and the
             # original INI runtime join the decoder.
             sources += ["../layer/src/character_package.cpp", "../layer/src/character_materials.cpp", "../layer/src/util.cpp",
-                        "../layer/src/character_program.cpp", "../layer/src/merged_skeleton.cpp", "../layer/src/shader_hooks.cpp"] + MATERIAL_SOURCES + runtime_link()
+                        "../layer/src/character_program.cpp", "../layer/src/merged_skeleton.cpp", "../layer/src/shader_hooks.cpp",
+                        "../layer/src/texture_identity.cpp"] + MATERIAL_SOURCES + runtime_link()
         if tracker:
             sources += ["../layer/src/state.cpp", "../layer/src/resources.cpp", "../layer/src/render_targets.cpp", "../layer/src/util.cpp",
                         "../layer/src/variant_cache.cpp", "../layer/src/draw_snapshots.cpp",

@@ -521,7 +521,8 @@ public:
     bool pixel_texture(const DrawRec& r, unsigned slot, efmi::frontend::RuntimeTexture& texture, std::string& why);
     bool pixel_texture_uncached(const DrawRec& r, unsigned slot, efmi::frontend::RuntimeTexture& texture, std::string&);
     bool bound_range(const SetBind& bind, uint32_t slot, uint32_t binding, const uint32_t* dyn, uint32_t dyn_count, BoundRange& out) const;
-    const ImageInfo* bound_image(const DrawRec& r, uint32_t set_index, uint32_t binding, bool& empty, const char*& why);
+    const ImageInfo* bound_image(const DrawRec& r, uint32_t set_index, uint32_t binding, bool& empty, const char*& why,
+                                 const ImageViewInfo** bound_view = nullptr);
     bool texture_roles(const DrawRec& r, int32_t roles[3], std::string& reason);
     uint32_t derive(const PipeInfo& pipe);
     Identity* identify(const InstanceEntry& entry, uint64_t now, uint64_t present);

@@ -46,7 +46,9 @@ constexpr size_t max_steps = 65536, max_items = 4096, max_draws = 256;
 constexpr size_t max_active_depth = 64;
 // declared: a replaced draw's plan answers a declaration operand (`ResourceX !== null`) from its own
 // references (D-112).
-struct QueryService {DrawPlanAdapter::ResourceQuery read,texture,plan_read,declared;DrawPlanAdapter::ShaderQuery shader,plan_shader;size_t count=0;bool general_matches=false;
+// property: `ps-tN->Format` and the like of a pixel slot or a declaration in a replaced draw's plan, from the
+// texture provider's description of what the target holds (D-170).
+struct QueryService {DrawPlanAdapter::ResourceQuery read,texture,plan_read,declared,property;DrawPlanAdapter::ShaderQuery shader,plan_shader;size_t count=0;bool general_matches=false;
     // Registers whose declaration is one of two (undecided_words), as the running command asked them, and
     // which of them take the second answer in this evaluation (bit i for the i-th).
     std::vector<std::pair<wchar_t,unsigned>> words;uint32_t words_second=0;bool words_over=false;
@@ -234,6 +236,15 @@ public:
             if(target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY){result=0.0f;return true;}
         }
         const bool drawing=service->drawing && service->drawing();
+        // `->Format`, `->Width`, `->Height`, `->Mips`, `->Array` where the plan answers on the CPU (D-170): the
+        // original's getters over the description of what the target holds. The declaration's own keys come
+        // first and only for the declaration itself; at a slot a Mod's file reads its own format, whatever
+        // format its declaration names (the judge's `properties` case). A target this does not take falls
+        // through to the state's and the host's answers.
+        if(service->property && texture_property_mode(target.evaluation_mode) && (!service->open() || (drawing && !owned_side(target)) || !service->read)){
+            if(service->property(target,*state,result,reason))return true;
+            if(!reason.empty())return false;
+        }
         // A declaration outside an owned scope, or in a generation without owned GPU work at all.
         if((!service->open() || !service->read) && service->declared && target.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !target.custom_resource_pool &&
            (target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE || target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)){
@@ -741,6 +752,52 @@ struct DrawPlanAdapter::Runtime {
         }
         const unsigned slot=target.ResolveSlot(&state);
         return slot!=UINT_MAX && slot_of(target,slot,id)?Named::Slot:Named::Nothing;
+    }
+    // `ps-tN->Format`, `->Width`, `->Height`, `->Mips`, `->Array` in a replaced draw's plan (D-170). The
+    // target is resolved as the original's GetResource resolves it: a pixel slot to what the context holds
+    // there (the application's texture of that or another slot, a resource of the Mod, nothing), a
+    // declaration to its own `format`, `width`, ... keys and then to what it holds; the texture provider
+    // describes that texture and texture_properties.h reads it as the original's getters. False without
+    // `why` for a target this does not take; with it when the description is not known.
+    bool texture_property(ResourceCopyTarget& target,CommandListState& state,float& result,std::wstring& why)
+    {
+        if(!texture_query)return false;
+        const auto mode=target.evaluation_mode;
+        ResourceCopyTarget* t=&target;
+        if(t->type==ResourceCopyTargetType::THIS_RESOURCE){
+            if(!state.this_target || state.this_target->type==ResourceCopyTargetType::THIS_RESOURCE){result=-2.0f;return true;}
+            t=state.this_target;
+        }
+        SlotValue value;
+        if(t->type==ResourceCopyTargetType::CUSTOM_RESOURCE){
+            if(t->custom_resource_pool)return false;
+            auto* declaration=t->GetCustomResource(&state);
+            if(!declaration){result=-2.0f;return true;}
+            if(declared_texture_property(mode,*declaration,result))return true;
+            value=held(declaration);
+        }else if(t->type==ResourceCopyTargetType::SHADER_RESOURCE && t->shader_type==L'p'){
+            SlotId id;
+            switch(named(*t,state,id)){
+            case Named::Slot:value=context.get(id);break;
+            case Named::Nothing:result=-2.0f;return true; // the original's ResolveSlot warns and finds nothing
+            default:return false;
+            }
+        }else return false;
+        DrawPlanAdapter::TextureIdentity identity;identity.properties_wanted=true;
+        switch(value.kind){
+        case SlotValue::Kind::Null:break;
+        case SlotValue::Kind::Resource:case SlotValue::Kind::Owned:
+            if(!texture_query(0,DrawPlanAdapter::PixelBinding{false,value.resource},state,identity,why)){if(why.empty())why=L"Texture source identity is unknown";return false;}
+            break;
+        case SlotValue::Kind::Application:
+            if(value.source.kind!=SlotKind::ShaderResource || value.source.stage!=kPixelStage){
+                why=L"the description of the application's binding of "+slot_name(value.source)+L" is not known";return false;
+            }
+            if(!texture_query(value.source.slot,DrawPlanAdapter::PixelBinding{},state,identity,why)){if(why.empty())why=L"Texture source identity is unknown";return false;}
+            break;
+        default:why=L"a resource the plan does not hold";return false;
+        }
+        return frontend::texture_property(mode,identity.bound,identity.properties,result,why);
     }
     // What a declaration holds now.
     SlotValue held(CustomResource* resource) const
@@ -1957,6 +2014,10 @@ void DrawPlanAdapter::texture_queries(TextureQuery query)
         if(matches.empty()){result=0.f;return true;}
         result=1.f;for(auto it=matches.rbegin();it!=matches.rend();++it)if((*it)->filter_index!=FLT_MAX){result=(*it)->filter_index;break;}
         return true;
+    };
+    runtime_->queries->property=[weak](ResourceCopyTarget& target,CommandListState& state,float& result,std::wstring& reason){
+        auto owner=weak.lock();if(!owner || !owner->active){reason=L"Texture query outside an active plan";return false;}
+        return owner->texture_property(target,state,result,reason);
     };
 }
 bool DrawPlanAdapter::has_texture_queries() const {return bool(runtime_->texture_query) || bool(runtime_->resource_match);}

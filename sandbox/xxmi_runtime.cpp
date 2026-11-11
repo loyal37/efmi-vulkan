@@ -222,7 +222,16 @@ static int judge_scene(const std::filesystem::path& file, int frames, uint32_t f
             draw.shader_stages = 0x1 | 0x10;
             // The scene's one colour target, 256 x 256, as the host knows a draw's target.
             draw.targets_known = true; draw.render_targets = 1; draw.target_width = draw.target_height = 256;
-            draw.pixel_texture = [](unsigned slot, RuntimeTexture& texture, std::string&) { texture = {}; texture.bound = slot == 0; return true; };
+            // The scene's texture at t0 as the host describes a game texture (D-170): 4 x 4 R8G8B8A8_UNORM (28),
+            // one level, one layer, viewed in its own format.
+            draw.pixel_texture = [](unsigned slot, RuntimeTexture& texture, std::string&) {
+                texture = {}; texture.bound = slot == 0;
+                if (texture.bound) {
+                    texture.dimension = 3; texture.format_known = true; texture.view_format = 28;
+                    texture.width = texture.height = 4; texture.levels = texture.layers = 1;
+                }
+                return true;
+            };
             plans[i] = {}; refused[i].clear();
             if (!runtime->draw(draw, plans[i], refused[i]) && refused[i].empty()) refused[i] = "refused";
         }

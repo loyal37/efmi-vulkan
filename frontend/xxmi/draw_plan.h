@@ -1,6 +1,7 @@
 #pragma once
 #include "CommandList.h"
 #include "draw_state.h"
+#include "texture_properties.h"
 #include <tuple>
 #include <cstdint>
 #include <functional>
@@ -195,8 +196,12 @@ public:
         bool application=true;
         CustomResource* resource=nullptr; // Null with application=false means an explicit unbind.
     };
-    // With `described`, the description the original's match_* sections compare (D-138).
-    struct TextureIdentity {bool bound=false;uint32_t hash=0;bool described=false;D3D11_TEXTURE2D_DESC description{};};
+    // With `described`, the description the original's match_* sections compare (D-138). `properties`: what
+    // `ps-tN->Format`, `->Width`, `->Height`, `->Mips` and `->Array` read of it (D-170, texture_properties.h);
+    // the provider fills it for the application's texture, and for a resource of the generation when the
+    // caller set `properties_wanted` (its file's header is read then, and `bound` is whether it loads).
+    struct TextureIdentity {bool bound=false;uint32_t hash=0;bool described=false;D3D11_TEXTURE2D_DESC description{};
+                            bool properties_wanted=false;TextureProperties properties;};
     using TextureQuery=std::function<bool(unsigned,const PixelBinding&,CommandListState&,TextureIdentity&,std::wstring&)>;
     // The provider proves the source-API resource hash (including the original
     // hash policy), not merely a Vulkan object identity or arbitrary byte hash.

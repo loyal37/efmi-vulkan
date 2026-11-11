@@ -77,6 +77,16 @@ struct RuntimeTexture {
     uint32_t hash = 0;
     bool described = false;
     uint32_t description[11] = {};
+    // What `ps-tN->Format`, `->Width`, `->Height`, `->Mips` and `->Array` read of it (D-170), as the original's
+    // getters take them off the resource behind the slot's view. `dimension`: the resource as
+    // D3D11_RESOURCE_DIMENSION (1 a buffer, 2 a 1D, 3 a 2D, 4 a 3D texture), 0 when the host cannot tell and
+    // those queries refuse. `view_format`: the DXGI_FORMAT of the DX11 view of the same resource, valid with
+    // `format_known` (0 with it: a view without a format, a structured buffer's). The size, mip levels and
+    // array size are the resource's own, not the view's.
+    uint32_t dimension = 0;
+    bool format_known = false;
+    uint32_t view_format = 0;
+    uint32_t width = 0, height = 0, levels = 0, layers = 0;
 };
 constexpr uint32_t kWordBufferDeclaration = 0xFFFFFFFFu;
 struct RuntimeDraw {

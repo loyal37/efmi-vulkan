@@ -70,7 +70,7 @@ def build_runtime(out: Path, test: bool = False) -> list[str]:
                ("runtime", "runtime_input", "runtime_parser", "runtime_shim", "draw_plan", "resource_plan", "shader_state", "shader_regex", "shader_assembly", "gpu_resources", "gpu_bindings", "gpu_images", "gpu_parameters", "gpu_shaders", "gpu_graphics", "input_layout", "gpu_layout", "image_formats", "owned_generation", "owned_runtime")]
     sources += [ROOT / "frontend/xxmi" / (name + ".cpp") for name in ("character_core", "efmittl_bridge", "skeleton_plan", "palette_files")]
     sources += [ROOT / "frontend/core/palette_bank.cpp", ROOT / "frontend/assets/png.cpp"]
-    sources += [ROOT / "frontend/xxmi/buffer_queries.cpp"]
+    sources += [ROOT / "frontend/xxmi/buffer_queries.cpp", ROOT / "frontend/xxmi/texture_properties.cpp"]
     sources += [ROOT / "frontend/gpu" / (name + ".cpp") for name in
                 ("resource_commands", "resource_images", "hlsl_compiler", "shader_cache", "dxbc_compiler", "dxbc_float32", "dxbc_bindings", "graphics_link", "vertex_inputs", "shader_reflection", "shader_usage", "shader_commands", "graphics_commands")]
     sources += [upstream / f"DirectXTK/Src/{name}.cpp" for name in ("DDSTextureLoader", "WICTextureLoader")]

@@ -59,6 +59,9 @@ CLEAR = (0, 0, 0, 255)
 NO_TEXTURE = (0, 0, 0, 0)
 PLACES = "ABCD"
 COLOURS = {"red.dds": (255, 0, 0, 255), "green.dds": (0, 255, 0, 255), "blue.dds": (0, 0, 255, 255)}
+# Textures of other shapes for the property queries (the `properties` case): eight by four with its four mip
+# levels, and one BC7 sRGB block behind a DX10 header.
+SHAPED = {"wide.dds": (255, 255, 0, 255), "block.dds": (0, 0, 0, 255)}
 INDEX_FILES = {"indices_first.buf": GAME_INDICES[0], "indices_second.buf": GAME_INDICES[1]}
 
 # Cases where the plan is known to differ from what the original draws, each with the finding it shows
@@ -82,16 +85,27 @@ def quad(place: int) -> bytes:
     return struct.pack("<8f", left, top, left + 1, top, left, top - 1, left + 1, top - 1)
 
 
-def dds(colour: tuple[int, int, int, int]) -> bytes:
-    header = struct.pack("<4s7I44x", b"DDS ", 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x8, 4, 4, 16, 0, 1)
+def dds(colour: tuple[int, int, int, int], width: int = 4, height: int = 4, mips: int = 1) -> bytes:
+    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x8 | (0x20000 if mips > 1 else 0)
+    header = struct.pack("<4s7I44x", b"DDS ", 124, flags, height, width, width * 4, 0, mips)
     pixel_format = struct.pack("<2I4s5I", 32, 0x1 | 0x40, bytes(4), 32, 0xff, 0xff00, 0xff0000, 0xff000000)
-    return header + pixel_format + struct.pack("<5I", 0x1000, 0, 0, 0, 0) + bytes(colour) * 16
+    texels = sum(max(1, width >> level) * max(1, height >> level) for level in range(mips))
+    return header + pixel_format + struct.pack("<5I", 0x1000 | (0x8 | 0x400000 if mips > 1 else 0), 0, 0, 0, 0) + bytes(colour) * texels
+
+
+def dds_block() -> bytes:
+    """A 4 x 4 BC7 sRGB texture: one block, the DX10 header naming DXGI_FORMAT_BC7_UNORM_SRGB (99)."""
+    header = struct.pack("<4s7I44x", b"DDS ", 124, 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000, 4, 4, 16, 0, 1)
+    pixel_format = struct.pack("<2I4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)
+    return header + pixel_format + struct.pack("<5I", 0x1000, 0, 0, 0, 0) + struct.pack("<5I", 99, 3, 0, 1, 0) + bytes(16)
 
 
 def files() -> dict[str, bytes]:
     out = {"place_%s.buf" % PLACES[i].lower(): quad(i) for i in range(4)}
     out.update({name: struct.pack("<6H", *indices) for name, indices in INDEX_FILES.items()})
     out.update({name: dds(colour) for name, colour in COLOURS.items()})
+    out["wide.dds"] = dds(SHAPED["wide.dds"], 8, 4, 4)
+    out["block.dds"] = dds_block()
     return out
 
 
@@ -167,7 +181,7 @@ def predict(draws: list[dict]) -> tuple[dict[str, tuple], list[int]]:
                 state["indices"] = GAME_INDICES[i] if item.get("application", -1) >= 0 else None if name is None else INDEX_FILES[name]
             elif op == "bind_pixel_resource":
                 if item["slot"] == 0:
-                    state["texture"] = GAME_TEXTURE[i] if item.get("application", -1) == 0 else NO_TEXTURE if name is None else COLOURS[name]
+                    state["texture"] = GAME_TEXTURE[i] if item.get("application", -1) == 0 else NO_TEXTURE if name is None else COLOURS.get(name) or SHAPED[name]
             elif op == "draw_indexed":
                 n = item["count"]
                 if item.get("automatic"):

@@ -449,6 +449,61 @@
     "o1 = null"
    ],
    "expect": "same"
+  },
+  {
+   "name": "if_slot_format",
+   "lines": [
+    "if ps-t0->Format == 28",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_slot_width",
+   "lines": [
+    "if ps-t0->Width == 4 && ps-t0->Height == 4",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_slot_mips",
+   "lines": [
+    "if ps-t0->Mips == 1 && ps-t0->Array == 1",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_empty_slot_format",
+   "lines": [
+    "if ps-t5->Format == -2",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_unbound_slot_width",
+   "lines": [
+    "ps-t0 = null",
+    "if ps-t0->Width == -2",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "if_declaration_height",
+   "lines": [
+    "if ResourceGreen->Height == 4",
+    "    ps-t0 = ResourceBlue",
+    "endif"
+   ],
+   "expect": "same"
   }
  ]
 }
