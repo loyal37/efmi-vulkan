@@ -31,7 +31,8 @@ own render passes. Nothing of the game, the launcher or the Mods is changed on d
 | `layer/src/bone_merge.*`, `merged_skeleton.*`, `draw_snapshots.*`, `pipeline_variant.*`, `variant_cache.*`, `spirv_repoint.*`, `texture_residency.*`, `translucency.*`, `character_present.*`, `notices.*` | Skeleton import on the GPU, per-draw snapshots, private pipeline variants, texture loading and residency, EFMITTL's translucency, the owned Present, the overlay's notices. |
 | `frontend/xxmi/ini_module.cpp`, `command_module.cpp` | The original's `IniHandler.cpp` and `CommandList.cpp` (pinned in `F:\vulkan\XXMI-Libs-Package\DirectX11`), included unchanged. |
 | `frontend/xxmi/runtime.*`, `runtime_parser.cpp`, `runtime_shim.cpp`, `engine_globals.h` | `IniRuntime`: one generation of the original engine with its own globals (D-129), its load, `draw`, `present`, `save`. |
-| `frontend/xxmi/draw_plan.*` | `DrawPlanAdapter`: wraps the original's command objects; decides per command which backend takes it. |
+| `frontend/xxmi/draw_plan.*` | `DrawPlanAdapter`: wraps the original's command objects; decides per command which backend takes it; runs a replaced draw's lists against the draw state. |
+| `frontend/xxmi/draw_state.h` | The draw state (D-161): `DrawState` (D3D11's context as values per slot), `SlotValue`, the table of what a draw makes of a slot (`honour_table`), the table of what an operand reads where nothing answers (`operand_table`, D-163). |
 | `frontend/xxmi/character_core.cpp`, `efmittl_bridge.cpp`, `rabbit_textures.h` | Native replacements of the EFMI Core's lists, of RabbitFX and of EFMITTL's hooks. |
 | `frontend/xxmi/gpu_*.cpp`, `owned_runtime.*`, `frontend/gpu/*` | The owned GPU runtime: D3D11's resource and state semantics on Vulkan resources the layer owns. |
 | `frontend/assets/*` | DDS and WIC decoding, uploads, the file cache. |
@@ -68,12 +69,13 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
 | Backend | Used by | Model |
 | --- | --- | --- |
 | Owned GPU runtime (`GpuResourceRuntime`, `GpuShaderRuntime`) | Present, Constants, key lists, CustomShader, and owned work inside a replaced draw | D3D11's state machine on owned resources; judged against the original (`check_dx11_judge.py`). |
-| Plan path (`DrawPlanAdapter::Runtime::run`, then `CharacterProgram::plan`) | every replaced draw | Six plan operations (bind vertex, index, pixel resource; draw; external; translucent). A replaced draw's lists still stand or fall together (docs/architecture-review-2.1.md, R-01; Phase 1 changes it). |
+| Plan path (`DrawPlanAdapter::Runtime::run`, then `CharacterProgram::plan`) | every replaced draw | The lists run against a draw state (`draw_state.h`, D-161): every resource assignment sets a slot or a declaration and refuses nothing; a draw is recorded with the state it sees, and one table decides per slot what the layer gives it (honoured, ignored, degraded with a notice, that draw left out, the draw left to the game). The plan's six kinds of items (bind vertex, index, pixel resource; draw; external; translucent) are what each recorded draw needs bound. |
 | Native Core (`CharacterCore`) | the EFMI Core's lists a Mod calls | C++ in place of `RegisterMod`, `InitializeMergedSkeleton`, `Component_ReadConfig`, `MergedSkeleton_DetectBoneDataSource`, `SpatialIdentity_IdentifyComponentInstances`, `MergedSkeleton_AttachComponent`, `Component_DrawInstances`. |
 
-- **Failure units (Phase 0 of the review).**
-  - A command of a Present, Constants or key list, at any depth of called lists: it does nothing and is
-    said once (`BridgeCommand::run`, `Runtime::skipped`).
+- **Failure units (Phases 0 and 1 of the review).**
+  - A command, in a Present, Constants or key list and in a replaced draw's lists, at any depth of called
+    lists: it does nothing and is said once (`BridgeCommand::run`, `Runtime::skipped`, D-155, D-162).
+  - An operand nothing answers: the value of its row in `operand_table()`, said once (D-163).
   - An owned GPU command: one that fails before recording leaves its scope as it was; one that fails after
     recording drops that scope's work, is not run again, and the next scope starts clean
     (`GpuResourceRuntime::run`, `failed()`).
@@ -82,7 +84,11 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
     INI under one namespace, and searches by halves for an input the folder does not load with.
   - The Core: every name the native handlers use is checked at load (`check_interface`); a missing one
     refuses the folder with a statement that names it.
-  - A replaced draw: still the whole draw (R-01).
+  - A replaced draw as a whole, only for what the host itself cannot do (`refuse_draw`: a native Core
+    command's contract, the draw's bone data, a buffer the Mod's mesh needs and the layer cannot bind, the
+    planner's budgets; then the file compiler and the conversion): the lists still run to their end, so
+    the Mod's variables are the original's, and the draw stays the game's (D-162).
+  - An intercepted shader call of the owned domain (`execute_intercepted`) is one transaction, as before.
 - **What is said.** The original's warnings are the generation's diagnostics (logged at load). What the
   layer does not do as the original does goes through `LayerGap` (`layer_gap.h`) to `IniRuntime::gap_count`
   and `gaps_since`, which the host shows; per-Mod gaps found at load are `CharacterDiscovery::gaps`.

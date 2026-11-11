@@ -457,6 +457,15 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
         // The matched draw's index region hash, which is what the original's region hash of its own index
         // buffer gives (D-144).
         p.adapter.index_region_hash([&p](uint32_t& hash) { if (!p.current_draw) return false; hash = p.current_draw->hash; return true; });
+        // What a draw of the lists can read (draw_state.h): the stages and vertex slots of the matched draw's pipeline.
+        p.adapter.pipeline([&p] {
+            PipelineFacts facts;
+            if (p.current_draw) {
+                facts.stages = p.current_draw->shader_stages; facts.vertex_slots = p.current_draw->vertex_slots;
+                if (p.current_draw->targets_known) facts.targets = p.current_draw->render_targets;
+            }
+            return facts;
+        });
         auto boundaries = p.extension ? p.extension->install(p.adapter) : std::vector<std::wstring>{};
         if(config.shader_hooks){HostParseShaderOverrides();HostParseShaderRegex();
             for(const auto& entry:G->mShaderOverrideMap)
@@ -549,9 +558,7 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
             for (auto operation : {PlanOperation::BindVertex, PlanOperation::BindIndex, PlanOperation::BindPixelResource}) {
                 const unsigned bit = operation == PlanOperation::BindVertex ? 1u : operation == PlanOperation::BindIndex ? 2u : 4u;
                 if (roles ? !(roles & bit) : (operation == PlanOperation::BindVertex && index_format)) continue;
-                DrawPlan plan; PlanItem item; item.operation = operation; item.resource = resource; plan.items.push_back(item);
-                assets::FilePlan owned;
-                if (p.files->compile(plan, owned, why) && owned.items[0].resource) p.resources.push_back(owned.items[0].resource);
+                if (auto file = p.files->binding(resource, operation)) p.resources.push_back(std::move(file));
             }
         }
         p.stats.bindings = RuntimeInputCount();G->constants_run=true;

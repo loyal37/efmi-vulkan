@@ -39,7 +39,7 @@ struct CharacterStream {
     // For a vertex stream that carries bone indices: byte offsets of four 16-bit indices and,
     // when present, of four 16-bit normalized weights inside one element.
     uint32_t bone_index_offset = kCharacterNone, bone_weight_offset = kCharacterNone;
-    uint32_t bone_index_bytes = 2; // width of one bone index: 2 (16-bit), or 4 under a 32-bit blend-index edit
+    uint32_t bone_index_bytes = 2; // width of one bone index: 2 (16-bit), 4 under a 32-bit blend-index edit, 1 as the game's own 8-bit element
     uint32_t bone_weight_bytes = 2; // width of one weight: 2 (16-bit normalized) or 4 (float, BUG-038)
     uint64_t components = 0; // bit per component whose bones this stream refers to (computed at load)
 };
@@ -54,6 +54,9 @@ struct CharacterDraw {
     // A live plan's blend-index format for binding 2 (R16G16B16A16_UINT or R32G32B32A32_UINT);
     // undefined keeps the package's edits. Not part of the package file.
     VkFormat blend = VK_FORMAT_UNDEFINED;
+    // A live plan whose list has no blend-index edit (R-08): the pipeline's own BLENDINDICES element of
+    // binding 2 is read as the game declares it, and the package's edits do not apply to it. Not in the file.
+    bool pipeline_blend = false;
     // A live plan that leaves the application's draw but binds textures for it (D-083): no geometry
     // of the package; the draw is made again with its own geometry and these pixels. Not in the file.
     bool texture_only = false;

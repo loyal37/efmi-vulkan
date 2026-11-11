@@ -31,8 +31,13 @@ static void runtime_host_target_cases(const std::filesystem::path& folder){
     check(runtime->draw(draw,output,why) && value("pre")==1920 && value("post")==1080,"The host's render target size answers the pre and the fresh post root");
     draw.target_width=draw.target_height=-2;
     check(runtime->draw(draw,output,why) && value("pre")==-1 && value("post")==-1,"No colour target bound answers -1 in both roots, as the original");
+    // D-163: where the host does not know the target and no owned domain is open, the operand reads the
+    // table's value (the original's -1, what it reads with no target bound) with a notice; the list runs.
+    // It refused the whole draw before.
     draw.target_width=draw.target_height=-1;
-    check(!runtime->draw(draw,output,why) && why.find("Render target size")!=std::string::npos,"An unknown target outside the owned domain still refuses");
+    const bool planned=runtime->draw(draw,output,why);
+    bool told=false;for(const auto& gap:runtime->status().gaps)told=told || gap.find("rt_width")!=std::string::npos;
+    check(planned && value("pre")==-1 && value("post")==-1 && told,"An unknown target outside the owned domain reads -1 with a notice, and the list runs");
 }
 static void runtime_match_cases(const std::filesystem::path& folder){
     runtime_host_target_cases(folder);
@@ -94,7 +99,23 @@ $trace = 0
     write(path,text.c_str());RuntimeConfig config{root,{path},root/"settings","budget"};std::string why;auto extension=std::make_shared<MatchReferenceExtension>();
     auto runtime=IniRuntime::load(config,extension,why);if(!runtime)throw std::runtime_error(why);RuntimeDraw draw;draw.hash=0x12345678;draw.count=30;
     efmi::assets::FilePlan output;output.skip_original=true;output.items.resize(1);output.items[0].index_count=777;
-    check(!runtime->draw(draw,output,why) && why.find("budget")!=std::string::npos,"Matching another section cannot reset the draw budget");
+    // D-162: the planner's draw budget spans the sections of one draw; the draws past it are left out, each
+    // alone, with a notice, and the draw is planned with the others (it refused the whole draw before).
+    {const bool ok=runtime->draw(draw,output,why);
+     bool told=false;for(const auto& gap:runtime->status().gaps)told=told || gap.find("Plan draw budget exceeded")!=std::string::npos;
+     check(ok && output.items.size()==256 && told && extension->completed==1 && !extension->failed,
+         "Matching another section cannot reset the draw budget: the draws past it are left out alone, with a notice");}
+    // The planner's execution budget is the host's: past it the draw is not the Mod's and stays the game's.
+    const auto steps=root/"steps.ini";text="namespace = match_steps\n[CommandListD]\n";
+    for(unsigned line=0;line<20;++line)text+="ps-t"+std::to_string(line)+" = null\n";
+    for(const char* pair:{"CB","BA"}){text+=std::string("[CommandList")+pair[1]+"]\n";
+        for(unsigned call=0;call<16;++call)text+=std::string("run = CommandList")+pair[0]+"\n";}
+    text+="[CommandListC]\n";for(unsigned call=0;call<16;++call)text+="run = CommandListD\n";
+    text+="[TextureOverride0]\nhash = 12345678\nrun = CommandListA\n";
+    write(steps,text.c_str());config.inputs={steps};extension=std::make_shared<MatchReferenceExtension>();
+    runtime=IniRuntime::load(config,extension,why);if(!runtime)throw std::runtime_error(why);
+    output={};output.skip_original=true;output.items.resize(1);output.items[0].index_count=777;
+    check(!runtime->draw(draw,output,why) && why.find("budget")!=std::string::npos,"A draw past the planner's execution budget stays the game's");
     check(output.skip_original && output.items.size()==1 && output.items[0].index_count==777 && !runtime->status().draws,
         "Rejected multi-match draw preserves the caller plan and success counter");
     check(extension->completed==1 && extension->failed==1,"Failed multi-match transaction notifies failure and completion once");

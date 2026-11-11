@@ -17,6 +17,11 @@ A difference is a place where a list the original runs is planned otherwise, or 
 not cover: what the layer's renderer then makes of a plan (CharacterProgram::plan and the backend), and
 lists that call the EFMI Core.
 
+A line the layer cannot honour is degraded (docs/architecture-review-2.1.md Phase 1, D-161 to D-163): the
+command does nothing or the game's binding stays, a notice names it, and the other lines and draws go on.
+Here that reads: the plan is not refused, the layer said a notice, and the picture is what the record says
+(the original's, where the scene's shaders do not read what the line changed).
+
 With --sweep (a step of its own): "no single line makes a Mod vanish". One working replaced mesh (the
 list of the `replace` case) and, one at a time, the lines of sandbox/judge_draw_sweep.json put in front of
 its draw: bindings at every kind of slot, copies, queries in conditions, the draw forms, calls, layout
@@ -31,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -58,9 +64,11 @@ INDEX_FILES = {"indices_first.buf": GAME_INDICES[0], "indices_second.buf": GAME_
 # Cases where the plan is known to differ from what the original draws, each with the finding it shows
 # (docs/architecture-review-2.1.md). They are run and must still differ: one that agrees is a fix, to be
 # taken off this list. They do not fail the check; every other case does.
-KNOWN = {
-    "other_stage": "R-01: a binding at another stage's slot that the list leaves changed refuses the whole list; the original binds it and draws",
-    "copy": "R-01, D-155: a copy between the Mod's resources inside a draw's list is not made without the owned runtime; the resource stays null and nothing is drawn",
+KNOWN: dict[str, str] = {}
+# Cases with a line the layer degrades: the picture and the variables must be the original's (the scene's
+# shaders do not read what the line changed) and the layer must have said a notice with this text.
+DEGRADED = {
+    "other_stage": "vs-cb1",
 }
 
 D3DX = judge.D3DX.replace("[Rendering]\n", "[Rendering]\ntrack_region_hashes = 1\n") + (
@@ -110,7 +118,8 @@ def run_original(exe: Path, folder: Path, case: Path, frames: int) -> tuple[dict
 
 
 def run_layer(case: Path, frames: int) -> dict:
-    exe = ROOT / "build" / "xxmi-runtime" / "runtime_test.exe"
+    # EFMI_VK_JUDGE_RUNTIME: another build's runtime_test.exe, to see a record fail on the build before a change.
+    exe = Path(os.environ.get("EFMI_VK_JUDGE_RUNTIME", ROOT / "build" / "xxmi-runtime" / "runtime_test.exe"))
     if not exe.is_file():
         raise RuntimeError("build the INI runtime test first (scripts/build_xxmi_runtime.py)")
     work = OUT / "layer" / case.stem
@@ -150,11 +159,12 @@ def predict(draws: list[dict]) -> tuple[dict[str, tuple], list[int]]:
 
         def apply(item: dict) -> None:
             op, name = item["op"], item.get("file")
+            # `application` on a buffer binding: the game's own buffer back in its place.
             if op == "bind_vertex":
                 if item["slot"] == 0:
-                    state["place"] = None if name is None else name[len("place_")].upper()
+                    state["place"] = PLACES[i] if item.get("application", -1) >= 0 else None if name is None else name[len("place_")].upper()
             elif op == "bind_index":
-                state["indices"] = None if name is None else INDEX_FILES[name]
+                state["indices"] = GAME_INDICES[i] if item.get("application", -1) >= 0 else None if name is None else INDEX_FILES[name]
             elif op == "bind_pixel_resource":
                 if item["slot"] == 0:
                     state["texture"] = GAME_TEXTURE[i] if item.get("application", -1) == 0 else NO_TEXTURE if name is None else COLOURS[name]
@@ -238,7 +248,7 @@ def sweep(exe: Path, folder: Path, frames: int, only: str | None, report_only: b
     entries = json.loads(SWEEP.read_text(encoding="ascii"))["lines"]
     work = OUT / "sweep"
     work.mkdir(parents=True, exist_ok=True)
-    failed = same = differs = unjudged = 0
+    failed = same = degraded = differs = unjudged = 0
     results = []
     for entry in entries:
         name = entry["name"]
@@ -247,6 +257,7 @@ def sweep(exe: Path, folder: Path, frames: int, only: str | None, report_only: b
         case = work / (name + ".ini")
         case.write_text(SWEEP_INI % "\n".join(entry["lines"]), encoding="ascii")
         problems = []
+        layer: dict = {}
         try:
             scene, _ = run_original(exe, folder, case, frames)
             layer = run_layer(case, 2)
@@ -262,23 +273,38 @@ def sweep(exe: Path, folder: Path, frames: int, only: str | None, report_only: b
                 problems.append("primitives: original %s, plan %s" % (scene["primitives"], primitives))
         except (RuntimeError, KeyError) as e:
             problems.append("not run: %s" % e)
-        actual = "differs" if problems else "same"
-        results.append({"name": name, "lines": entry["lines"], "actual": actual, "problems": problems})
+        # Not refused, the picture as the original's, and the layer said what it did not do: degraded.
+        gaps = layer.get("gaps", [])
+        actual = "differs" if problems else "degraded" if gaps else "same"
+        results.append({"name": name, "lines": entry["lines"], "actual": actual, "problems": problems, "gaps": gaps})
         scene_limit = actual == "differs" and entry.get("class") == "scene"
-        same += actual == "same"; differs += actual == "differs" and not scene_limit; unjudged += scene_limit
+        same += actual == "same"; degraded += actual == "degraded"; differs += actual == "differs" and not scene_limit; unjudged += scene_limit
         expected = entry.get("expect", "same")
+        # A recorded difference of the layer states what may differ (`only`) and never a refusal: the line
+        # is degraded for its command or its draw alone, with a notice.
+        if actual == "differs" and expected == "differs" and entry.get("class") == "layer" and not report_only:
+            allowed = entry.get("only", "")
+            beyond = [p for p in problems if not any(p.startswith(kind) for kind in allowed.split(" and "))]
+            if beyond or not gaps:
+                failed += 1
+                print("FAIL %s: recorded to differ in its %s only, with a notice: %s%s" %
+                      (name, allowed or "(nothing stated)", "; ".join(beyond)[:300], "" if gaps else "; the layer said no notice"))
+                continue
         if report_only:
-            print("%-7s %s%s" % (actual, name, ": " + problems[0][:200] if problems else ""))
+            print("%-8s %s%s" % (actual, name, ": " + problems[0][:200] if problems else ": " + gaps[0][:200] if gaps else ""))
         elif actual != expected:
             failed += 1
             print("FAIL %s: recorded as %s, now %s%s" % (name, expected, actual, ": " + "; ".join(problems)[:400] if problems else
                                                          " (a fix: change the record in sandbox/judge_draw_sweep.json)"))
         elif problems:
             print("known %s: %s" % (name, entry.get("finding", problems[0])[:200]))
+        elif gaps:
+            print("degraded %s: %s" % (name, entry.get("finding", gaps[0])[:200]))
     (OUT / "sweep.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     (folder / "d3dx.ini").write_text(judge.D3DX, encoding="utf-8")
-    print("dx11 judge, one line at a time: %d lines, %d as the original's, %d differ in the layer, %d not judged by this scene; %s" %
-          (same + differs + unjudged, same, differs, unjudged, "FAILED" if failed else "as recorded"))
+    print("dx11 judge, one line at a time: %d lines, %d as the original's, %d degraded with a notice (the picture as the original's), "
+          "%d differ in the layer, %d not judged by this scene; %s" %
+          (same + degraded + differs + unjudged, same, degraded, differs, unjudged, "FAILED" if failed else "as recorded"))
     return 1 if failed else 0
 
 
@@ -322,6 +348,8 @@ def main() -> int:
         if not saved:
             problems.append("the original saved no variable")
         (OUT / (case.stem + ".json")).write_text(json.dumps({"original": scene, "saved": saved, "layer": layer}, indent=1), encoding="utf-8")
+        if case.stem in DEGRADED and not any(DEGRADED[case.stem] in gap for gap in layer.get("gaps", [])):
+            problems.append("the layer degrades a line of this case and said no notice naming %s (%s)" % (DEGRADED[case.stem], layer.get("gaps", [])))
         if case.stem in KNOWN:
             if problems:
                 print("known %s: %s (%s)" % (case.stem, KNOWN[case.stem], problems[0][:160]))

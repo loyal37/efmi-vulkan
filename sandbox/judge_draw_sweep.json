@@ -1,5 +1,5 @@
 {
- "scope": "Lines put one at a time in front of a working replaced mesh's draw (scripts/check_dx11_judge_draws.py --sweep): `expect` is what the comparison with the original gives now, `finding` why a line differs, `class` whose difference it is: `layer` (the plan path differs from the original) or `scene` (the layer's side of this scene lacks what answers the line in a character generation, so the line is not judged here).",
+ "scope": "Lines put one at a time in front of a working replaced mesh's draw (scripts/check_dx11_judge_draws.py --sweep). `expect` is what the comparison with the original gives now: `same` (the plan means the original's picture and primitives, and the layer said nothing); `degraded` (the same picture and primitives in this scene, and the layer said a notice: the line does nothing or the game's binding stays, by the draw state's table, and the other lines and draws go on); `differs` with `class`: `layer` (the plan means something else; `only` names the one measure that may differ) or `scene` (this scene's generation lacks what answers the line in a character generation). `finding` says why a line is not `same`. No line refuses the draw: one that does fails the step.",
  "lines": [
   {
    "name": "plain",
@@ -25,36 +25,31 @@
    "lines": [
     "vs-cb0 = ResourceConstants"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+   "expect": "degraded",
+   "finding": "a constant buffer of a graphics stage keeps the game's binding for the draw, with a notice (the draw state's table); the scene's vertex shader reads none, so the picture is the original's"
   },
   {
    "name": "ps_cb",
    "lines": [
     "ps-cb2 = ResourceConstants"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+   "expect": "degraded",
+   "finding": "a constant buffer of a graphics stage keeps the game's binding for the draw, with a notice (the draw state's table); the scene's pixel shader reads none, so the picture is the original's"
   },
   {
    "name": "vs_t",
    "lines": [
     "vs-t3 = ResourceGreen"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+   "expect": "degraded",
+   "finding": "a texture of another graphics stage keeps the game's binding for the draw, with a notice (the draw state's table); the scene's vertex shader reads none, so the picture is the original's"
   },
   {
    "name": "gs_t",
    "lines": [
     "gs-t0 = ResourceGreen"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152)"
+   "expect": "same"
   },
   {
    "name": "ps_t5",
@@ -82,9 +77,7 @@
    "lines": [
     "ps-t0 = copy ResourceGreen"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "`<slot> = copy Resource` is refused whole; a copy of a resource the generation never writes shows what a reference shows"
+   "expect": "same"
   },
   {
    "name": "ps_t0_ref",
@@ -98,18 +91,14 @@
    "lines": [
     "ps-t0 = unless_null ResourceSaved"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the unless_null modifier is refused whole; with a null source the original leaves the slot as it is"
+   "expect": "same"
   },
   {
    "name": "slot_to_slot",
    "lines": [
     "ps-t1 = ref ps-t0"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "one pixel slot bound from another is refused whole; the original binds what the other slot holds"
+   "expect": "same"
   },
   {
    "name": "slot_range",
@@ -134,9 +123,7 @@
     "vb0 = ResourcePlaceD",
     "vb0 = ref ResourceSaved"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "`ResourceX = ref vb0` (the game's vertex buffer held by a declaration) is refused whole"
+   "expect": "same"
   },
   {
    "name": "copy_then_bind",
@@ -144,9 +131,7 @@
     "ResourceSaved = copy ResourcePlaceD",
     "vb0 = ResourceSaved"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "a copy between declared resources is not made in a plan: the destination stays null, a notice says so, and what is bound from it draws nothing (D-155)"
+   "expect": "same"
   },
   {
    "name": "ib_null",
@@ -176,25 +161,22 @@
    ],
    "expect": "differs",
    "class": "layer",
-   "finding": "the plan cannot unbind the game's render target; the draw is refused where the original draws nothing"
+   "finding": "the draw whose target the line unbound is left out, alone, with a notice (the table's not-drawable): the picture is the original's, as nothing reaches the target either way; the original's input assembler still ran (2 primitives) where the layer issues no draw",
+   "only": "primitives"
   },
   {
    "name": "cs_t",
    "lines": [
     "cs-t0 = ResourceGreen"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152); under the original a compute slot does not touch the draw"
+   "expect": "same"
   },
   {
    "name": "cs_cb",
    "lines": [
     "cs-cb0 = ResourceConstants"
    ],
-   "expect": "differs",
-   "class": "layer",
-   "finding": "the plan binds a Mod's resource at pixel t slots and the vertex and index slots only; a slot of another kind left changed at the draw refuses the whole draw, and the game's draw stays (D-152); under the original a compute slot does not touch the draw"
+   "expect": "same"
   },
   {
    "name": "if_true",
@@ -252,21 +234,24 @@
    "lines": [
     "store = $x, ResourceConstants, 0"
    ],
-   "expect": "same"
+   "expect": "degraded",
+   "finding": "without the owned GPU runtime (this scene's CPU generation) a store keeps its variable, with a notice; in the game the owned runtime reads the value a frame late (D-147)"
   },
   {
    "name": "clear",
    "lines": [
     "clear = ResourceWritable"
    ],
-   "expect": "same"
+   "expect": "degraded",
+   "finding": "without the owned GPU runtime (this scene's CPU generation) a clear does nothing, with a notice; in the game it is owned work (D-147)"
   },
   {
    "name": "dispatch",
    "lines": [
     "dispatch = 1, 1, 1"
    ],
-   "expect": "same"
+   "expect": "degraded",
+   "finding": "a dispatch in a replaced draw does nothing, with a notice (D-146)"
   },
   {
    "name": "layout_format",
@@ -324,9 +309,7 @@
     "    ps-t0 = ResourceBlue",
     "endif"
    ],
-   "expect": "differs",
-   "class": "scene",
-   "finding": "`vbN->stride` is answered by the character Core's extension from the host's fact (RuntimeDraw::vertex_stride); this scene's generation has no Core"
+   "expect": "same"
   },
   {
    "name": "if_slot_null",
@@ -353,9 +336,7 @@
     "    ps-t0 = ResourceBlue",
     "endif"
    ],
-   "expect": "differs",
-   "class": "scene",
-   "finding": "a query on the game's index buffer is answered by the character Core's extension; this scene's generation has no Core"
+   "expect": "same"
   },
   {
    "name": "if_target_width",
@@ -402,7 +383,72 @@
    ],
    "expect": "differs",
    "class": "scene",
-   "finding": "`vs`, `ps` are answered by the character Core's extension (D-089); this scene's generation has no Core"
+   "finding": "`vs` as a value: the judge's d3dx.ini matches every vertex shader with a patternless ShaderRegex, as the EFMI Core's does, so the original reads 1 (a matched section without filter_index); this scene's generation has no shader facts and reads the table's 0 with a notice. A character generation's Core extension answers 0 as well (BUG-090)"
+  },
+  {
+   "name": "copy_of_slot",
+   "lines": [
+    "ResourceSaved = copy ps-t0",
+    "ps-t0 = ResourceGreen",
+    "ps-t0 = ResourceSaved"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "unless_null_bound",
+   "lines": [
+    "ps-t0 = unless_null ResourceGreen"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "save_restore_other_stage",
+   "lines": [
+    "ResourceSaved = ref vs-cb0",
+    "vs-cb0 = null",
+    "vs-cb0 = ref ResourceSaved"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "save_restore_target",
+   "lines": [
+    "ResourceSaved = ref o0",
+    "o0 = null",
+    "o0 = ref ResourceSaved"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "vertex_slot_to_slot",
+   "lines": [
+    "vb1 = vb0"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "moved_pixel",
+   "lines": [
+    "ps-t0 = ref ps-t1"
+   ],
+   "expect": "differs",
+   "class": "layer",
+   "finding": "the application's texture of another pixel slot is not bound by the layer: the game's own texture stays at the slot, with a notice (the draw state's table; the original binds what ps-t1 holds, here nothing). The Mod's mesh is drawn",
+   "only": "points"
+  },
+  {
+   "name": "depth_null",
+   "lines": [
+    "oD = null"
+   ],
+   "expect": "same"
+  },
+  {
+   "name": "other_target_null",
+   "lines": [
+    "o1 = null"
+   ],
+   "expect": "same"
   }
  ]
 }

@@ -1,4 +1,5 @@
 #include "resource_plan.h"
+#include "layer_gap.h"
 #include "../assets/png.h"
 #include "util.h"
 #include <stdexcept>
@@ -74,6 +75,12 @@ FilePlanCompiler::FilePlanCompiler(const CustomResources& resources)
         declarations_.emplace(&pair.second,std::move(d));
     }
 }
+std::shared_ptr<const assets::FileResource> FilePlanCompiler::binding(const CustomResource* resource,PlanOperation operation) const
+{
+    const auto found=declarations_.find(resource);
+    if(found==declarations_.end())return {};
+    return found->second.bindings[operation==PlanOperation::BindVertex?0:operation==PlanOperation::BindIndex?1:2];
+}
 bool FilePlanCompiler::compile(const DrawPlan& source,assets::FilePlan& output,std::wstring& reason) const
 {
     reason.clear();
@@ -127,7 +134,19 @@ bool FilePlanCompiler::compile(const DrawPlan& source,assets::FilePlan& output,s
             auto found=declarations_.find(item.resource);
             if(found==declarations_.end())return refuse(L"Resource belongs to another frontend generation");
             own.resource=found->second.bindings[role];
-            if(!own.resource){reason=found->second.reasons[role];return false;}
+            if(!own.resource){
+                // A buffer the Mod's mesh needs and the layer cannot make of the declaration: the draw
+                // cannot be the Mod's.
+                if(role!=2){reason=found->second.reasons[role];return false;}
+                // At a pixel slot (the draw state's table, draw_state.h): a resource of the Mod that is no
+                // image file (a buffer, a target of its owned work) is not what the layer binds for the
+                // game's fragment shader. The application's texture stays there, the Mod's mesh is drawn,
+                // and the notice says so once per resource. It refused the whole draw before.
+                own.application_slot=int32_t(item.slot);
+                if(told_.size()<64 && told_.insert(item.resource).second)
+                    LayerGap(L"The Vulkan layer cannot bind %ls at a pixel slot of a replaced draw (%ls); the game's texture stays there",
+                             item.resource->name.c_str(),found->second.reasons[2].c_str());
+            }
         }
         next.items.push_back(std::move(own));
     }

@@ -10,6 +10,7 @@
 #include <climits>
 #include <array>
 #include <map>
+#include <filesystem>
 #include "ResourceHash.h"
 #include "Overlay.h"
 #include "globals.h"
@@ -27,11 +28,20 @@ bool FrontendSlotRange(SlotRangeCopyOperation&,CommandListState&,bool& bind,unsi
 
 namespace efmi::frontend {
 namespace {
+// What ends a command (D-162). The original's unit of failure is the line: a command that cannot act does
+// nothing, a warning says so, and its list goes on. `refuse` is that: the command does nothing, the layer's
+// notice names it once, the list runs to its end and the draws it records are drawn. `refuse_draw` is for
+// what no line of the original corresponds to: the host cannot draw this draw as the Mod's (a native
+// command's contract with the renderer, a budget of the planner). The lists still run to their end, so
+// the Mod's variables are what the original leaves, and the draw stays the game's.
 struct Refused : std::exception {
     std::wstring reason;
-    explicit Refused(std::wstring text) : reason(std::move(text)) {}
+    bool draw = false;
+    explicit Refused(std::wstring text, bool whole = false) : reason(std::move(text)), draw(whole) {}
 };
 [[noreturn]] void refuse(const std::wstring& text) { throw Refused{text}; }
+[[noreturn]] void refuse_draw(const std::wstring& text) { throw Refused{text, true}; }
+std::wstring widen(const char* text) { const std::string s = text ? text : ""; return std::wstring(s.begin(), s.end()); }
 constexpr size_t max_steps = 65536, max_items = 4096, max_draws = 256;
 constexpr size_t max_active_depth = 64;
 // declared: a replaced draw's plan answers a declaration operand (`ResourceX !== null`) from its own
@@ -42,7 +52,30 @@ struct QueryService {DrawPlanAdapter::ResourceQuery read,texture,plan_read,decla
     std::vector<std::pair<wchar_t,unsigned>> words;uint32_t words_second=0;bool words_over=false;
     DrawPlanAdapter::HostValue host;DrawPlanAdapter::RenderTargetSize rt;
     // inside: in a draw's scope, within a CustomShader (D-087); drawing: a draw's scope is open.
-    std::function<bool()> gate,inside,drawing;bool open() const {return !gate || gate() || (inside && inside());}};
+    std::function<bool()> gate,inside,drawing;bool open() const {return !gate || gate() || (inside && inside());}
+    // What a replaced draw's state holds at a target (a slot, `this`): false for a target that is no slot of
+    // the context, or outside an execution. Queries on a slot read what the lists bound there (D-161).
+    std::function<bool(ResourceCopyTarget&,CommandListState&,SlotValue&,SlotId&)> held;
+    // The line of the bridged command that runs, for an operand's notice.
+    const std::wstring* line=nullptr;
+    std::unordered_set<const void*> told;
+    std::unordered_map<const CustomResource*,float> file_sizes; // a declared buffer file's size, -1 where it cannot be read
+    // An operand nothing answers (P1-4, D-163): the table's value, said once per operand, and the
+    // expression goes on. It refused the whole list before.
+    float gap(const void* operand,OperandGap kind,const std::wstring& why){return gap(operand,kind,operand_value(kind),why);}
+    bool strict=false; // an intercepted shader call: an operand nothing answers ends the call
+    float gap(const void* operand,OperandGap kind,float value,const std::wstring& why)
+    {
+        if(strict)refuse(why.empty()?L"An operand of an intercepted shader call has no answer":why);
+        if(told.size()<64 && told.insert(operand).second){
+            const char* name="";
+            for(const auto& row:operand_table())if(row.gap==kind)name=row.operand;
+            LayerGap(L"The Vulkan layer cannot answer an operand and goes on with %g: %ls (%hs%ls%ls)",double(value),
+                     line?line->c_str():L"a condition or value",name,why.empty()?L"":L": ",why.c_str());
+        }
+        return value;
+    }
+};
 // What the owned work of a replaced draw may read or bind (D-087): the Mod's resources, IniParams,
 // null and the compute stage's slots. The application's bindings are not reachable from it.
 bool owned_side(const ResourceCopyTarget& t)
@@ -61,13 +94,21 @@ public:
     NativeShaderQuery(std::shared_ptr<CommandListOperand> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* =nullptr) override {
         float value=0;std::wstring why;
-        if(!state || ++service->count>max_steps)refuse(L"Shader query adapter is unavailable or over budget");
-        if(!service->shader || !service->open()){
-            // A replaced draw's plan: what the host answers on the CPU (D-089).
-            if(service->plan_shader && service->plan_shader(*source,*state,value,why))return value;
-            refuse(why.empty()?L"Shader query adapter is unavailable or over budget":why);
-        }
-        if(!service->shader(*source,*state,value,why))refuse(why.empty()?L"Original shader query refused":why);return value;
+        const auto& target=source->shader_target;
+        const auto mode=target.evaluation_mode;
+        try{
+            if(!state || ++service->count>max_steps)return service->gap(this,OperandGap::Evaluation,L"shader query outside a command list or over the query budget");
+            if(!service->shader || !service->open()){
+                // A replaced draw's plan: what the host answers on the CPU (D-089).
+                if(service->plan_shader && service->plan_shader(*source,*state,value,why))return value;
+            }else if(service->shader(*source,*state,value,why))return value;
+        }catch(const Refused& e){why=e.reason;} // a slot argument outside the shader's registers
+        // Nothing answers (process_shader_filter's own values, D-163): a bound shader no ShaderOverride
+        // names, a register that is not declared; a draw has no compute shader.
+        if(mode==ShaderTargetEvaluationMode::SHADER)
+            return service->gap(this,OperandGap::ShaderFilter,target.shader_type==L'c'?-0.0f:operand_value(OperandGap::ShaderFilter),why);
+        return service->gap(this,mode==ShaderTargetEvaluationMode::DCL_CB_TYPE || mode==ShaderTargetEvaluationMode::DCL_SRV_TYPE?
+                            OperandGap::ShaderDeclaredType:OperandGap::ShaderDeclaredSize,why);
     }
     bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
     bool optimise(HackerDevice*,std::shared_ptr<CommandListEvaluatable>*) override {return false;}
@@ -88,53 +129,177 @@ public:
     std::shared_ptr<CommandListOperand> source;
     std::shared_ptr<QueryService> service;
     NativeResourceQuery(std::shared_ptr<CommandListOperand> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
-    float evaluate(CommandListState* state,HackerDevice* =nullptr) override {
-        float result=0;std::wstring reason;
-        if(!state || ++service->count>max_steps)refuse(L"Resource query adapter is unavailable or over budget");
-        auto& target=source->texture_filter_target;
+    // What the original's process_texture_filter gives where no resource is bound, per kind of question.
+    static float nothing_bound(ResourceCopyTargetEvaluationMode mode){
+        switch(mode){
+        case ResourceCopyTargetEvaluationMode::RESOURCE:return -0.0f;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:return 0.0f;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE:return -1.0f;
+        case ResourceCopyTargetEvaluationMode::POOL_INDEX:return -3.0f;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_BIND_FLAGS:return 0.0f;
+        default:return -2.0f; // ResourcePropertyResult::RESOURCE_NOT_FOUND
+        }
+    }
+    static OperandGap gap_of(ResourceCopyTargetEvaluationMode mode){
+        switch(mode){
+        case ResourceCopyTargetEvaluationMode::RESOURCE:return OperandGap::ResourceFilter;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:return OperandGap::ResourceIdentity;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_REGION_HASH:case ResourceCopyTargetEvaluationMode::RESOURCE_SPATIAL_HASH:return OperandGap::ResourceHash;
+        default:return OperandGap::ResourceProperty;
+        }
+    }
+    // An identity for the application's binding of a slot: of the slot, since the layer does not hold the
+    // game's resource objects (the original hashes the object's pointer).
+    static float slot_identity(const SlotId& id){
+        const uint64_t mixed=(uint64_t(DrawState::cell(id))+1)*0x9E3779B97F4A7C15ull;
+        return EncodeFloat30(uint32_t(mixed^mixed>>32)|1u);
+    }
+    // A question about a resource of the Mod bound at a slot, as the original answers it for the custom
+    // resource (GetResourceStride, GetResourceFormat read the declaration first). False: not known here.
+    bool of_declaration(CustomResource* resource,ResourceCopyTargetEvaluationMode mode,float& result){
+        switch(mode){
+        case ResourceCopyTargetEvaluationMode::RESOURCE_SIZE:{
+            // A buffer's ByteWidth as the original makes it: its `byte_width`, its `data`, or its file's size
+            // (read once per declaration).
+            if(resource->override_type!=CustomResourceType::BUFFER && resource->override_type!=CustomResourceType::STRUCTURED_BUFFER &&
+               resource->override_type!=CustomResourceType::RAW_BUFFER)return false;
+            if(resource->override_byte_width!=-1){result=float(resource->override_byte_width);return true;}
+            if(resource->initial_data && resource->initial_data_size){result=float(resource->initial_data_size);return true;}
+            if(resource->filename.empty())return false;
+            auto found=service->file_sizes.find(resource);
+            if(found==service->file_sizes.end()){
+                std::error_code error;const auto size=std::filesystem::file_size(resource->filename,error);
+                if(service->file_sizes.size()>=4096)service->file_sizes.clear();
+                found=service->file_sizes.emplace(resource,error?-1.0f:float(size)).first;
+            }
+            if(found->second<0)return false;
+            result=found->second;return true;}
+        case ResourceCopyTargetEvaluationMode::RESOURCE:result=0.0f;return true; // bound; the original keeps no hash for what it made
+        case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:result=EncodeFloat30(uint32_t(HashPointer(resource)));return true;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE:
+            if(resource->override_stride!=-1){result=float(resource->override_stride);return true;}
+            if(resource->override_format!=DXGI_FORMAT(-1) && resource->override_format!=DXGI_FORMAT_UNKNOWN){result=float(dxgi_format_size(resource->override_format));return true;}
+            return false;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_FORMAT:
+            if(resource->override_format!=DXGI_FORMAT(-1) && resource->override_format!=DXGI_FORMAT_UNKNOWN){result=float(resource->override_format);return true;}
+            return false;
+        case ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE:result=float(resource->source_stride);return true;
+        case ResourceCopyTargetEvaluationMode::POOL_INDEX:result=float(resource->pool_index);return true;
+        default:return false;
+        }
+    }
+    // What the lists bound at the slot the question names (D-161): the original reads the context as it
+    // stands when the line runs, so after `vb0 = ResourceX` a question about vb0 is one about ResourceX,
+    // after `ps-t3 = null` one about nothing, after `ps-t1 = ref ps-t0` one about the game's texture of
+    // slot 0. Given: answered. None: not answerable, with the reason. Host: the application's own binding
+    // is there (or the target is no slot), and the host is asked as before. `matcher`: a pixel slot's
+    // filter value, which the texture matcher answers for a Mod's resource and the game's alike.
+    enum class Answer {Given,None,Host};
+    Answer from_state(CommandListState* state,ResourceCopyTarget& target,bool matcher,float& result,std::wstring& reason){
+        SlotValue held;SlotId slot;
+        if(!service->held || !service->held(target,*state,held,slot))return Answer::Host;
+        const auto mode=target.evaluation_mode;
+        switch(held.kind){
+        case SlotValue::Kind::Null:result=nothing_bound(mode);return Answer::Given;
+        case SlotValue::Kind::Resource:case SlotValue::Kind::Owned:
+            if(matcher)return Answer::Host;
+            if(of_declaration(held.resource,mode,result))return Answer::Given;
+            reason=L"a property of the Mod's resource bound at "+slot_name(slot)+L" that its declaration does not state";
+            return Answer::None;
+        case SlotValue::Kind::Foreign:
+            if(mode==ResourceCopyTargetEvaluationMode::RESOURCE){result=0.0f;return Answer::Given;} // bound, and no section names it
+            if(mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY){result=slot_identity(slot);return Answer::Given;}
+            reason=L"a resource the plan does not hold is bound at "+slot_name(slot);
+            return Answer::None;
+        default:break;
+        }
+        if(mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY){result=slot_identity(held.source);return Answer::Given;}
+        if(held.source==slot || matcher)return Answer::Host;
+        // The application's binding of another slot: the question is that slot's.
+        if(service->plan_read && !target.custom_resource_pool && target.type!=ResourceCopyTargetType::THIS_RESOURCE &&
+           held.source.kind==slot.kind && held.source.stage==slot.stage){
+            // The operand's own target names that slot for the length of the question.
+            struct Named {ResourceCopyTarget& t;unsigned slot;std::unique_ptr<CommandListExpression> expression;
+                ~Named(){t.slot=slot;t.slot_expression=std::move(expression);}} named{target,target.slot,std::move(target.slot_expression)};
+            target.slot=held.source.slot;
+            if(service->plan_read(target,*state,result,reason))return Answer::Given;
+        }
+        if(reason.empty())reason=L"the application's binding of "+slot_name(held.source)+L" is bound at "+slot_name(slot);
+        return Answer::None;
+    }
+    bool answer(CommandListState* state,ResourceCopyTarget& target,float& result,std::wstring& reason,OperandGap& gap){
         // `null` (`X === null`): the original finds no resource, -0 as a resource, 0 as an identity.
         if(target.type==ResourceCopyTargetType::EMPTY && !target.custom_resource_pool){
-            if(target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE)return -0.0f;
-            if(target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)return 0.0f;
+            if(target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE){result=-0.0f;return true;}
+            if(target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY){result=0.0f;return true;}
         }
         const bool drawing=service->drawing && service->drawing();
         // A declaration outside an owned scope, or in a generation without owned GPU work at all.
         if((!service->open() || !service->read) && service->declared && target.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !target.custom_resource_pool &&
            (target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE || target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)){
-            if(!service->declared(target,*state,result,reason))refuse(reason.empty()?L"Declaration query refused":reason);
-            return result;
+            if(service->declared(target,*state,result,reason))return true;
+            if(reason.empty())reason=L"Declaration query refused";
+            return false;
         }
         const bool pixel=target.type==ResourceCopyTargetType::THIS_RESOURCE ||
             (target.type==ResourceCopyTargetType::SHADER_RESOURCE && target.shader_type==L'p');
         const bool texture_match=(pixel || service->general_matches) && target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE && service->texture;
         if(!service->open() || (drawing && !owned_side(target))){
             // Outside an owned scope (a replaced draw's plan), or the application's bindings in a draw's
-            // scope: what the host answers on the CPU. A Mod resource in a draw's scope: what the
-            // owned work holds (D-087).
-            if(service->plan_read && service->plan_read(target,*state,result,reason))return result;
+            // scope. First what the lists bound at the slot.
+            switch(from_state(state,target,texture_match && pixel,result,reason)){
+            case Answer::Given:return true;
+            case Answer::None:return false;
+            default:break;
+            }
+            // What the host answers on the CPU. A Mod resource in a draw's scope: what the owned work
+            // holds (D-087).
+            if(service->plan_read && service->plan_read(target,*state,result,reason))return true;
             if(!drawing || !owned_side(target) || !service->read){
                 // `ps-t0 == 905031` where nothing else answers: the original's FindTextureOverrides on the texture
                 // bound at that pixel slot, the filter_index of the section that matches it, from the host's
                 // texture matcher (a Mod finding which slot holds one of its textures, BUG-064).
                 if(texture_match && pixel){
                     reason.clear();
-                    if(!service->texture(target,*state,result,reason))refuse(reason.empty()?L"Texture query refused":reason);
-                    return result;
+                    if(service->texture(target,*state,result,reason))return true;
+                    if(reason.empty())reason=L"Texture query refused";
+                    return false;
                 }
-                refuse(reason.empty()?L"Resource query adapter is unavailable or over budget":reason);
+                if(reason.empty())reason=L"nothing answers for the game's resource in a replaced draw's plan";
+                return false;
             }
             reason.clear();
         }
         const auto& read=texture_match?service->texture:service->read;
         if(!read){
-            // No owned GPU work in this generation (the offline dry run, a CPU generation): what the host
-            // answers on the CPU, as a replaced draw's plan outside an owned scope.
-            if(service->plan_read && service->plan_read(target,*state,result,reason))return result;
-            refuse(reason.empty()?L"Resource query adapter is unavailable":reason);
+            // No owned GPU work in this generation (the offline dry run, a CPU generation): what the lists
+            // bound at the slot, then what the host answers on the CPU, as a replaced draw's plan outside an
+            // owned scope.
+            switch(from_state(state,target,false,result,reason)){
+            case Answer::Given:return true;
+            case Answer::None:return false;
+            default:break;
+            }
+            if(service->plan_read && service->plan_read(target,*state,result,reason))return true;
+            if(reason.empty())reason=L"Resource query adapter is unavailable";
+            return false;
         }
-        if(!read(target,*state,result,reason))
-            refuse(reason.empty()?L"Native resource query refused":reason);
-        return result;
+        if(read(target,*state,result,reason))return true;
+        if(reason.empty())reason=L"Native resource query refused";
+        return false;
+    }
+    float evaluate(CommandListState* state,HackerDevice* =nullptr) override {
+        float result=0;std::wstring reason;
+        auto& target=source->texture_filter_target;
+        OperandGap gap=gap_of(target.evaluation_mode);
+        if(!state || ++service->count>max_steps)return service->gap(this,OperandGap::Evaluation,L"resource query outside a command list or over the query budget");
+        try{if(answer(state,target,result,reason,gap))return result;}
+        catch(const Refused& e){reason=e.reason;}
+        catch(const std::exception& e){reason=widen(e.what());}
+        // Nothing answers (D-163). A filter value reads "bound, and no TextureOverride names it"; an
+        // identity is one of the operand; a property is the original's own UNKNOWN.
+        if(gap==OperandGap::ResourceIdentity)return service->gap(this,gap,EncodeFloat30(uint32_t(HashPointer(this))|1u),reason);
+        return service->gap(this,gap,reason);
     }
     bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
     bool optimise(HackerDevice*,std::shared_ptr<CommandListEvaluatable>*) override {return false;}
@@ -158,11 +323,16 @@ public:
 };
 class RangeIndexGuard final : public CommandListEvaluatable {
 public:
-    std::shared_ptr<CommandListEvaluatable> source;
-    explicit RangeIndexGuard(std::shared_ptr<CommandListEvaluatable> value):source(std::move(value)){}
+    std::shared_ptr<CommandListEvaluatable> source;std::shared_ptr<QueryService> service;
+    RangeIndexGuard(std::shared_ptr<CommandListEvaluatable> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* device=nullptr) override {
+        // A bound outside the integers: not a number, which the original's ResolveRange finds invalid (its
+        // warning, and the command does nothing) where its cast would be undefined.
         const auto value=source->evaluate(state,device);
-        if(!std::isfinite(value) || double(value)<INT_MIN || double(value)>INT_MAX)throw std::runtime_error("Resource range bound outside signed integer range");
+        if(!std::isfinite(value) || double(value)<INT_MIN || double(value)>INT_MAX){
+            if(service->strict)throw std::runtime_error("Resource range bound outside signed integer range");
+            return std::numeric_limits<float>::quiet_NaN();
+        }
         return value;
     }
     bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
@@ -172,13 +342,15 @@ public:
 // and asks again while the cache stays -1. The owned domain answers for o0; -2 marks "asked,
 // nothing bound" for the window heuristic, so the reference context is never queried; -3 is the
 // host's answer for a replaced draw whose pass binds no colour target (the original's -1 there).
-void fill_render_target(CommandListState& state,QueryService& service)
+// False with the reason where nothing answers: the host gave the state no size and no owned domain is open.
+bool fill_render_target(CommandListState& state,QueryService& service,std::wstring& why)
 {
-    if(state.rt_width!=-1 && state.rt_width!=-2)return;
-    if(!service.rt || !service.open())refuse(L"Render target size needs the owned GPU domain");
-    bool bound=false;float width=-1,height=-1;std::wstring why;
-    if(!service.rt(state,bound,width,height,why))refuse(why.empty()?L"Render target size query refused":why);
+    if(state.rt_width!=-1 && state.rt_width!=-2)return true;
+    if(!service.rt || !service.open()){why=L"the host does not know the draw's target, and no owned GPU domain is open";return false;}
+    bool bound=false;float width=-1,height=-1;
+    if(!service.rt(state,bound,width,height,why)){if(why.empty())why=L"Render target size query refused";return false;}
     if(bound){state.rt_width=width;state.rt_height=height;}
+    return true;
 }
 class RenderTargetQuery final : public CommandListEvaluatable {
 public:
@@ -186,8 +358,10 @@ public:
     std::shared_ptr<QueryService> service;
     RenderTargetQuery(std::shared_ptr<CommandListOperand> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* =nullptr) override {
-        if(!state)refuse(L"Render target size needs a command list state");
-        fill_render_target(*state,*service);
+        // Where nothing answers: the original's -1, what it reads while no 2D target is bound (D-163).
+        std::wstring why;
+        if(!state)return service->gap(this,OperandGap::RenderTargetSize,L"outside a command list");
+        if(!fill_render_target(*state,*service,why))return service->gap(this,OperandGap::RenderTargetSize,why);
         const float value=source->type==ParamOverrideType::RT_WIDTH?state->rt_width:state->rt_height;
         return value==-2 || value==-3?-1.0f:value;
     }
@@ -205,7 +379,8 @@ public:
     HostWindowQuery(std::shared_ptr<CommandListEvaluatable> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* device=nullptr) override {
         if(state && (state->rt_width==-1 || state->rt_width==-2)){
-            if(service->rt && service->open())fill_render_target(*state,*service);
+            std::wstring why;
+            if(service->rt && service->open())fill_render_target(*state,*service,why);
             if(state->rt_width==-1)state->rt_width=state->rt_height=-2;
         }
         return source->evaluate(state,device);
@@ -221,14 +396,28 @@ public:
     std::shared_ptr<QueryService> service;
     HostValueQuery(std::shared_ptr<CommandListOperand> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* =nullptr) override {
-        if(!state && source->type!=ParamOverrideType::EFFECTIVE_DPI)refuse(L"Cursor operand needs a command list state");
+        // Without a sample: the original's least DPI, and no hotspot (D-163).
         float value=0;
-        if(!service->host || !service->host(source->type,value) || !std::isfinite(value))refuse(L"Host value is unavailable");
-        return value;
+        if((state || source->type==ParamOverrideType::EFFECTIVE_DPI) && service->host && service->host(source->type,value) && std::isfinite(value))return value;
+        return service->gap(this,OperandGap::HostSample,source->type==ParamOverrideType::EFFECTIVE_DPI?96.0f:0.0f,L"no host sample");
     }
     bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
     bool optimise(HackerDevice*,std::shared_ptr<CommandListEvaluatable>*) override {return false;}
 };
+// scissor_left and its like: the original asks the context (RSGetScissorRects), which a hosted generation
+// has not; the table's value, said once (D-163).
+class UnansweredOperand final : public CommandListEvaluatable {
+public:
+    std::shared_ptr<QueryService> service;OperandGap kind;
+    UnansweredOperand(std::shared_ptr<QueryService> owner,OperandGap gap):service(std::move(owner)),kind(gap){}
+    float evaluate(CommandListState*,HackerDevice* =nullptr) override {return service->gap(this,kind,L"a hosted generation has no D3D11 context to ask");}
+    bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
+    bool optimise(HackerDevice*,std::shared_ptr<CommandListEvaluatable>*) override {return false;}
+};
+bool scissor_operand(ParamOverrideType type){
+    return type==ParamOverrideType::SCISSOR_LEFT || type==ParamOverrideType::SCISSOR_TOP ||
+           type==ParamOverrideType::SCISSOR_RIGHT || type==ParamOverrideType::SCISSOR_BOTTOM;
+}
 bool host_value(ParamOverrideType type){
     return type==ParamOverrideType::EFFECTIVE_DPI || type==ParamOverrideType::CURSOR_HOTSPOT_X || type==ParamOverrideType::CURSOR_HOTSPOT_Y;
 }
@@ -238,11 +427,14 @@ bool window_heuristic(ParamOverrideType type){
 }
 class SlotIndexGuard final : public CommandListEvaluatable {
 public:
-    std::shared_ptr<CommandListEvaluatable> source;
-    explicit SlotIndexGuard(std::shared_ptr<CommandListEvaluatable> value):source(std::move(value)){}
+    std::shared_ptr<CommandListEvaluatable> source;std::shared_ptr<QueryService> service;
+    SlotIndexGuard(std::shared_ptr<CommandListEvaluatable> value,std::shared_ptr<QueryService> owner):source(std::move(value)),service(std::move(owner)){}
     float evaluate(CommandListState* state,HackerDevice* device=nullptr) override {
+        // Not a number: below every slot, which the original's ResolveSlot reports as out of range (its
+        // warning, and the command does nothing) where its cast would be undefined.
         const auto value=source->evaluate(state,device);
-        if(!std::isfinite(value))refuse(L"Resource slot index is not finite");return value;
+        if(!std::isfinite(value) && service->strict)refuse(L"Resource slot index is not finite");
+        return std::isfinite(value)?value:-1.0f;
     }
     bool static_evaluate(float*,HackerDevice* =nullptr,bool=false) override {return false;}
     bool optimise(HackerDevice*,std::shared_ptr<CommandListEvaluatable>*) override {return false;}
@@ -274,7 +466,7 @@ bool cpu_expression(const std::shared_ptr<CommandListEvaluatable>& node, size_t 
     if(const auto* guard=dynamic_cast<RangeIndexGuard*>(node.get()))return cpu_expression(guard->source,depth+1);
     if(const auto* guard=dynamic_cast<SlotIndexGuard*>(node.get()))return cpu_expression(guard->source,depth+1);
     if(const auto* query=dynamic_cast<HostWindowQuery*>(node.get()))return dynamic_cast<CommandListOperand*>(query->source.get())!=nullptr;
-    if(dynamic_cast<HostValueQuery*>(node.get()) || dynamic_cast<RenderTargetQuery*>(node.get()))return true;
+    if(dynamic_cast<HostValueQuery*>(node.get()) || dynamic_cast<RenderTargetQuery*>(node.get()) || dynamic_cast<UnansweredOperand*>(node.get()))return true;
     if (const auto* operand = dynamic_cast<CommandListOperand*>(node.get())) {
         switch (operand->type) {
         case ParamOverrideType::VALUE: return true;
@@ -306,6 +498,10 @@ bool cpu_expression(const std::shared_ptr<CommandListEvaluatable>& node, size_t 
         case ParamOverrideType::RES_WIDTH: case ParamOverrideType::RES_HEIGHT:
         case ParamOverrideType::CURSOR_VISIBLE: case ParamOverrideType::CURSOR_SCREEN_X: case ParamOverrideType::CURSOR_SCREEN_Y:
         case ParamOverrideType::CURSOR_WINDOW_X: case ParamOverrideType::CURSOR_WINDOW_Y:
+        // The generation's own globals and the original's constants: hunting and frame analysis are off in
+        // a hosted generation, SLI and stereo read 0 in the original itself.
+        case ParamOverrideType::HUNTING: case ParamOverrideType::FRAME_ANALYSIS: case ParamOverrideType::SLI:
+        case ParamOverrideType::STEREO_ACTIVE: case ParamOverrideType::STEREO_AVAILABLE:
             return true;
         default: return false;
         }
@@ -326,10 +522,10 @@ void guard_target(ResourceCopyTarget& target,const std::shared_ptr<QueryService>
             expression=std::make_shared<PoolIndexGuard>(expression,target.custom_resource_pool);
     }
     if(target.slot_expression){auto& expression=target.slot_expression->evaluatable;guard_expression(expression,queries,depth+1);
-        if(!dynamic_cast<SlotIndexGuard*>(expression.get()))expression=std::make_shared<SlotIndexGuard>(expression);}
+        if(!dynamic_cast<SlotIndexGuard*>(expression.get()))expression=std::make_shared<SlotIndexGuard>(expression,queries);}
     for(auto* bound:{target.range_start.get(),target.range_end.get()})if(bound){
         guard_expression(bound->evaluatable,queries,depth+1);
-        if(!dynamic_cast<RangeIndexGuard*>(bound->evaluatable.get()))bound->evaluatable=std::make_shared<RangeIndexGuard>(bound->evaluatable);
+        if(!dynamic_cast<RangeIndexGuard*>(bound->evaluatable.get()))bound->evaluatable=std::make_shared<RangeIndexGuard>(bound->evaluatable,queries);
     }
     for(auto& arg:target.member_args)if(arg.expression)guard_expression(arg.expression->evaluatable,queries,depth+1);
 }
@@ -337,7 +533,8 @@ void guard_expression(std::shared_ptr<CommandListEvaluatable>& node,const std::s
 {
     if(depth>256)refuse(L"Pool expression nesting budget exceeded");
     if(auto operand=std::dynamic_pointer_cast<CommandListOperand>(node)){
-        if(operand->type==ParamOverrideType::SHADER && (queries->shader || queries->plan_shader)){
+        // Always: where no host answers for the game's shaders the query gives the table's value (D-163).
+        if(operand->type==ParamOverrideType::SHADER){
             auto& target=operand->shader_target;
             const auto mode=target.evaluation_mode;
             const unsigned limit=mode==ShaderTargetEvaluationMode::DCL_CB_TYPE || mode==ShaderTargetEvaluationMode::DCL_CB_SIZE?14u:128u;
@@ -347,14 +544,15 @@ void guard_expression(std::shared_ptr<CommandListEvaluatable>& node,const std::s
             node=std::make_shared<NativeShaderQuery>(std::move(operand),queries);return;
         }
         if(window_heuristic(operand->type)){node=std::make_shared<HostWindowQuery>(std::move(operand),queries);return;}
-        if(host_value(operand->type) && queries->host){node=std::make_shared<HostValueQuery>(std::move(operand),queries);return;}
+        if(host_value(operand->type)){node=std::make_shared<HostValueQuery>(std::move(operand),queries);return;}
+        if(scissor_operand(operand->type)){node=std::make_shared<UnansweredOperand>(queries,OperandGap::Scissor);return;}
         // Always: a replaced draw's state carries the host's answer (RuntimeDraw::target_width), with or
         // without an owned domain to ask; without either the query refuses with that reason.
         if(operand->type==ParamOverrideType::RT_WIDTH || operand->type==ParamOverrideType::RT_HEIGHT){
             node=std::make_shared<RenderTargetQuery>(std::move(operand),queries);return;
         }
         guard_target(operand->texture_filter_target,queries,depth+1);
-        if(operand->type==ParamOverrideType::TEXTURE && !cpu_expression(operand,depth+1) && (queries->read || queries->texture || queries->plan_read || queries->declared))
+        if(operand->type==ParamOverrideType::TEXTURE && !cpu_expression(operand,depth+1))
             node=std::make_shared<NativeResourceQuery>(std::move(operand),queries);
     }
     else if(auto* op=dynamic_cast<CommandListOperator*>(node.get())){
@@ -474,7 +672,10 @@ struct DrawPlanAdapter::Runtime {
     struct External {std::wstring name;DrawPlanAdapter::NativeCommand command;};
     std::unordered_map<ExplicitCommandListSection*,External> externals;
     std::unordered_map<ExplicitCommandListSection*,DrawPlanAdapter::NativeCommand> observers;
-    std::unordered_map<CustomResource*,CustomResource*> references;
+    // What a declaration holds, where the lists assigned it: a value of the draw state, with the execution
+    // an application's or owned value was taken in (0 for a value that lasts).
+    struct Held {SlotValue value;uint64_t execution=0;};
+    std::unordered_map<CustomResource*,Held> references;
     std::shared_ptr<QueryService> queries=std::make_shared<QueryService>();
     DrawPlanAdapter::FreshState fresh;
     DrawPlanAdapter::PaletteSource palette_source;
@@ -493,56 +694,192 @@ struct DrawPlanAdapter::Runtime {
             LayerGap(L"The Vulkan layer does not take this command, which does nothing: %ls (%ls)",line.c_str(),why.c_str());
     }
     bool keep_original=false; // a native kept the application's draw (DrawPlanAdapter::keep_original)
+    bool application_drawn=false; // the pre lists ended: the application's draw ran, or was skipped
+    // An intercepted shader call (execute_intercepted): the owned domain's transaction, where a command
+    // that cannot act and an operand nothing answers end the call, as before D-162.
+    bool strict=false;
     const CommandList* root=nullptr; // the matched root whose commands run (DrawPlanAdapter::current_root)
     const std::wstring* calling_line=nullptr; // the line that runs a native command, during it (current_line)
     size_t active_depth=0;
     DrawPlanAdapter::TextureQuery texture_query;
     DrawPlanAdapter::ResourceMatchQuery resource_match;
-    std::array<DrawPlanAdapter::PixelBinding,128> pixel_bindings;
-    // What the lists bound at a pixel slot so far, as the declaration it came from says (the stand-in of an
-    // application slot for the application's texture of that slot): what `ResourceX = ref ps-tN` holds then.
-    struct PixelHeld {bool planned=false;CustomResource* resource=nullptr;};
-    std::array<PixelHeld,128> pixel_held;
-    // The vertex buffers this plan bound, by DX11 slot, for `vb3 = vb0`; not planned where the
-    // application's own buffer is still bound.
-    struct VertexBinding {bool planned=false;CustomResource* resource=nullptr;std::shared_ptr<const PlanItem::OwnedBuffer> owned;};
-    std::array<VertexBinding,32> vertex_bindings;
-    VertexBinding index_binding; // the plan's index buffer binding, as the vertex ones (D-144)
+    // The context the lists of an execution run against (D-161, draw_state.h): every slot they set. It is
+    // the one structure in place of the six the plan kept before: the pixel bindings and what a reference of
+    // a pixel slot held, the vertex and index bindings, the stand-ins of the application's textures and of
+    // its other slots, and the changes of those.
+    DrawState context;
+    // The execution's serial. "The application's binding of slot S" is that of the draw the lists run for:
+    // a declaration that took one holds it for the lists of that draw. In a later draw it holds a resource
+    // the plan does not know (the original holds the object, which the game may have bound anywhere, or
+    // released, since); so does a declaration that took what the draw's owned work wrote.
+    uint64_t execution=0;
+    std::function<PipelineFacts()> facts; // DrawPlanAdapter::pipeline
     std::function<bool(uint32_t&)> draw_index_hash;
     std::unordered_set<const void*> unknown_identity_logged;
-    // `ResourceX = ref ps-tN` in a matched draw's plan: X refers to the application's texture at
-    // pixel slot N of that draw. One stand-in per slot marks it; it never reaches a file plan.
-    std::array<CustomResource,128> application_textures;
-    // The same for the application's bindings at other slots (a stage's t or cb, not pixel textures and
-    // not compute): `ResourceX = ref vs-t0`, `vs-t0 = null`, owned work, `vs-t0 = ref ResourceX` leaves
-    // the draw's bindings as the application made them, which the plan expresses by binding nothing
-    // there. A slot left changed at a draw or at the end needs the game's bindings in Vulkan terms (D-152).
-    using OtherSlot=std::tuple<int,wchar_t,unsigned>;
-    std::map<OtherSlot,CustomResource> application_others;
-    std::map<OtherSlot,std::wstring> other_changes; // slot -> the line that changed it
-    static bool other_slot(const ResourceCopyTarget& t){
-        return t.shader_type!=L'c' && ((t.type==ResourceCopyTargetType::SHADER_RESOURCE && t.shader_type!=L'p') ||
-                                       t.type==ResourceCopyTargetType::CONSTANT_BUFFER);
+    // The first reason the host cannot draw this draw as the Mod's (refuse_draw), kept while the lists run
+    // to their end (D-162).
+    std::wstring draw_refused;
+    void whole(const std::wstring& why){if(draw_refused.empty())draw_refused=why.empty()?L"The draw cannot be the Mod's":why;}
+    // What a command raised: a host failure leaves the draw to the game (in a list that draws nothing it
+    // is one more skipped command); anything else is the command's own, which does nothing and is said once.
+    void contained(const CommandListCommand* command,const std::wstring& line,const Refused& refused)
+    {
+        if(refused.draw && !tolerant)whole(refused.reason);
+        else skipped(command,line,refused.reason);
     }
-    const OtherSlot* application_other(const CustomResource* resource) const {
-        for(const auto& entry:application_others)if(&entry.second==resource)return &entry.first;
-        return nullptr;
+    // The pipeline slot a target names, with its number resolved as the original resolves it: Nothing for a
+    // number out of range (the original's warning; the command then does nothing), Other for a target
+    // that is no slot of the context.
+    enum class Named {Slot,Nothing,Other};
+    Named named(ResourceCopyTarget& target,CommandListState& state,SlotId& id)
+    {
+        switch(target.type){
+        case ResourceCopyTargetType::VERTEX_BUFFER:case ResourceCopyTargetType::INDEX_BUFFER:case ResourceCopyTargetType::SHADER_RESOURCE:
+        case ResourceCopyTargetType::CONSTANT_BUFFER:case ResourceCopyTargetType::RENDER_TARGET:case ResourceCopyTargetType::DEPTH_STENCIL_TARGET:
+        case ResourceCopyTargetType::UNORDERED_ACCESS_VIEW:case ResourceCopyTargetType::STREAM_OUTPUT:break;
+        default:return Named::Other;
+        }
+        const unsigned slot=target.ResolveSlot(&state);
+        return slot!=UINT_MAX && slot_of(target,slot,id)?Named::Slot:Named::Nothing;
     }
-    OtherSlot other_key(ResourceCopyTarget& t,CommandListState& state,const std::wstring& line){
-        const unsigned slot=t.ResolveSlot(&state);
-        if(slot>=128)refuse(L"Binding slot out of range: "+line);
-        return {int(t.type),t.shader_type,slot};
+    // What a declaration holds now.
+    SlotValue held(CustomResource* resource) const
+    {
+        SlotValue value;
+        if(!resource)return value;
+        const auto found=references.find(resource);
+        if(found!=references.end()){
+            // The original pool engine marks only the affected resource null when
+            // a slot changes type or a resource reset runs. Preserve references in
+            // other slots and the independent resource half of a mixed element.
+            if(resource->is_null)return value;
+            value=found->second.value;
+            if(found->second.execution && found->second.execution!=execution){value.kind=SlotValue::Kind::Foreign;value.owned.reset();}
+            return value;
+        }
+        // An empty original Resource declaration has no object until assigned; nor has a pool element its
+        // untyped template made that nothing assigned or wrote (D-143: the original binds it as null).
+        // Preserve typed/generated resources for their own adapters.
+        if(resource->filename.empty() && resource->override_type==CustomResourceType::INVALID &&
+           resource->override_format==DXGI_FORMAT(-1) && resource->override_stride==-1 &&
+           !resource->initial_data && !resource->resource && (!resource->pool || !owned_contents.count(resource)))return value;
+        value.kind=SlotValue::Kind::Resource;value.resource=resource;
+        return value;
     }
-    void others_restored(){
-        if(!other_changes.empty())refuse(L"Unsupported binding destination: "+other_changes.begin()->second);
+    // What a source of an assignment gives (ResourceCopyTarget::GetResource): a declaration's value, a
+    // slot's, null, or a resource the plan does not hold. `by` is the command, for a later notice.
+    SlotValue source_value(ResourceCopyTarget& source,CommandListState& state,const CommandListCommand* by)
+    {
+        SlotValue value;value.by=by;
+        ResourceCopyTarget* target=&source;
+        if(source.type==ResourceCopyTargetType::THIS_RESOURCE){
+            // The original: "this is not valid in this context", and no resource.
+            if(!state.this_target || state.this_target->type==ResourceCopyTargetType::THIS_RESOURCE)return value;
+            target=state.this_target;
+        }
+        switch(target->type){
+        case ResourceCopyTargetType::EMPTY:return value;
+        case ResourceCopyTargetType::CUSTOM_RESOURCE:{
+            auto* declaration=target->GetCustomResource(&state);
+            if(!declaration)return value;
+            direct_resource(declaration);
+            value=held(declaration);value.by=by;
+            break;}
+        default:{
+            SlotId id;
+            switch(named(*target,state,id)){
+            case Named::Slot:value=context.get(id);value.by=by;break;
+            case Named::Nothing:return value; // a number D3D11 has no slot for: nothing is there
+            default:value.kind=SlotValue::Kind::Foreign;break; // IniParams, the cursor, the back buffer
+            }}
+        }
+        // A view of a region of the resource (`ref vs-cb0->Region(a, b)`) is another view than the plan binds.
+        if(source.evaluation_mode!=ResourceCopyTargetEvaluationMode::RESOURCE && !value.null()){value.kind=SlotValue::Kind::Foreign;value.owned.reset();}
+        return value;
+    }
+    // A declaration takes a value (ResourceCopyTarget::SetResource for a custom resource).
+    void store(CustomResource* destination,SlotValue value)
+    {
+        if(references.size()>=max_steps && !references.count(destination))refuse(L"Declaration reference budget exceeded");
+        Held entry;
+        entry.execution=value.kind==SlotValue::Kind::Application || value.kind==SlotValue::Kind::Owned?execution:0;
+        const bool written=value.kind==SlotValue::Kind::Resource && owned_contents.count(value.resource);
+        if(!written)owned_contents.erase(destination);
+        destination->is_null=value.null();
+        entry.value=std::move(value);
+        references[destination]=std::move(entry);
+    }
+    // One slot of the state as a draw sees it, by the table: what the plan's items must leave bound there
+    // (the slot's value where honoured, else the application's own binding). A degraded slot is said once
+    // per command that set it.
+    Honour settle(const DrawState::Entry& entry,const PipelineFacts& pipeline,SlotValue& wanted)
+    {
+        const SlotId id=DrawState::slot(entry.cell);
+        wanted=SlotValue::application(id);
+        const Honour outcome=honour(id,entry.value,pipeline);
+        if(outcome==Honour::Honoured)wanted=entry.value;
+        else if(outcome==Honour::Degraded && entry.value.by && unknown_identity_logged.size()<64 && unknown_identity_logged.insert(entry.value.by).second)
+            LayerGap(L"The Vulkan layer cannot bind this at %ls for a replaced draw; the game's binding stays there: %ls",
+                     slot_name(id).c_str(),entry.value.by->ini_line.c_str());
+        return outcome;
+    }
+    // A draw is recorded: it sees the context as it stands (D-161). The items written here are the
+    // bindings it needs beyond what the items before it left bound. False: the draw would not reach the
+    // game's target and is left out, alone. `application`: the draw is the game's own, after the pre lists.
+    bool issue(bool application)
+    {
+        const PipelineFacts pipeline=facts?facts():PipelineFacts{};
+        auto& entries=context.entries();
+        auto& wanted=scratch_wanted;wanted.resize(entries.size());
+        for(size_t i=0;i<entries.size();++i){
+            const auto& entry=entries[i];
+            const Honour outcome=settle(entry,pipeline,wanted[i]);
+            if(outcome==Honour::NotDrawable){
+                if(entry.value.by && unknown_identity_logged.size()<64 && unknown_identity_logged.insert(entry.value.by).second)
+                    LayerGap(L"The Vulkan layer draws into the game's targets only; a draw with %ls changed is left out: %ls",
+                             slot_name(DrawState::slot(entry.cell)).c_str(),entry.value.by->ini_line.c_str());
+                return false;
+            }
+            // The game's own draw has the game's buffers whatever the lists put there; a draw of the
+            // Mod's cannot be made of them.
+            if(outcome==Honour::GameDraw && !application)
+                refuse_draw(L"The Mod's draw needs a buffer at "+slot_name(DrawState::slot(entry.cell))+L" that the Vulkan layer cannot bind"+
+                            (entry.value.by?L": "+entry.value.by->ini_line:std::wstring()));
+        }
+        for(size_t i=0;i<entries.size();++i){
+            auto& entry=entries[i];
+            if(entry.issued.same(wanted[i]))continue;
+            const SlotId id=DrawState::slot(entry.cell);
+            const SlotValue& value=wanted[i];
+            // The plan has items for the buffers of the input assembler and the pixel textures; a slot of
+            // another kind is honoured only as it stands (the table), and there is nothing to bind.
+            if(id.kind!=SlotKind::Vertex && id.kind!=SlotKind::Index && !(id.kind==SlotKind::ShaderResource && id.stage==kPixelStage)){
+                entry.issued=value;continue;
+            }
+            PlanItem item;item.slot=id.slot;
+            item.operation=id.kind==SlotKind::Vertex?PlanOperation::BindVertex:id.kind==SlotKind::Index?PlanOperation::BindIndex:PlanOperation::BindPixelResource;
+            switch(value.kind){
+            case SlotValue::Kind::Application:item.application_slot=int(value.source.slot);break;
+            case SlotValue::Kind::Resource:item.resource=value.resource;break;
+            case SlotValue::Kind::Owned:item.owned=value.owned;break;
+            default:break;
+            }
+            append(std::move(item));
+            entry.issued=value;
+        }
+        return true;
+    }
+    std::vector<SlotValue> scratch_wanted;
+    // The pre lists ran: where the application's draw stays it sees the context as they left it. Its
+    // bindings stand before `pre_items`; changed targets hide it, as it would not reach them (the table).
+    void application_draw()
+    {
+        if(active->skip_original && !keep_original)return;
+        if(!issue(true)){active->skip_original=true;keep_original=false;}
     }
     // A slot range's single slot operations, one per slot of the range, kept with the command (D-143).
     std::unordered_map<const SlotRangeCopyOperation*,std::vector<std::shared_ptr<ResourceCopyOperation>>> range_ops;
     std::vector<CustomResource*> range_resources;
-    int application_slot(const CustomResource* resource) const {
-        if(resource<application_textures.data() || resource>=application_textures.data()+application_textures.size())return -1;
-        return int(resource-application_textures.data());
-    }
     std::unordered_set<CustomResource*> files;
     std::unordered_map<CustomResource*, unsigned> file_roles; // referenced_roles
     std::function<bool()> owned_gate;
@@ -565,9 +902,10 @@ struct DrawPlanAdapter::Runtime {
         auto& dst=effective_target(copy->dst,state);
         if(dst.type!=ResourceCopyTargetType::CUSTOM_RESOURCE || dst.custom_resource_pool || dst.evaluation_mode!=ResourceCopyTargetEvaluationMode::RESOURCE)return;
         auto* destination=dst.GetCustomResource(&state,true);if(!destination)return;
-        if(copy->options!=ResourceCopyOptions::REFERENCE){
+        if(copies(copy->options)){
             if(references.size()>=max_steps && !references.count(destination))refuse(L"Declaration reference budget exceeded");
-            references[destination]=destination;owned_contents.insert(destination);
+            Held own;own.value.kind=SlotValue::Kind::Resource;own.value.resource=destination;
+            references[destination]=std::move(own);owned_contents.insert(destination);
         }
     }
     // Owned work in a draw's scope stays on the owned side (D-087).
@@ -575,11 +913,13 @@ struct DrawPlanAdapter::Runtime {
     {
         auto check=[&](const ResourceCopyTarget& t){
             if(!owned_side(t))refuse(L"Owned work in a replaced draw reaches the application's resources: "+command.ini_line);
-            // A declaration holding the application's binding at another slot is the application's (D-152).
+            // A declaration holding the application's binding of a slot is the application's (D-152).
             if(t.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !t.custom_resource_pool &&
-               t.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE &&
-               application_other(referenced(const_cast<ResourceCopyTarget&>(t).GetCustomResource(&state))))
-                refuse(L"Owned work in a replaced draw reaches the application's resources: "+command.ini_line);
+               t.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE){
+                const auto kind=held(const_cast<ResourceCopyTarget&>(t).GetCustomResource(&state)).kind;
+                if(kind==SlotValue::Kind::Application || kind==SlotValue::Kind::Foreign)
+                    refuse(L"Owned work in a replaced draw reaches the application's resources: "+command.ini_line);
+            }
         };
         if(auto* copy=dynamic_cast<ResourceCopyOperation*>(&command)){check(copy->src);check(copy->dst);}
         else if(auto* range=dynamic_cast<SlotRangeCopyOperation*>(&command)){check(range->src);check(range->dst);}
@@ -620,6 +960,97 @@ struct DrawPlanAdapter::Runtime {
             refuse(L"Texture this target is missing or cyclic");
         return *state.this_target;
     }
+    // `this` as the original resolves it, null where it is not valid (the original logs that and takes or
+    // sets nothing).
+    static ResourceCopyTarget* resolved(ResourceCopyTarget& target,CommandListState& state)
+    {
+        if(target.type!=ResourceCopyTargetType::THIS_RESOURCE)return &target;
+        if(!state.this_target || state.this_target->type==ResourceCopyTargetType::THIS_RESOURCE)return nullptr;
+        return state.this_target;
+    }
+    // `copy`, `copy_desc` and the MSAA resolve make a resource; everything else binds or holds the source's.
+    static bool copies(ResourceCopyOptions options){return (int(options)&int(ResourceCopyOptions::COPY_MASK))!=0;}
+    // A copy in a draw's scope that the owned side can make (D-087): its source is the Mod's. One whose
+    // source is the application's binding (`ResourceX = copy ps-t0`) is the plan's: the declaration holds
+    // that binding for this draw.
+    bool owned_reach(ResourceCopyOperation& copy,CommandListState& state)
+    {
+        if(!owned_side(copy.src) || !owned_side(copy.dst))return false;
+        if(copy.src.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !copy.src.custom_resource_pool &&
+           copy.src.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE){
+            const auto kind=held(copy.src.GetCustomResource(&state)).kind;
+            if(kind==SlotValue::Kind::Application || kind==SlotValue::Kind::Foreign)return false;
+        }
+        return true;
+    }
+    // `ResourceX = copy ...` where no owned work makes the copy: what X then holds. A copy of the game's
+    // resource holds, for the lists of this draw, what the game bound (nothing writes that between the
+    // line and the draw). A copy of a file of the Mod, which nothing writes, shows what the file shows,
+    // where X takes the source's description as it is (a declaration with keys of its own makes another
+    // resource). Any other copy, and every copy of a description alone, is not made: X is null, as the
+    // original leaves it for a null source, and the notice says so once (D-155).
+    SlotValue copied(ResourceCopyOperation& op,const CustomResource& destination,SlotValue value,const CommandListCommand* by)
+    {
+        const bool description=(int(op.options)&int(ResourceCopyOptions::COPY_DESC))!=0;
+        const bool plain=destination.filename.empty() && destination.override_type==CustomResourceType::INVALID &&
+                         destination.override_format==DXGI_FORMAT(-1) && destination.override_stride==-1 && !destination.initial_data;
+        switch(value.kind){
+        case SlotValue::Kind::Null:return value;
+        case SlotValue::Kind::Application:if(!description)return value;break;
+        case SlotValue::Kind::Resource:
+            if(!description && plain && !value.resource->filename.empty() && !owned_contents.count(value.resource))return value;
+            break;
+        default:break;
+        }
+        if(by && unknown_identity_logged.size()<64 && unknown_identity_logged.insert(by).second)
+            LayerGap(L"The Vulkan layer does not make this copy; the resource stays null: %ls",by->ini_line.c_str());
+        SlotValue none;none.by=by;return none;
+    }
+    // A resource assignment (ResourceCopyOperation::run): a total operation on the draw state and the
+    // declarations (D-161). Whatever the source and the destination, it sets what the original's
+    // SetResource sets and refuses nothing; what a draw can make of it is decided where the draw is
+    // recorded (issue()).
+    void assign(ResourceCopyOperation& op,CommandListState& state,const CommandListCommand* by)
+    {
+        SlotValue value=source_value(op.src,state,by);
+        // "Copy source was NULL": the destination is set to null, unless unless_null keeps it.
+        if(value.null() && (int(op.options)&int(ResourceCopyOptions::UNLESS_NULL)))return;
+        ResourceCopyTarget* dst=resolved(op.dst,state);
+        if(!dst)return;
+        if(dst->type==ResourceCopyTargetType::POOL){
+            // CopyResourceToPool: every element of the pool takes it.
+            auto* pool=dst->custom_resource_pool;
+            if(!pool)return;
+            validate_pool_runtime(*pool);
+            for(size_t i=0;i<pool->GetPoolSize();++i){
+                auto* element=pool->GetResource(float(i),false,true,true);
+                if(!element)continue;
+                direct_resource(element);
+                store(element,copies(op.options)?copied(op,*element,value,by):value);
+            }
+            return;
+        }
+        if(dst->type==ResourceCopyTargetType::CUSTOM_RESOURCE){
+            auto* destination=dst->GetCustomResource(&state,true);
+            if(!destination)return;
+            direct_resource(destination);
+            if(copies(op.options))value=copied(op,*destination,std::move(value),by);
+            store(destination,std::move(value));
+            return;
+        }
+        SlotId id;
+        // A number D3D11 has no slot for, IniParams, the back buffer, the CPU: the original sets nothing.
+        if(named(*dst,state,id)!=Named::Slot)return;
+        if(value.kind==SlotValue::Kind::Resource && owned_contents.count(value.resource)){
+            // What owned work wrote: at a vertex slot its buffer as the owned side holds it now (D-087);
+            // elsewhere, or without the draw's owned scope, content the plan cannot bind.
+            PlanItem::OwnedBuffer buffer;std::wstring why;
+            if(id.kind==SlotKind::Vertex && owned_binding && drawing() && owned_binding(op.src,state,buffer,why)){
+                value.kind=SlotValue::Kind::Owned;value.owned=std::make_shared<const PlanItem::OwnedBuffer>(std::move(buffer));
+            }else value.kind=SlotValue::Kind::Foreign;
+        }
+        context.set(id,std::move(value));
+    }
     void texture_matches(ResourceCopyTarget& target,CommandListState& state,bool& bound,TextureOverrideMatches& matches)
     {
         auto& resolved=effective_target(target,state);
@@ -642,13 +1073,26 @@ struct DrawPlanAdapter::Runtime {
                     refuse(L"Matched texture command lists were not adapted");
                 return;
             }
-            const auto slot=resolved.ResolveSlot(&state);
-            if(slot>=pixel_bindings.size())refuse(L"Texture query slot outside supported range");
+            // What the slot holds (D-161): nothing, a resource of the Mod, or the application's texture
+            // of a pixel slot, which the host names by the slot the game bound it at.
+            SlotId id;
+            if(named(resolved,state,id)!=Named::Slot)return; // no such slot: nothing is bound there
+            const SlotValue value=context.get(id);
             DrawPlanAdapter::TextureIdentity identity;
-            const auto& binding=pixel_bindings[slot];
-            if(binding.application || binding.resource){
             std::wstring why;
-            if(!texture_query(slot,binding,state,identity,why))refuse(why.empty()?L"Texture source identity is unknown":why);
+            switch(value.kind){
+            case SlotValue::Kind::Null:return;
+            case SlotValue::Kind::Resource:case SlotValue::Kind::Owned:
+                if(!texture_query(id.slot,PixelBinding{false,value.resource},state,identity,why))refuse(why.empty()?L"Texture source identity is unknown":why);
+                break;
+            case SlotValue::Kind::Application:
+                if(value.source.kind==SlotKind::ShaderResource && value.source.stage==kPixelStage){
+                    if(!texture_query(value.source.slot,PixelBinding{},state,identity,why))refuse(why.empty()?L"Texture source identity is unknown":why);
+                    break;
+                }
+                // The application's binding of another kind of slot, or a resource the plan does not hold:
+                // bound, and no identity the layer knows.
+            default:bound=true;return;
             }
             bound=identity.bound;if(!bound)return;
             find_texture_override_for_hash(identity.hash,&matches,state.call_info);
@@ -680,19 +1124,25 @@ struct DrawPlanAdapter::Runtime {
             bound=target.GetCustomResource(&state)!=nullptr;return;
         case ResourceCopyTargetType::EMPTY:
             return;
-        case ResourceCopyTargetType::VERTEX_BUFFER:{
-            const auto slot=target.ResolveSlot(&state);
-            if(slot>=vertex_bindings.size())refuse(L"Texture query slot outside supported range");
-            const auto& b=vertex_bindings[slot];
-            if(b.planned){bound=b.resource || b.owned;return;}
-            unknown();return;}
-        case ResourceCopyTargetType::INDEX_BUFFER:{
-            if(index_binding.planned){bound=index_binding.resource!=nullptr;return;}
-            uint32_t hash=0;
-            if(!draw_index_hash || !draw_index_hash(hash)){unknown();return;}
-            bound=true;region_hash_matches(hash,state,matches);return;}
-        default:
-            unknown();return;
+        default:{
+            SlotId id;
+            const auto slot=named(target,state,id);
+            if(slot==Named::Nothing)return; // no such slot: nothing is bound there
+            if(slot==Named::Other){unknown();return;}
+            const SlotValue value=context.get(id);
+            switch(value.kind){
+            case SlotValue::Kind::Null:return;
+            // A Mod's own buffer has no handle info and meets nothing.
+            case SlotValue::Kind::Resource:case SlotValue::Kind::Owned:bound=true;return;
+            case SlotValue::Kind::Application:{
+                uint32_t hash=0;
+                // The matched draw's own index buffer, where it is still bound.
+                if(id.kind==SlotKind::Index && value.source==id && draw_index_hash && draw_index_hash(hash)){
+                    bound=true;region_hash_matches(hash,state,matches);return;
+                }
+                unknown();return;}
+            default:unknown();return;
+            }}
         }
     }
     // A declaration reference executed by the owned backend is also what later replaced draws
@@ -700,16 +1150,18 @@ struct DrawPlanAdapter::Runtime {
     void mirror_reference(CommandListCommand& command,CommandListState& state)
     {
         auto* copy=dynamic_cast<ResourceCopyOperation*>(&command);
-        if(!copy || typeid(*copy)!=typeid(ResourceCopyOperation) || copy->options!=ResourceCopyOptions::REFERENCE)return;
+        if(!copy || typeid(*copy)!=typeid(ResourceCopyOperation) || copies(copy->options))return;
         auto& dst=effective_target(copy->dst,state);
         if(dst.type!=ResourceCopyTargetType::CUSTOM_RESOURCE || dst.custom_resource_pool || dst.evaluation_mode!=ResourceCopyTargetEvaluationMode::RESOURCE ||
            copy->src.evaluation_mode!=ResourceCopyTargetEvaluationMode::RESOURCE || copy->src.custom_resource_pool)return;
-        CustomResource* source=nullptr;
-        if(copy->src.type==ResourceCopyTargetType::CUSTOM_RESOURCE)source=referenced(copy->src.GetCustomResource(&state));
-        else if(copy->src.type!=ResourceCopyTargetType::EMPTY)return;
+        Held mirrored;
+        if(copy->src.type==ResourceCopyTargetType::CUSTOM_RESOURCE){
+            mirrored.value=held(copy->src.GetCustomResource(&state));
+            if(mirrored.value.kind==SlotValue::Kind::Application || mirrored.value.kind==SlotValue::Kind::Owned)mirrored.execution=execution;
+        }else if(copy->src.type!=ResourceCopyTargetType::EMPTY)return;
         auto* destination=dst.GetCustomResource(&state,true);if(!destination)return;
         if(references.size()>=max_steps && !references.count(destination))refuse(L"Declaration reference budget exceeded");
-        references[destination]=source;
+        references[destination]=std::move(mirrored);
     }
     void check_texture(CheckTextureOverrideCommand& check,CommandListState& state)
     {
@@ -755,28 +1207,47 @@ struct DrawPlanAdapter::Runtime {
     void declared(ResourceCopyTarget& target,CommandListState& state,float& result)
     {
         auto* declaration=target.GetCustomResource(&state);direct_resource(declaration);
-        auto* resource=referenced(declaration);
+        const SlotValue value=held(declaration);
         const bool identity=target.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY;
-        if(!resource){result=identity?0.0f:-0.0f;return;}
-        // The slot may have been bound anew since the reference was taken; its texture then is not
-        // what the plan's binding of the slot says.
-        if(application_slot(resource)>=0)refuse(L"An application texture held by a declaration is not known in a replaced draw's plan");
-        result=identity?EncodeFloat30(uint32_t(HashPointer(resource))):0.0f;
+        switch(value.kind){
+        case SlotValue::Kind::Null:result=identity?0.0f:-0.0f;return;
+        case SlotValue::Kind::Resource:case SlotValue::Kind::Owned:
+            result=identity?EncodeFloat30(uint32_t(HashPointer(value.resource))):0.0f;return;
+        case SlotValue::Kind::Application:
+            // The application's binding of a slot, taken in this draw (D-161): the slot's identity; as a
+            // filter value what the matcher says of the game's texture where it is a pixel slot's, else
+            // bound and named by no section.
+            if(identity){result=NativeResourceQuery::slot_identity(value.source);return;}
+            result=0.0f;
+            if(value.source.kind==SlotKind::ShaderResource && value.source.stage==kPixelStage && texture_query && !(resource_match && gpu())){
+                DrawPlanAdapter::TextureIdentity texture;std::wstring why;
+                if(!texture_query(value.source.slot,PixelBinding{},state,texture,why))refuse(why.empty()?L"Texture source identity is unknown":why);
+                if(!texture.bound){result=-0.0f;return;}
+                TextureOverrideMatches matches;
+                find_texture_override_for_hash(texture.hash,&matches,state.call_info);
+                if(!G->mFuzzyTextureOverrides.empty() && texture.described)described_resource_matches(texture.description,state,matches);
+                result=filter_value(matches);
+            }
+            return;
+        default:
+            // A resource the plan does not hold: bound, named by no section, and itself.
+            result=identity?EncodeFloat30(uint32_t(HashPointer(declaration))|1u):0.0f;return;
+        }
     }
+    // process_texture_filter for a bound resource: the filter_index of the last matching section that
+    // has one, 1 for a match without, 0 for none.
+    static float filter_value(const TextureOverrideMatches& matches)
+    {
+        if(matches.empty())return 0.0f;
+        for(auto it=matches.rbegin();it!=matches.rend();++it)if((*it)->filter_index!=FLT_MAX)return (*it)->filter_index;
+        return 1.0f;
+    }
+    // The Mod's resource a declaration holds, null where it holds none (nothing, or a binding of the
+    // application's).
     CustomResource* referenced(CustomResource* resource) const
     {
-        const auto found=references.find(resource);
-        // The original pool engine marks only the affected resource null when
-        // a slot changes type or a resource reset runs. Preserve references in
-        // other slots and the independent resource half of a mixed element.
-        if (found != references.end()) return resource->is_null ? nullptr : found->second;
-        // An empty original Resource declaration has no object until assigned; nor has a pool element its
-        // untyped template made that nothing assigned or wrote (D-143: the original binds it as null).
-        // Preserve typed/generated resources for their own adapters.
-        if (resource && resource->filename.empty() && resource->override_type == CustomResourceType::INVALID &&
-            resource->override_format == DXGI_FORMAT(-1) && resource->override_stride == -1 &&
-            !resource->initial_data && !resource->resource && (!resource->pool || !owned_contents.count(resource))) return nullptr;
-        return resource;
+        const SlotValue value=held(resource);
+        return value.kind==SlotValue::Kind::Resource?value.resource:nullptr;
     }
     void direct_resource(const CustomResource* resource)
     {
@@ -817,15 +1288,18 @@ struct DrawPlanAdapter::Runtime {
     void indexed(PlanItem& item,CommandListState& state)
     {
         if (++draws > max_draws) refuse(L"Plan draw budget exceeded");
-        others_restored(); // the draw reads the application's other bindings as they are (D-152)
         for (const auto* layout : state.input_layout_overrides) {
             if (!layout || item.layout.size() >= 256) refuse(L"Invalid layout operation list");
             item.layout.push_back(*layout);
         }
         if(palette_source){
+            // The draw's bone data is the renderer's: without it the Mod's mesh cannot be posed.
             std::wstring reason;
-            if(!palette_source(state,item.palette,reason))refuse(reason.empty()?L"Native draw palette unavailable":reason);
+            if(!palette_source(state,item.palette,reason))refuse_draw(reason.empty()?L"Native draw palette unavailable":reason);
         }
+        // The draw sees the context as the lists left it (D-161); one that would not reach the game's
+        // target is left out, alone.
+        if(!issue(false))return;
         append(std::move(item));
     }
     void append(PlanItem item)
@@ -919,11 +1393,13 @@ struct DrawPlanAdapter::Runtime {
         } timer{timing_slot ? *timing_slot : command_timing[typeid(*original).name()]};
 #endif
         if (!active) refuse(L"Planner command invoked outside a transaction");
-        if (++steps > max_steps) refuse(L"Plan execution budget exceeded");
-        if(active_depth>=max_active_depth)refuse(L"Native command stack budget exceeded");
-        ++active_depth;struct Depth {size_t& value;~Depth(){--value;}} depth{active_depth};
+        // The original stops a list at this depth with a warning (_RunCommandList), and its caller goes on.
         if (state->recursion >= MAX_COMMAND_LIST_RECURSION)
             refuse(L"Plan recursion budget exceeded");
+        // The planner's own bounds, which the original has not: past them the draw is not the Mod's.
+        if (++steps > max_steps) refuse_draw(L"Plan execution budget exceeded");
+        if(active_depth>=max_active_depth)refuse_draw(L"Native command stack budget exceeded");
+        ++active_depth;struct Depth {size_t& value;~Depth(){--value;}} depth{active_depth};
         if(auto* check=as<CheckTextureOverrideCommand>(original, kinds, K_CheckTextureOverrideCommand)){
             check_texture(*check,*state);return;
         }
@@ -963,15 +1439,14 @@ struct DrawPlanAdapter::Runtime {
                 return;
             }
             if(auto* copy=as<ResourceCopyOperation>(original, kinds, K_ResourceCopyOperation); copy && (kinds & K_ResourceCopyOperationExact)){
-                auto& dst=effective_target(copy->dst,*state);
+                auto* dst=resolved(copy->dst,*state);
                 bool owned_source=false;
                 if(copy->src.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !copy->src.custom_resource_pool &&
                    copy->src.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE)
                     owned_source=owned_contents.count(referenced(copy->src.GetCustomResource(state)))!=0;
-                if(dst.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !dst.custom_resource_pool &&
-                   dst.evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE &&
-                   (copy->options!=ResourceCopyOptions::REFERENCE || owned_source)){
-                    owned_only(*original,*state);
+                if(dst && dst->type==ResourceCopyTargetType::CUSTOM_RESOURCE && !dst->custom_resource_pool &&
+                   dst->evaluation_mode==ResourceCopyTargetEvaluationMode::RESOURCE &&
+                   (copies(copy->options) || owned_source) && owned_reach(*copy,*state)){
                     std::wstring why;
                     if(!resource_command(*original,*state,why))refuse(why.empty()?L"GPU resource command refused":why);
                     mirror_reference(*original,*state);mark_owned(*original,*state);
@@ -1058,127 +1533,18 @@ struct DrawPlanAdapter::Runtime {
             return;
         }
         if (auto* binding = as<ResourceCopyOperation>(original, kinds, K_ResourceCopyOperation)) {
-            auto& src = binding->src; auto& dst = effective_target(binding->dst,*state);
-            if (typeid(*binding) != typeid(ResourceCopyOperation) ||
-                src.evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE ||
-                dst.evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE)
-                refuse(L"Unsupported resource operation: " + original->ini_line);
-            PlanItem item;
-            if(dst.type==ResourceCopyTargetType::CUSTOM_RESOURCE){
-                auto* destination=dst.GetCustomResource(state,true);direct_resource(destination);
-                CustomResource* source=nullptr;
-                if(src.type==ResourceCopyTargetType::CUSTOM_RESOURCE && binding->options==ResourceCopyOptions::REFERENCE){
-                    source=src.GetCustomResource(state);direct_resource(source);source=referenced(source);
-                }else if(src.type==ResourceCopyTargetType::SHADER_RESOURCE && src.shader_type==L'p' &&
-                         binding->options==ResourceCopyOptions::REFERENCE){
-                    // What the slot holds now, kept by reference, as the original reads the slot as it is bound
-                    // when the line runs (ResourceCopyOperation::run, PSGetShaderResources): what the lists bound
-                    // there before, null after their unbind, and the application's texture of the matched draw
-                    // where they bound nothing. The application's was taken always before, so a list that saved
-                    // its own binding and put it back drew with the game's texture (the judge's line
-                    // `save_restore_pixel`).
-                    const unsigned slot=src.ResolveSlot(state);
-                    if(slot>=128)refuse(L"Pixel slot out of range: "+original->ini_line);
-                    source=pixel_held[slot].planned?pixel_held[slot].resource:&application_textures[slot];
-                }else if(other_slot(src) && binding->options==ResourceCopyOptions::REFERENCE){
-                    // The application's binding at another slot, held to be put back (D-152).
-                    source=&application_others[other_key(src,*state,original->ini_line)];
-                }else if(src.type==ResourceCopyTargetType::CUSTOM_RESOURCE && !src.custom_resource_pool &&
-                         (binding->options==ResourceCopyOptions::COPY || binding->options==ResourceCopyOptions::COPY_DESC)){
-                    // A copy between declared resources, which the plan does not make here (`copy`, `copy_desc`):
-                    // the destination stays null, as the original leaves it when the source is null, the warning
-                    // says so once, and the list goes on (D-155). A whole Mod, or the folder, refused for one
-                    // such line before. Every other kind of source keeps refusing below.
-                    if(unknown_identity_logged.size()<64 && unknown_identity_logged.insert(original.get()).second)
-                        LayerGap(L"The Vulkan layer does not make this copy; the resource stays null: %ls",original->ini_line.c_str());
-                }else if(src.type!=ResourceCopyTargetType::EMPTY ||
-                         (binding->options!=ResourceCopyOptions::REFERENCE && binding->options!=ResourceCopyOptions::COPY))
-                    refuse(L"Unsupported declaration reference: "+original->ini_line);
-                if(references.size()>=max_steps && !references.count(destination))refuse(L"Declaration reference budget exceeded");
-                references[destination]=source;
-                if(!source || !owned_contents.count(source))owned_contents.erase(destination);
-                destination->is_null=source==nullptr;
-                return;
-            }else if (dst.type == ResourceCopyTargetType::VERTEX_BUFFER)
-                item.operation = PlanOperation::BindVertex;
-            else if (dst.type == ResourceCopyTargetType::INDEX_BUFFER)
-                item.operation = PlanOperation::BindIndex;
-            else if (dst.type == ResourceCopyTargetType::SHADER_RESOURCE && dst.shader_type == L'p')
-                item.operation = PlanOperation::BindPixelResource;
-            else if (other_slot(dst)) {
-                // Another slot of the application (D-152): put back to what it held, or changed.
-                const auto key = other_key(dst, *state, original->ini_line);
-                const CustomResource* held = nullptr;
-                if (src.type == ResourceCopyTargetType::CUSTOM_RESOURCE && binding->options == ResourceCopyOptions::REFERENCE) {
-                    auto* declaration = src.GetCustomResource(state); direct_resource(declaration); held = referenced(declaration);
-                }
-                const auto* restored = held ? application_other(held) : nullptr;
-                if (restored && *restored == key) other_changes.erase(key);
-                else {
-                    if (other_changes.size() >= max_steps && !other_changes.count(key)) refuse(L"Plan operation budget exceeded");
-                    other_changes[key] = original->ini_line;
-                }
-                return;
-            }
-            else refuse(L"Unsupported binding destination: " + original->ini_line);
-            item.slot = dst.ResolveSlot(state);
-            const unsigned limit = item.operation == PlanOperation::BindVertex ? 32 :
-                                   item.operation == PlanOperation::BindIndex ? 1 : 128;
-            if (item.slot >= limit) refuse(L"Binding slot out of range: " + original->ini_line);
-            if (src.type == ResourceCopyTargetType::CUSTOM_RESOURCE &&
-                binding->options == ResourceCopyOptions::REFERENCE) {
-                item.resource = src.GetCustomResource(state);
-                direct_resource(item.resource);item.resource=referenced(item.resource);
-                const int application=application_slot(item.resource);
-                if(application>=0){
-                    if(item.operation!=PlanOperation::BindPixelResource)refuse(L"An application texture bound outside a pixel slot: "+original->ini_line);
-                    item.application_slot=application;item.resource=nullptr;
-                }
-                if(item.resource && owned_contents.count(item.resource)){
-                    // What owned work wrote: its buffer, as the owned side holds it now (D-087).
-                    if(item.operation!=PlanOperation::BindVertex)refuse(L"Owned GPU content bound outside a vertex slot: "+original->ini_line);
-                    if(!owned_binding || !drawing())refuse(L"Owned GPU content bound outside a replaced draw's owned scope: "+original->ini_line);
-                    PlanItem::OwnedBuffer buffer;std::wstring why;
-                    if(!owned_binding(src,*state,buffer,why))refuse(why.empty()?L"Owned vertex buffer unavailable: "+original->ini_line:why);
-                    item.owned=std::make_shared<const PlanItem::OwnedBuffer>(std::move(buffer));item.resource=nullptr;
-                }
-            } else if (src.type == ResourceCopyTargetType::VERTEX_BUFFER && item.operation == PlanOperation::BindVertex &&
-                       binding->options == ResourceCopyOptions::REFERENCE) {
-                // `vb3 = vb0`: the buffer at that slot as it is bound there (between two slots of one kind
-                // the original's default is a reference). What this plan bound; the application's own
-                // buffer at another slot is not a binding the host makes.
-                const unsigned from = src.ResolveSlot(state);
-                if (from >= vertex_bindings.size()) refuse(L"Binding slot out of range: " + original->ini_line);
-                const auto& bound = vertex_bindings[from];
-                if (!bound.planned) refuse(L"The application's vertex buffer bound at another slot: " + original->ini_line);
-                item.resource = bound.resource; item.owned = bound.owned;
-            } else if (src.type != ResourceCopyTargetType::EMPTY ||
-                       (binding->options != ResourceCopyOptions::REFERENCE &&
-                        binding->options != ResourceCopyOptions::COPY)) {
-                refuse(L"Unsupported resource source or copy policy: " + original->ini_line);
-            }
-            if(item.operation==PlanOperation::BindPixelResource){
-                pixel_bindings[item.slot]=item.application_slot==int(item.slot)?PixelBinding{}:PixelBinding{false,item.resource};
-                pixel_held[item.slot]={true,item.application_slot>=0?&application_textures[item.application_slot]:item.resource};
-            }
-            if(item.operation==PlanOperation::BindVertex)vertex_bindings[item.slot]={true,item.resource,item.owned};
-            if(item.operation==PlanOperation::BindIndex)index_binding={true,item.resource,nullptr};
-            append(std::move(item));
+            assign(*binding,*state,original.get());
             return;
         }
         if (auto* batch = as<ShaderResourceBatch>(original, kinds, K_ShaderResourceBatch)) {
-            // A fetch of pixel slots into resources by reference keeps the application's textures
-            // (application_textures); other fetches need the owned GPU adapter.
-            bool application_fetch=dynamic_cast<ShaderResourceFetchBatch*>(batch) && batch->shader_type==L'p';
-            for(const auto& operation:batch->operations)
-                application_fetch=application_fetch && operation && operation->options==ResourceCopyOptions::REFERENCE &&
-                    operation->dst.type==ResourceCopyTargetType::CUSTOM_RESOURCE && operation->src.type==ResourceCopyTargetType::SHADER_RESOURCE;
-            if(!(resource_command && gpu()) && !dynamic_cast<ShaderResourceBindBatch*>(batch) && !application_fetch)
-                refuse(L"Shader resource fetch requires a GPU resource adapter");
-            // Upstream batches adjacent reference operations after parsing.
+            // Upstream batches adjacent slot operations after parsing; each is the single operation it was,
+            // on its own: one that cannot act does nothing and the others of the batch go on.
             for (auto& operation : batch->operations) {
-                if (!operation || !cpu_arguments(*operation)) refuse(L"Unadapted batched binding query");
-                run(operation, state);
+                if (!operation) continue;
+                try {
+                    if (!cpu_arguments(*operation)) refuse(L"Unadapted batched binding query");
+                    run(operation, state);
+                } catch (const Refused& refused) { contained(operation.get(), operation->ini_line, refused); }
             }
             return;
         }
@@ -1191,8 +1557,10 @@ struct DrawPlanAdapter::Runtime {
                     std::wstring reason;
                     struct Calling {const std::wstring*& slot;const std::wstring* before;~Calling(){slot=before;}} calling{calling_line,calling_line};
                     calling_line=&original->ini_line;
+                    // A native command stands for the Core's list and the renderer's contract with it: where
+                    // it cannot act the layer cannot draw this draw as the Mod's (D-162).
                     if(!found->second.command(*state,item.phase_mask,reason) || nested_failed)
-                        refuse(reason.empty()?L"Native command refused: "+found->second.name:reason);
+                        refuse_draw(reason.empty()?L"Native command refused: "+found->second.name:reason);
                     return;
                 }
                 item.external = found->second.name; // copied only for an item that is kept (D-108)
@@ -1208,12 +1576,15 @@ struct DrawPlanAdapter::Runtime {
             if(observer!=observers.end()){
                 std::wstring reason;const unsigned phases=call->run_pre_and_post_together?3:state->post?2:1;
                 if(!observer->second(*state,phases,reason) || nested_failed)
-                    refuse(reason.empty()?L"Original command observer refused":reason);
+                    refuse_draw(reason.empty()?L"Original command observer refused":reason);
             }
             return;
         }
         if (as<SkipCommand>(original, kinds, K_SkipCommand)) {
-            active->skip_original = true; // Do not mutate the live caller before GPU readiness.
+            // Do not mutate the live caller before GPU readiness. After the application's draw the flag
+            // comes too late, as in the original (the context reads call_info.skip between its pre and
+            // post lists only).
+            if (!application_drawn) active->skip_original = true;
             return;
         }
         if (auto* param = as<ParamOverride>(original, kinds, K_ParamOverride)) {
@@ -1322,19 +1693,24 @@ public:
         }
     }
     void run(CommandListState* state) override {
-        if (!runtime->tolerant) {
+        auto& q = *runtime->queries;
+        struct Line { const std::wstring*& slot; const std::wstring* before; ~Line() { slot = before; } } line{q.line, q.line};
+        q.line = &ini_line;
+        if (runtime->strict) {
+            // An intercepted shader call is one transaction of the owned domain: it stands or falls whole.
             if (!arguments_supported) refuse(L"Unadapted expression query: " + ini_line);
             checked(state);
             return;
         }
-        // Each command on its own, in a called list as in the root: what this one cannot do ends here, and
-        // the commands after it in its list run (before, it ended every list up to the root command).
+        // Each command on its own, in a called list as in the root, in a replaced draw's lists as in the
+        // Present's (D-155, D-162): what this one cannot do ends here, and the commands after it in its list
+        // run. Before, in a replaced draw, it ended every list of the draw and the game's mesh stayed.
         try {
             if (!arguments_supported) refuse(L"Unadapted expression query: " + ini_line);
             checked(state);
         }
-        catch (const Refused& refused) { runtime->skipped(original.get(), ini_line, refused.reason); }
-        catch (const std::exception& e) { const std::string text = e.what(); runtime->skipped(original.get(), ini_line, std::wstring(text.begin(), text.end())); }
+        catch (const Refused& refused) { runtime->contained(original.get(), ini_line, refused); }
+        catch (const std::exception& e) { runtime->contained(original.get(), ini_line, Refused{widen(e.what())}); }
     }
 };
 class BridgeLinkedCommand final : public RunLinkedCommandList {
@@ -1343,13 +1719,25 @@ public:
     std::shared_ptr<DrawPlanAdapter::Runtime> runtime;
     BridgeLinkedCommand(std::shared_ptr<RunLinkedCommandList> command,std::shared_ptr<DrawPlanAdapter::Runtime> owner)
         :RunLinkedCommandList(command->link),original(std::move(command)),runtime(std::move(owner)){ini_line=original->ini_line;}
-    void run(CommandListState* state) override {runtime->run(original,state);}
+    void run(CommandListState* state) override {
+        if(runtime->strict){runtime->run(original,state);return;}
+        try{runtime->run(original,state);}
+        catch(const Refused& refused){runtime->contained(original.get(),ini_line,refused);}
+        catch(const std::exception& e){runtime->contained(original.get(),ini_line,Refused{widen(e.what())});}
+    }
 };
 }
 
 DrawPlanAdapter::DrawPlanAdapter() : runtime_(std::make_shared<Runtime>())
 {
     std::weak_ptr<Runtime> weak=runtime_;
+    runtime_->queries->held=[weak](ResourceCopyTarget& target,CommandListState& state,SlotValue& value,SlotId& slot){
+        auto owner=weak.lock();
+        if(!owner || !owner->active)return false;
+        auto* named=Runtime::resolved(target,state);
+        if(!named || named->custom_resource_pool || owner->named(*named,state,slot)!=Runtime::Named::Slot)return false;
+        value=owner->context.get(slot);return true;
+    };
     runtime_->queries->declared=[weak](ResourceCopyTarget& target,CommandListState& state,float& result,std::wstring& reason){
         auto owner=weak.lock();if(!owner || !owner->active){reason=L"Declaration query outside an active plan";return false;}
         owner->declared(target,state,result);return true;
@@ -1386,8 +1774,10 @@ bool DrawPlanAdapter::translucent(CommandListState& state,uint32_t count,uint32_
         PlanItem item;item.operation=PlanOperation::Translucent;item.index_count=count;item.first_index=first;
         item.alpha=alpha;item.mask_channel=channel;item.mask_invert=invert;
         if(mask){
-            runtime_->direct_resource(mask);item.resource=runtime_->referenced(mask);
-            if(item.resource && runtime_->application_slot(item.resource)>=0)refuse(L"A translucency mask from the application's textures");
+            runtime_->direct_resource(mask);
+            const SlotValue held=runtime_->held(mask);
+            if(held.kind==SlotValue::Kind::Application || held.kind==SlotValue::Kind::Foreign)refuse(L"A translucency mask from the application's textures");
+            item.resource=held.kind==SlotValue::Kind::Resource?held.resource:nullptr;
         }
         runtime_->indexed(item,state);return true;
     }catch(const Refused& e){why=e.reason;}
@@ -1439,6 +1829,16 @@ std::shared_ptr<RunLinkedCommandList> DrawPlanAdapter::linked(CommandList& targe
 CustomResource* DrawPlanAdapter::referenced_resource(CustomResource* resource) const
 {
     return runtime_->referenced(resource);
+}
+SlotValue DrawPlanAdapter::held(CustomResource* declaration) const { return runtime_->held(declaration); }
+bool DrawPlanAdapter::held(ResourceCopyTarget& target, CommandListState& state, SlotValue& value, SlotId& slot) const
+{
+    return runtime_->queries->held(target, state, value, slot);
+}
+void DrawPlanAdapter::pipeline(std::function<PipelineFacts()> facts)
+{
+    if(runtime_->active || !runtime_->adapted.empty() || !facts)refuse(L"Install the pipeline's facts before adapting command lists");
+    runtime_->facts=std::move(facts);
 }
 bool DrawPlanAdapter::has_reference(const CustomResource* resource) const
 {
@@ -1681,9 +2081,18 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
     auto saved_layout = state.input_layout_overrides;const auto saved_post=state.post;
     runtime_->active = &candidate; runtime_->steps = runtime_->draws = 0;runtime_->queries->count=0;runtime_->nested_failed=false;runtime_->active_depth=0;
     runtime_->keep_original=false;runtime_->shader_depth=0;
-    runtime_->pixel_bindings={};runtime_->pixel_held={};runtime_->vertex_bindings={};runtime_->index_binding={};runtime_->other_changes.clear();
+    // A fresh context: every slot holds the application's binding of the draw the lists run for (D-161).
+    runtime_->context.reset();++runtime_->execution;runtime_->draw_refused.clear();runtime_->application_drawn=false;
     phase("exec setup");
+    const bool listing=runtime_->tolerant; // a Present, Constants or key list: it draws nothing
     try {
+        // A nested callback that raised past its native caller: in a list that draws nothing the execution
+        // fails as before; a draw's lists run on and the draw stays the game's (D-162).
+        auto nested=[&]{
+            if(!runtime_->nested_failed)return;
+            if(listing)refuse(L"Nested native callback failed");
+            runtime_->whole(L"Nested native callback failed");
+        };
         auto run=[&](const auto& lists,CommandListState& phase){for(auto* root:lists){
             if(phase.aborted)break;
             auto* resolved=root->ResolveCommandList();
@@ -1692,32 +2101,29 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             runtime_->root=root;
             for(auto& command:resolved->commands){
                 if(phase.aborted)break;
-                if(!runtime_->tolerant){command->run(&phase);continue;}
-                // As the original's Present and Constants: the command did nothing, the list goes on. Whatever
-                // the command raised: the planner's refusal, or an exception of the original's code or of a
-                // guard (a range bound outside the integers), which ended the whole list for every Mod before.
-                // What reaches here is a command the bridge does not hold (the original's own if or assignment,
-                // whose condition or value raised).
-                auto skipped=[&](const std::wstring& why){
-                    const auto* source=original(*command);
-                    runtime_->skipped(source?source:command.get(),source?source->ini_line:std::wstring(),why);
-                };
+                // As the original: the command did nothing, the list goes on. A bridged command holds what it
+                // raises itself; what reaches here is a command the bridge does not hold (the original's own
+                // if or assignment, whose condition or value raised).
+                const auto* source=original(*command);
+                const std::wstring line=source?source->ini_line:std::wstring();
                 try{command->run(&phase);}
-                catch(const Refused& refused){skipped(refused.reason);}
-                catch(const std::exception& e){const std::string text=e.what();skipped(std::wstring(text.begin(),text.end()));}
+                catch(const Refused& refused){runtime_->contained(source?source:command.get(),line,refused);}
+                catch(const std::exception& e){runtime_->contained(source?source:command.get(),line,Refused{widen(e.what())});}
             }
             runtime_->root=nullptr;
-            if(runtime_->nested_failed)refuse(L"Nested native callback failed");
+            nested();
         }};
         if(post)state.post=false;
         run(pre,state);
         phase("exec pre lists");
-        if(runtime_->nested_failed)refuse(L"Nested native callback failed");
+        nested();
         runtime_->flush(state);
         phase("exec flush");
-        // The application's draw, where it stays, reads its other bindings as the pre lists left them (D-152).
-        if(!candidate.skip_original || runtime_->keep_original)runtime_->others_restored();
+        // The application's draw, where it stays, sees the context as the pre lists left it; its bindings
+        // stand before pre_items. A list that draws nothing has no draw to bind for.
+        if(!listing)runtime_->application_draw();
         candidate.pre_items=candidate.items.size();
+        runtime_->application_drawn=true;
         if(between){std::wstring why;if(!between(state,why))refuse(why.empty()?L"Root phase boundary refused":why);}
         // The original reaches a matched section's post list by checking again: the list that checked
         // (`CheckTextureOverride = ib` stands in both of its phases) looks the index buffer up afresh in its
@@ -1725,7 +2131,7 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
         // lists bound is the Mod's own, which the original keeps no hash for and which meets no section; with
         // none bound nothing is checked. The post lists of the sections then do not run (the judge's line
         // `post_draw`: a Mod that replaces `ib` and draws again in `post` draws once under the original).
-        if(post && !(matched && runtime_->index_binding.planned)){
+        if(post && !(matched && !runtime_->context.in_place(SlotId{SlotKind::Index,0,0}))){
             // RunCommandListComplete creates a fresh state for the independent
             // post root. Applied resource/layout state persists in the backend;
             // pending edits, abort and cached queries do not cross this boundary.
@@ -1734,15 +2140,18 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             after.this_target=state.this_target;after.resource=state.resource;after.view=state.view;after.post=true;
             if(runtime_->fresh)runtime_->fresh(after);
             run(*post,after);
-            if(runtime_->nested_failed)refuse(L"Nested native callback failed");
+            nested();
             runtime_->flush(after);
             phase("exec post lists+flush");
         }
-        // The game's later draws read what the lists left bound (D-152).
-        runtime_->others_restored();
-        if(runtime_->nested_failed)refuse(L"Nested native callback failed");
+        // What the lists leave bound after their last draw reaches no draw of the plan: the game binds its
+        // own for its next draw, and nothing is issued for it.
+        nested();
         if(runtime_->keep_original)candidate.skip_original=false;
-        std::swap(output, candidate); // both keep their capacity
+        // The lists ran to their end (D-162): the Mod's variables are what the original leaves. Where the
+        // host cannot draw the draw as the Mod's, the output stays and the reason goes back.
+        if(!runtime_->draw_refused.empty())reason=runtime_->draw_refused;
+        else std::swap(output, candidate); // both keep their capacity
         phase("exec output");
     } catch (const Refused& error) {
         reason = error.reason;
@@ -1766,9 +2175,11 @@ bool DrawPlanAdapter::execute_intercepted(const std::vector<CommandList*>& pre,c
     }
     DrawPlan candidate;candidate.skip_original=state.call_info->skip;
     runtime_->active=&candidate;runtime_->steps=runtime_->draws=runtime_->queries->count=0;
-    runtime_->nested_failed=false;runtime_->active_depth=0;runtime_->pixel_bindings={};runtime_->pixel_held={};runtime_->vertex_bindings={};runtime_->index_binding={};
-    runtime_->other_changes.clear();runtime_->keep_original=false;
+    runtime_->nested_failed=false;runtime_->active_depth=0;
+    runtime_->context.reset();++runtime_->execution;runtime_->draw_refused.clear();runtime_->application_drawn=false;runtime_->keep_original=false;
     runtime_->shader_depth=0;
+    // One transaction of the owned domain: a command that cannot act ends the call (Runtime::strict).
+    struct Strict {Runtime& r;Strict(Runtime& owner):r(owner){r.strict=r.queries->strict=true;}~Strict(){r.strict=r.queries->strict=false;}} strict(*runtime_);
     try{
         auto fresh=[&](CommandListState& root,bool after){root.mHackerDevice=state.mHackerDevice;root.mHackerContext=state.mHackerContext;
             root.mOrigDevice1=state.mOrigDevice1;root.mOrigContext1=state.mOrigContext1;root.call_info=state.call_info;root.post=after;
@@ -1781,12 +2192,10 @@ bool DrawPlanAdapter::execute_intercepted(const std::vector<CommandList*>& pre,c
             if(!candidate.items.empty())refuse(L"Intercepted shader calls require immediate resource/draw execution");
         }};
         run(pre,false);
-        if(!candidate.skip_original)runtime_->others_restored(); // D-152
         if(!candidate.skip_original && !state.call_info->hunting_skip){CommandListState caller;fresh(caller,false);
             std::wstring why;if(!original(caller,why))refuse(why.empty()?L"Original call callback refused":why);
             if(runtime_->nested_failed || !candidate.items.empty())refuse(L"Original call callback left failed or deferred work");}
         run(post,true);
-        runtime_->others_restored();
     }catch(const Refused& e){reason=e.reason;}
      catch(const std::exception& e){const std::string text=e.what();reason.assign(text.begin(),text.end());}
     runtime_->active=nullptr;return reason.empty();

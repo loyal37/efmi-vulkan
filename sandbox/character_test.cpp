@@ -531,7 +531,7 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
                         for (uint32_t stream : draw.vb) mix(digest, stream_of(stream));
                         mix(digest, uint64_t(draw.instances) << 32 | draw.first_instance);
                         mix(digest, uint64_t(draw.indexed) | uint64_t(draw.texture_only) << 1 | uint64_t(draw.translucent) << 2 | uint64_t(draw.mask_invert) << 3 |
-                                    uint64_t(uint32_t(draw.blend)) << 8);
+                                    uint64_t(draw.pipeline_blend) << 4 | uint64_t(uint32_t(draw.blend)) << 8);
                         for (const auto& o : draw.offsets) { mix(digest, uint64_t(o.binding) << 32 | o.from); mix(digest, o.to); }
                         for (const auto& o : draw.owned) mix(digest, uint64_t(o.slot) << 32 | o.stride);
                         if (draw.translucent) { uint32_t bits = 0; memcpy(&bits, &draw.alpha, sizeof(bits)); mix(digest, bits); mix(digest, image_of(draw.mask_image)); mix(digest, draw.mask_channel); }

@@ -129,6 +129,10 @@ struct RuntimeDraw {
     // The shader stages of the draw's pipeline, as Vulkan stage bits (vertex 1, geometry 8,
     // fragment 16) (D-089); 0 when not known.
     uint32_t shader_stages = 0;
+    // Bit N: the pipeline's vertex input reads binding N, DX11's input slot N (D-161: a buffer the lists
+    // bind at a slot the pipeline does not read is nothing to the draw, as under D3D11). Every bit when
+    // the host does not know the pipeline's vertex input.
+    uint32_t vertex_slots = UINT32_MAX;
     // What a library's shader hooks see of this draw under DX11, from the host's Vulkan pipeline
     // (D-113): its vertex shader has the output interface of the game's lit character vertex shader.
     bool lit_vertex = false;

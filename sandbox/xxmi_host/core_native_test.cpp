@@ -65,6 +65,7 @@ post $result = 100
             phase_seen|=phases;
             if(mode==1){reason=L"Core input unavailable";return false;}
             if(mode==2){adapter.invoke(bad,state,1,reason);reason.clear();return true;} // Deliberately mishandled by caller.
+            if(mode==6){adapter.invoke(bad,state,0,reason);reason.clear();return true;} // An invalid phase, mishandled too.
             if(mode==3)return adapter.invoke(root,state,1,reason);
             if(mode==5)return adapter.invoke(explicitCommandListSections.at(ns+L"abort"),state,3,reason);
             if(mode==4){
@@ -93,8 +94,14 @@ post $result = 100
     auto saved=plan.items[0].palette;
     mode=1;check(!execute(root.command_list) && reason==L"Core input unavailable" && plan.items.size()==1 && plan.items[0].palette==saved,
                  "native refusal preserves the caller's previous complete plan");
-    mode=2;check(!execute(root.command_list) && !reason.empty() && plan.items[0].palette==saved,
-                 "ignored nested callback failure still refuses the whole transaction");
+    // D-162: a command of the nested callback that cannot act (a draw of a negative count) does nothing and
+    // the transaction goes on; it refused the whole transaction before. A failure of the nested call itself
+    // (the host's: an invalid phase) still refuses it, also where the native caller ignores it.
+    mode=2;check(execute(root.command_list) && plan.items.size()==1 && plan.items[0].first_index==0,
+                 "a nested callback's command that cannot act does nothing and the transaction goes on");
+    saved=plan.items[0].palette;
+    mode=6;check(!execute(root.command_list) && !reason.empty() && plan.items[0].palette==saved,
+                 "an ignored failure of the nested call itself still refuses the whole transaction");
     mode=3;check(!execute(root.command_list) && !reason.empty(),"native callback recursion uses the same execution limit");
     mode=4;check(execute(root.command_list) && plan.items[0].first_index==11,
                  "native callback post phase resolves an alias changed during its original pre phase");
@@ -111,8 +118,8 @@ post $result = 100
     };
     check(run_pair(L"pair") && plan.items.size()==1 && plan.items[0].first_index==5,
           "root pre/post execute in one transaction and restore caller phase");
-    check(!run_pair(L"pairbad") && plan.items.size()==1 && plan.items[0].first_index==5,
-          "a late root post failure discards all earlier draw commands");
+    check(run_pair(L"pairbad") && plan.items.size()==1 && plan.items[0].first_index==0,
+          "a root post command that cannot act does nothing and the earlier draw commands are kept");
     mode=5;
     check(execute(root.command_list) && plan.skip_original && plan.items.empty() &&
           command_list_globals.at(L"$\\core_native\\result").fval==13,

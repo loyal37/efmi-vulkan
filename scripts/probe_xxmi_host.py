@@ -109,7 +109,7 @@ def main() -> int:
         sources += [upstream / "crc32c-hw-1.0.5/src/crc32c.cpp"]
         regex_lib = upstream / "pcre2/pcre2-8-64.lib"
         inputs += legacy_sources + sources + list(port.glob("*.h")) + [regex_lib, Path(__file__),
-                  ROOT / "frontend/xxmi/draw_plan.h", ROOT / "frontend/assets/dds.h"]
+                  ROOT / "frontend/xxmi/draw_plan.h", ROOT / "frontend/xxmi/draw_state.h", ROOT / "frontend/assets/dds.h"]
         inputs += [ROOT / "frontend/xxmi/resource_plan.h", ROOT / "frontend/xxmi/resource_match.h"] + list((ROOT / "frontend/assets").glob("*.h"))
         inputs += [ROOT / "frontend/xxmi/ini_module.cpp", ROOT / "frontend/xxmi/rabbit_textures.h"]
         inputs += [ROOT / "frontend/xxmi/skeleton_plan.h"]

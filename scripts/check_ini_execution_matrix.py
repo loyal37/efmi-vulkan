@@ -6,6 +6,12 @@ domain of the sandbox. This check fails when a class of the pinned source has no
 class's stated origin disagrees with the source, when a cpu decision disagrees with its probe
 (a fixture run through `runtime_test.exe --probe-command`), or when cited owned evidence is gone.
 It runs no GPU work and reads no installed file; the installed census is only reported beside.
+
+The matrix also carries the two tables of the draw state a replaced draw's lists run against
+(frontend/xxmi/draw_state.h; docs/architecture-review-2.1.md P1-2 and P1-4): `draw_state`, what a draw
+makes of each kind of slot holding each kind of value, and `operands`, what an operand reads where nothing
+answers. They are generated from the source (`runtime_test.exe --state-table`); the check fails when the
+copy in the matrix is not the source's, and `--write` renews the copy.
 """
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from ini_language import UPSTREAM, inventory
 
@@ -26,6 +33,42 @@ OWNED = CPU | {"gpu"}
 ORIGINS = {"parser", "optimiser", "shader-regex", "base", "none"}
 # Placeholder files: a CPU plan names file resources and never reads them.
 FILES = {"probe.buf": bytes(36), "probe.ib": bytes(6), "probe.dds": b"DDS " + bytes(124), "other.dds": b"DDS " + bytes(124)}
+
+
+GENERATED = {
+    "draw_state": "What a draw of a replaced draw's lists makes of one slot of the draw state, by the kind of slot and the kind of value "
+                  "the lists left there (frontend/xxmi/draw_state.h, honour()). Every resource assignment is a total operation on that "
+                  "state; this table is the one place that says what the layer gives a draw in Vulkan terms. Generated: "
+                  "scripts/check_ini_execution_matrix.py --write.",
+    "operands": "What an operand reads where neither the host nor an owned domain answers it: the expression goes on with this value "
+                "and a notice says so once per operand, instead of the list being refused (frontend/xxmi/draw_state.h, operand_table()). "
+                "Generated: scripts/check_ini_execution_matrix.py --write.",
+}
+
+
+def state_tables() -> dict:
+    run = subprocess.run([str(PROBE), "--state-table"], capture_output=True, text=True, timeout=30)
+    if run.returncode:
+        raise SystemExit("runtime_test.exe --state-table failed: " + run.stderr[-400:])
+    return json.loads(run.stdout)
+
+
+def write_generated(tables: dict) -> None:
+    """The two generated sections stand last in the file; everything before them is kept as it is written."""
+    text = MATRIX.read_text(encoding="ascii")
+    at = text.find(' "draw_state": {')
+    if at < 0:
+        end = text.rstrip().rfind("\n }")
+        head = text[:end] + "\n },\n"
+    else:
+        head = text[:at]
+    lines = []
+    for key in ("draw_state", "operands"):
+        rows = tables[key]
+        lines += [' "%s": {' % key, '  "scope": %s,' % json.dumps(GENERATED[key]), '  "rows": [']
+        lines += ['   ' + json.dumps(row, ensure_ascii=True) + ("," if i + 1 < len(rows) else "") for i, row in enumerate(rows)]
+        lines += ['  ]', ' }' + ("," if key == "draw_state" else "")]
+    MATRIX.write_text(head + "\n".join(lines) + "\n}\n", encoding="ascii", newline="\n")
 
 
 def constructed(name: str, sources: str) -> bool:
@@ -92,12 +135,19 @@ def main():
     if not PROBE.is_file():
         raise SystemExit("runtime_test.exe is missing; run scripts/build_xxmi_runtime.py first")
     OUT.mkdir(parents=True, exist_ok=True)
+    tables = state_tables()
+    if "--write" in sys.argv:
+        write_generated(tables)
+        matrix = json.loads(MATRIX.read_text(encoding="ascii"))
     sources = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(UPSTREAM.glob("*.cpp")))
     header = (UPSTREAM / "CommandList.h").read_text(encoding="utf-8", errors="replace")
     regex = (UPSTREAM / "ShaderRegex.cpp").read_text(encoding="utf-8", errors="replace")
     source_classes = set(inventory()["command_classes"])
     classes = matrix["classes"]
     failures = []
+    for key in ("draw_state", "operands"):
+        if matrix.get(key, {}).get("rows") != tables[key]:
+            failures.append(f"{key}: the table in frontend/xxmi/draw_state.h is not the copy in the matrix; run this script with --write")
     for name in sorted(source_classes - classes.keys()):
         failures.append(f"{name}: original command class without a stated decision")
     for name in sorted(classes.keys() - source_classes):
@@ -161,7 +211,8 @@ def main():
     for failure in failures:
         print("FAIL:", failure)
     probes = sum(1 for row in rows for use in row["uses"] if use.get("probe", True) is not None)
-    print(f"INI execution matrix: {len(rows)} classes, {probes} probed uses, {len(failures)} failures")
+    print(f"INI execution matrix: {len(rows)} classes, {probes} probed uses, {len(tables['draw_state'])} draw state rows, "
+          f"{len(tables['operands'])} operand rows, {len(failures)} failures")
     return 0 if not failures else 1
 
 

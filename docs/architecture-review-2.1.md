@@ -383,6 +383,19 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > `character_backend_internal.h`; the `character_backend.cpp:NNN` references in this document are lines of
 > the reviewed commit c69c1b6. Open: P3-3, P3-4, P4-3, P4-4, and Phases 1 and 2, which need the game.
 
+> Progress, 2026-11-11 (sandbox only, nothing run in the game; docs/ini-semantics.md "A replaced draw's
+> lists against a draw state"): Phase 1 in the frontend. P1-1 done (D-161): `frontend/xxmi/draw_state.h`,
+> the six tables of the adapter are one state, every resource assignment is total. P1-2 done: a draw is
+> recorded with the state it sees and one table decides per slot. P1-3 done (D-162): the lists run to
+> their end, a command that cannot act does nothing, what the host cannot draw leaves the draw to the
+> game afterwards. P1-4 done (D-163): operands nothing answers read one table; both tables are generated
+> into `docs/ini-execution-matrix.json`. P1-5 in part: a vertex slot the pipeline does not read is
+> ignored, the blend-index edit is optional; open: the game's texture at another pixel slot, layout edits
+> in general (needs the game's DX11 semantics per Vulkan location), draws beside the game's without
+> `handling = skip`. The sweep of P3-2: 58 lines, none refuses a draw. `refuse(` in draw_plan.cpp: 138
+> lines before, each able to refuse a draw; 101 now, each a command that does nothing, and 7
+> `refuse_draw(`. Phase 1 still ends in a deployment and a user-started session.
+
 Each step test first, as the working agreement says: the check that fails before, the change, the
 touched area. Phases 0 and 3a come first: they are small, and they make the rest measurable.
 

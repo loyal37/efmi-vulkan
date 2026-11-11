@@ -1,5 +1,12 @@
 # EFMI Vulkan - Known issues
 
+## BUG-090: `vs` as a value reads 0 in a character generation and 1 under the original with the EFMI Core (found by the judge's sweep 2026-11-11, OPEN, no installed Mod affected)
+
+- The original's `process_shader_filter`: a bound shader that a ShaderOverride or ShaderRegex section matches reads that section's `filter_index`, or 1 without one; 0 only when no section matches. The EFMI Core's main.ini has `[ShaderRegexEnableTextureOverrides]` with `shader_model = vs_4_0 vs_4_1 vs_5_0 vs_5_1` and no pattern, which matches every vertex shader, so under the user's DX11 installation `vs` reads 1 for every draw. The judge's d3dx.ini has the same kind of section, and its sweep line `if vs == 0` takes the other branch under the original.
+- The layer: the character Core's extension answers `vs`, `ps` and the other stages with 0 for a bound stage (`frontend/xxmi/character_core.cpp`, plan_shader_queries: "no ShaderOverride is active"). For `ps`, `hs`, `ds`, `gs` that is the original's value (the Core's ShaderRegex names vertex shaders only); for `vs` it is not.
+- Installed Mods: none uses `vs` or `ps` as a bare value (searched 2026-11-11).
+- Not fixed here: the shader queries are the other session's part of this round's split (BUG-088). To do: `vs` as a filter value reads 1 where the generation has the Core's patternless ShaderRegex, from the parsed section, not a constant. The sweep line `if_vertex_shader` stays recorded as not judged by the scene.
+
 ## BUG-089: A twin bound in a recording drops the character packages' owners the recording has not used yet (read 2026-11-10 while splitting the backend, not reproduced, OPEN)
 
 - `character_bind` (D-133, `character_backend_twins.cpp`) keeps the twins a recording bound in an owner of its own (`TwinOwner`), taken with the generic `owner_for` (`command_owner.h`). That function removes every other backend's owner the recording has not used yet. A character package's owner (`CharacterCommand`: its snapshot arenas in that command buffer) is unused from the reset of a recording until the package's first draw in the next one. `character_owner_for` (`character_backend_record.cpp`) was written to keep exactly these: dropping them destroyed the arenas and had the workers make new ones for every recording (D-099, 142 us per draw in the 1.6.8 session).

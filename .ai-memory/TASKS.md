@@ -1,18 +1,34 @@
 # EFMI Vulkan - Tasks
 
+## Active: Phase 1 of the review, a replaced draw's lists against a draw state (2026-11-11, D-161 to D-163)
+
+- Done offline (sandbox only, nothing deployed, nothing loaded into the game): P1-1 (`frontend/xxmi/draw_state.h`, every resource assignment total), P1-2 (a draw recorded with the state it sees, one table per slot), P1-3 (the lists run to their end; a command that cannot act does nothing; what the host cannot draw leaves the draw to the game afterwards), P1-4 (operands nothing answers read one table; both tables generated into docs/ini-execution-matrix.json), and of P1-5: a vertex slot the pipeline does not read is ignored, the blend-index edit is optional.
+- Open of P1-5, each with what it needs:
+  - The game's texture of another pixel slot (`ps-t1 = ref ps-t0`): degraded now (the game's texture of the slot stays, a notice). To honour it the patched fragment module would read slot N from the application's binding of slot M (`frontend/gpu` material profile, `spirv_repoint`), no new image. The sweep line `moved_pixel` records the difference.
+  - Input-layout edits in general (R-08): the conversion takes the blend-index widening and the offset edits a Mod's lists name; any other edit still leaves the draw to the game. Needed: the game's DX11 semantic per Vulkan location for the character pipelines (a fact of this game, from the paired catalogue; belongs with L-07), then `ApplyInputLayoutOverrides` on that layout.
+  - A list that draws without `handling = skip` (R-09): only its textures for the game's draw are taken. `record()` restores the game's pipeline, buffers and set 3 after its draws, so the Mod's draws could be emitted and the game's draw let through; needs a live scene case first (a section without skip that draws beside the game's mesh).
+  - A constant buffer or a texture of another stage bound by the lists is degraded (the game's stays). Honouring it needs the DX11 slot's Vulkan binding per pipeline and a private set, as the pixel textures have.
+- To see in the game when the user next plays on Vulkan (Phase 1 ends in a deployment and a user-started session; nothing of this has run there):
+  - Every installed Mod as before: no character that drew now missing, wrong or the game's (the offline digests of the 19 installed Mods say which plans changed and why, CURRENT_STATE).
+  - The notices: a line the layer degrades is said once ("cannot bind this at ... the game's binding stays there", "does not take this command", "cannot answer an operand and goes on with ..."). Three per generation are shown, then one line for the rest; the log has all. Any such notice for an installed Mod is a finding to report with its text.
+  - `replacement.last_reason` and the per-Mod refusal counters: a refusal that names a line of a Mod's list ("Unsupported ...") should no longer exist; the remaining reasons are the host's (native contract, budgets, a buffer the layer cannot bind, the conversion).
+  - Frame time against the session before: the lists do the same work per command (one try block and one state lookup more); `tracker_work.draw_record` per call and the plan stage's share should not move.
+  - A Mod written outside the exporter's shape, if the user has one: it should now draw, with notices for what is degraded.
+- Not judged by the scene: `vs` as a value (BUG-090).
+
 ## Active: the architecture review's plan (2026-11-10, docs/architecture-review-2.1.md section 8)
 
 - Done without the game (2026-11-10, sandbox only): P3-0; Phase 0 (P0-1 to P0-9 except the game-facts notice of L-07); P3-1 (the matched-draw judge); P3-2 as the one-line sweep; P4-1 (documents); P4-2 (character_backend.cpp in eleven parts and an internal header, D-160, between two whole suite runs with equal results).
 - Open without the game:
   - FIRST: BUG-088, the EFMITTL of 2026-11-10. Answer `ps-t[N]->Format`, `->Width`, `->Height`, `->Mips` (and `->Array`) of the game's texture at a pixel slot from the host's description of the image (D-138), and of a Mod's own texture bound there from its file; the original's process_texture_filter says what an empty slot reads. Then follow the replay with a library call (`sandbox/run_all.py --no-build --only "library call"`) to the next thing the new translucency.ini asks, until its layer is captured; then the game.
-  - The sweep's 12 recorded differences (sandbox/judge_draw_sweep.json, class `layer`): slots of other kinds refuse the whole draw (D-152), `<slot> = copy Resource`, `unless_null`, slot to slot, `ResourceX = ref vb0`, `o0 = null`, a copy between declared resources. Most belong to Phase 1 (the draw state); `copy` of a never-written resource, slot to slot and `unless_null` can be done before it.
-  - The sweep's 3 lines the scene does not judge (`vbN->stride`, a query on `ib`, `vs`): the layer's side needs a generation with the character Core's extension.
+  - Done 2026-11-11 (Phase 1, above): the sweep's 12 recorded differences. No line refuses a draw; what is left differs for one draw or one slot, each recorded with what may differ (`only`).
+  - The sweep's line the scene does not judge: `vs` as a value (BUG-090). `vbN->stride` and a query on `ib` are answered from the draw state now.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
   - P3-4: hashed textures in the state check, so texture-hash sections run offline (the exclusions are listed in docs/ini-semantics.md).
   - P4-3 and P4-4.
   - BUG-089 (read while splitting, not reproduced): with RabbitFX's anti-dither on, a twin's bind drops the character packages' owners a recording has not used yet. First a check that shows it (the status with the gate set against unset: `batches_made_at_draw`, the arenas a worker makes per recording), then the fix from what the original does.
   - L-07: a notice when the game's facts (shader contract, slot table) are not known for the running game version.
-- Needs game sessions and the user's choice: Phase 1 (a replaced draw's lists against a draw state; what Vulkan cannot honour decided per record and slot), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).
+- Needs game sessions and the user's choice: Phase 1's game session (its offline part is done, above), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).
 - To check in the game when the user next plays on Vulkan: the notices at the first load, F10 without a generation, nothing else changed for the installed Mods (every section of 19 Mods plans in every state offline). The EFMITTL of 2026-11-10 is not expected to work yet (BUG-088).
 
 ## Active: the design review after 1.9.2 (2026-10-26, docs/design-review-1.9.md)

@@ -10,6 +10,9 @@ class FilePlanCompiler {
 public:
     explicit FilePlanCompiler(const CustomResources&);
     bool compile(const DrawPlan&,assets::FilePlan&,std::wstring& reason) const;
+    // What a declaration is in a binding's role (a vertex buffer, the index buffer, a pixel texture), null
+    // where the layer makes none of it there. For a survey of the generation's files: it says nothing.
+    std::shared_ptr<const assets::FileResource> binding(const CustomResource*,PlanOperation) const;
 private:
     struct Declaration {
         std::array<std::shared_ptr<const assets::FileResource>,3> bindings;
@@ -17,5 +20,6 @@ private:
     };
     std::unordered_map<const CustomResource*,Declaration> declarations_;
     mutable assets::FilePlan next_; // kept for its capacity (D-108)
+    mutable std::unordered_set<const CustomResource*> told_; // resources a pixel slot could not take, each said once
 };
 }

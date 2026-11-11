@@ -1,5 +1,6 @@
 #pragma once
 #include "CommandList.h"
+#include "draw_state.h"
 #include <tuple>
 #include <cstdint>
 #include <functional>
@@ -16,6 +17,9 @@ enum class PlanOperation { BindVertex, BindIndex, BindPixelResource, DrawIndexed
 
 // Resource pointers borrow declarations from a retained frontend generation.
 // This CPU plan has no GPU readiness, resource lifetime or pipeline guarantee.
+// The binding items are what the draws of the plan saw in the draw state (draw_state.h), written where
+// a draw is recorded: before a draw item stand the bindings that differ from what the items before it
+// left bound, and only those the layer honours (honour()). A list that binds and never draws leaves no item.
 struct PlanItem {
     PlanOperation operation = PlanOperation::External;
     unsigned slot = 0;
@@ -29,13 +33,14 @@ struct PlanItem {
     std::vector<InputLayoutElementOverride> layout;
     std::wstring external;
     unsigned phase_mask = 0; // External callback: bit 0 pre, bit 1 post.
-    // BindPixelResource of the application's own texture at this DX11 pixel slot of the matched draw
-    // (a resource that took `= ref ps-tN`); resource is null then. -1: none.
+    // A binding of the application's own binding of the matched draw; resource is null then. -1: none.
+    // BindPixelResource: its texture of this DX11 pixel slot (a slot put back, or `ps-t1 = ref ps-t0`).
+    // BindVertex, BindIndex: always the slot itself, the application's buffer back in its place.
     int application_slot = -1;
     // BindVertex of a buffer the owned GPU work of a replaced draw wrote (P2, D-087): a Vulkan
     // handle on the application's device, bound as it is; resource is null then. `keep` holds the
     // allocation while the item lives.
-    struct OwnedBuffer { uint64_t buffer = 0, offset = 0, size = 0; uint32_t stride = 0; std::shared_ptr<void> keep; };
+    using OwnedBuffer = OwnedPlanBuffer;
     std::shared_ptr<const OwnedBuffer> owned;
     std::shared_ptr<const core::PaletteSnapshot> palette; // Optional owned native Core draw data.
     // Translucent (D-113): a DrawIndexed of the current bindings that a library captures into a
@@ -91,11 +96,22 @@ public:
                  std::wstring& reason);
     using OriginalCall=std::function<bool(CommandListState&,std::wstring&)>;
     bool execute_pair(CommandList& pre,CommandList& post,CommandListState&,DrawPlan&,std::wstring& reason,OriginalCall between={});
-    // The original runs each command of its Present and Constants lists on its own: one that cannot act
-    // does nothing and the list goes on. With this set, a command the planner refuses in a root list is
-    // skipped with the original's warning once instead of ending the execution (D-155); a replaced
-    // draw's lists keep their all-or-nothing plan.
+    // The original runs each command on its own: one that cannot act does nothing and its list goes on. So
+    // does every execution here: a command the planner refuses is skipped with a notice once (D-155 for
+    // the Present, Constants and key lists; D-162 for a replaced draw's). What differs is a failure of the
+    // host itself (a native command's contract, a budget): with this set, in a list that draws nothing,
+    // it is one more skipped command; without it the lists still run to their end and the execution
+    // then reports that reason, so the draw stays the game's.
     void tolerate_refusals(bool);
+    // What the host knows of the pipeline of the draw the lists run for (its stages, the vertex slots it
+    // reads): a slot the pipeline does not read is nothing to a draw (honour()). Install before adaptation.
+    void pipeline(std::function<PipelineFacts()>);
+    // During an execution: what the draw state holds at a pipeline slot (or at `this`), as the lists set
+    // it so far, and which slot that is. False for a target that is no slot of the context. A host that
+    // answers a question about a slot reads what is bound there with this (D-161).
+    bool held(ResourceCopyTarget&, CommandListState&, SlotValue&, SlotId&) const;
+    // What a declaration holds now, as the plan's references say.
+    SlotValue held(CustomResource* declaration) const;
     // Matches of one resource share a phase. Keep every pre list ahead of every
     // post list; abort and budgets belong to the phase/transaction, not a match.
     // The post lists run where the original's second check would meet the sections
@@ -173,6 +189,8 @@ public:
     void shader_commands(ShaderCommand);
     // Both nested phases share the caller's abort/parameter state; no root flush.
     bool invoke_shader(CustomShader&,CommandListState&,std::wstring&);
+    // What the matcher is asked about: the application's texture of the pixel slot the query names (the
+    // slot it was bound at by the game, also where the lists moved it to another), or a resource of the Mod.
     struct PixelBinding {
         bool application=true;
         CustomResource* resource=nullptr; // Null with application=false means an explicit unbind.

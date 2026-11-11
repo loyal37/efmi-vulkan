@@ -518,7 +518,8 @@ layer's units were larger than that in several places; they are now:
 - **A LOD without a remap assignment** has no remap, as the Core's `z0 = @cs-t1 != 0` (BUG-084: the
   installed `lastrite`, which assigns LOD 0 only, was left out whole).
 
-A replaced draw's lists still stand or fall together (the review's Phase 1).
+A replaced draw's lists stood or fell together until 2026-11-11; they run each command on its own now
+(the next but one section, D-162).
 
 What the layer does not do while a generation runs is said through `LayerGap` (`layer_gap.h`): the
 original's warning channel, and `IniRuntime::gap_count` / `gaps_since` for the host.
@@ -563,6 +564,21 @@ original; the step fails when that changes in either direction. 2026-11-10: 50 l
 `o0 = null`; a copy between declared resources stays null); 3 are answered by the character Core's
 extension, which this scene's generation has not, and are not judged here.
 
+2026-11-11, with the draw state (the next section): fourteen cases as the original's. The two known
+differences agree (`other_stage`: the line is degraded, the game's constant buffer stays, and the case
+requires the notice; `copy`: a copy of a file of the Mod holds the file), and two cases are new
+(`game_texture_copy`: a copy of the game's texture taken, the slot bound anew, the copy bound back for a
+second draw; `post_skip`: `handling = skip` in the post phase leaves the draw). The sweep has 58 lines and
+three kinds of record: `same` (49 lines: the plan means the original's picture and primitives and the
+layer said nothing), `degraded` (6: the same picture and primitives in this scene, and the layer said a
+notice: a constant buffer or a texture of another stage keeps the game's binding; `store`, `clear` and
+`dispatch` do nothing in the scene's CPU generation), and `differs`, which names the one measure that may
+differ and never a refusal (2 of the layer: `o0 = null` leaves that draw out, so the picture is the
+original's and the input assembler's count is not; the game's texture of another pixel slot keeps the
+slot's own; 1 the scene does not judge: `vs` as a value, BUG-090). `EFMI_VK_JUDGE_RUNTIME` runs the layer's
+side on another build's runtime_test.exe: on the build before, with these records, 4 cases and 23 lines
+fail (20 of them refuse the draw or draw another picture).
+
 Two rules of the original the sweep showed, now the plan's:
 
 - The post list of a matched section. The original does not remember what it matched before the draw: the
@@ -573,6 +589,87 @@ Two rules of the original the sweep showed, now the plan's:
 - A reference to a pixel slot. `ResourceX = ref ps-tN` holds what the slot holds when the line runs: what
   the lists bound there before, null after their unbind, the game's texture where they bound nothing
   (BUG-087; the plan took the game's texture always).
+
+## A replaced draw's lists against a draw state (D-161, D-162, D-163; docs/architecture-review-2.1.md Phase 1)
+
+Until 2026-11-11 the plan of a replaced draw was a whitelist: a resource assignment was taken only as a
+reference of a Mod resource (or null) into a vertex slot, the index buffer or a pixel texture slot, with
+special cases for the game's textures and its other slots; any other line, and any operand the host could
+not answer, refused the draw, and the game's mesh stayed (the review's R-01).
+
+The original (CommandList.cpp, pinned): a resource assignment reads its source off the D3D11 context or
+a custom resource (`ResourceCopyTarget::GetResource`) and sets its destination on the context or the
+custom resource (`SetResource`), for every kind of slot of every stage. A null source sets null, unless
+`unless_null` keeps the destination. A slot number out of range sets nothing, with a warning. A draw then
+reads the context as it stands. D3D11's runtime gives the original three things for this, which the
+layer has to provide itself: a context that holds any binding at any slot whether or not the pipeline
+reads it; objects with reference counts, so a custom resource can keep what a slot held; and the one
+order of a context's calls.
+
+What the layer does now (`frontend/xxmi/draw_state.h`, `draw_plan.cpp`):
+
+- **The state.** `DrawState` is the context of one execution: a value per slot of the input assembler,
+  of every stage's shader resources and constant buffers, of the output merger, the unordered access
+  views and stream output. A value is the application's binding of slot S of the matched draw, a resource
+  of the Mod, a buffer the draw's owned work wrote, nothing, or a resource the plan does not hold
+  (IniParams, the back buffer, a region view). A slot the lists did not set holds the application's
+  binding of itself. Declarations hold values too. The game's objects are not the layer's to keep: a
+  declaration that took the application's binding holds it for the lists of that draw, and in a later draw
+  it holds a resource the plan does not know.
+- **An assignment** (`Runtime::assign`) is total: it takes the source's value, honours `unless_null`, and
+  sets a slot, a declaration or every element of a pool. `copy` into a slot binds what the source shows.
+  `copy` into a declaration without keys of its own holds a file of the Mod (nothing writes it) or, for
+  this draw's lists, the game's binding (nothing writes that between the line and the draw); any other
+  copy is not made in a plan and leaves null with a notice, and with the owned runtime in the draw's scope
+  a copy of the Mod's resources is owned work as before (D-087).
+- **A draw** is recorded with the state it sees (`Runtime::issue`). Per slot the lists set, the table
+  `honour_table()` decides what the layer gives the draw, from the kind of slot, the kind of value and
+  what the host knows of the pipeline (its stages, the vertex slots it reads, its pass's targets):
+
+  | Outcome | Slots and values | What happens |
+  | --- | --- | --- |
+  | honoured | a vertex slot, the index buffer or a pixel texture slot holding a resource of the Mod, null, or the game's own binding in place | the binding stands before the draw in the plan |
+  | ignored | a compute slot; a slot of a stage the pipeline has not; a vertex slot its vertex input does not read; null at a target the pass has not | nothing, and nothing is said: a draw does not read it |
+  | degraded | a constant buffer or texture of a graphics stage other than a pixel texture; the game's binding of another slot at a pixel slot; a pixel-stage unordered access view; stream output | the game's binding stays for that draw, one notice per command |
+  | not drawable | a render or depth target of the pass changed | that draw alone is left out; the application's own draw is hidden |
+  | the game's draw | a vertex or index slot holding the game's binding of another slot or a resource the plan does not hold | the Mod's mesh cannot be drawn with it: the matched draw stays the game's, after the lists ran |
+
+  The plan's items are written there: the bindings that differ from what the items before left bound,
+  then the draw. The application's own draw, where it stays, is such a record after the pre lists. A list
+  that binds and never draws leaves no item.
+- **The lists run to their end** (D-162). A command that cannot act does nothing, a notice names it
+  once, and its list goes on, in a called list as in the root. What the host itself cannot do (a native
+  Core command's contract, the draw's bone data, the planner's budgets, a buffer for the Mod's mesh) leaves
+  the draw to the game, but only after the lists ran, so the Mod's variables are what the original leaves
+  (R-02: before, a refused draw left them where the throw happened).
+- **Operands** (D-163). An operand nothing answers reads its row of `operand_table()`: the value the
+  original itself gives for "nothing known" (-1 for a property it cannot read, 0 for a bound resource or
+  shader no section names, -1 for `rt_width` without a target), with a notice once. A question about a
+  slot is first a question about what the lists bound there.
+- **`handling = skip` after the game's draw** does nothing, as in the original.
+
+Both tables are generated into `docs/ini-execution-matrix.json` (`draw_state`, `operands`); the matrix
+check fails when the copy is not the source's.
+
+The conversion of a plan into the package's draws (`CharacterProgram::plan`, the review's P1-5) follows in
+two places: a vertex slot the pipeline's vertex input does not read never reaches it (the host tells the
+frontend the pipeline's slots, `RuntimeDraw::vertex_slots`; R-08's "Runtime vertex slot outside profile");
+and the blend-index widening is the Mod's to make: a list without it has its blend stream read by the
+pipeline's own BLENDINDICES element, of the width the game declares (`CharacterDraw::pipeline_blend`;
+8-bit indices are read as bone indices of the merged skeleton, so such a Mod reaches its first 256 bones).
+
+Not done of Phase 1 (2026-11-11): the game's texture of another pixel slot bound from the draw's own set
+(degraded: the game's texture of the slot stays); input-layout edits beyond the blend-index widening and
+the offset edits a Mod's lists name (the layer has the pipeline's Vulkan locations, not the game's DX11
+semantics; such a draw still stays the game's); draws of a list without `handling = skip` (the Mod's
+draws beside the game's: only its textures for the game's draw are taken). A changed constant buffer or
+texture of another stage is degraded, not bound.
+
+Checks: plan_test (67 checks; the lists `copyslot`, `unlessnull`, `slottoslot`, `savedvertex`,
+`savedpixel`, `copied`, `targets`, `targetback`, `targetkept`, `compute`, `later`, `movedpixel`,
+`postskip` are new, and the checks that asserted a whole refusal state the new rule); the Core pool, native
+bridge, texture query and resource planner tests; the INI runtime test (502); the judge of the section
+before, whose cases and sweep were run on the build before with the new records and failed there.
 
 ## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
 

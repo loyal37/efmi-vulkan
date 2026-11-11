@@ -109,15 +109,17 @@ $srv_mask = vs->srv_mask
     query.stages[1]={true,true,false,0,{}};query.stages[4]={true,true,true,99,{}};
     check(runtime->bind_source_shaders(query,why) && runtime->present({},2,0,why),"Bound unknown-hash and unmatched source shader queries execute");status=runtime->status();
     check(value("h")==0 && !std::signbit(value("h")) && value("p")==0 && !std::signbit(value("p")),"Unknown hash and unmatched override return positive zero");
-    // A query without its declaration facts is refused, never read from scaffolding; as the original runs
-    // each Present command on its own, the refused assignment does nothing (the value stays), the warning
-    // names the reason, and the Present goes on (D-155).
+    // A query without its declaration facts is never read from scaffolding: it reads the table's value
+    // (D-163: a register that is not declared, type 0 and -1 for its stride), the notice names the reason,
+    // the assignment runs and the Present goes on. Before, the assignment did nothing (D-155).
     auto warnings=[&](const char* text){size_t n=0;for(const auto& m:runtime->status().diagnostic_messages)n+=m.find(text)!=std::string::npos;return n;};
     query.stages[0].declarations.reset();check(runtime->bind_source_shaders(query,why) && runtime->present({},3,0,why) && warnings("declarations")>=1,
-        "Unavailable declaration facts refuse instead of reading scaffolding; the Present goes on with the warning");
-    status=runtime->status();check(value("cb_type")==1 && value("srv_stride")==16,"A refused query assignment leaves the variable as it was");
+        "Unavailable declaration facts are not read from scaffolding; the Present goes on with the warning");
+    status=runtime->status();check(value("cb_type")==0 && value("srv_stride")==-1 && value("v")==17,
+        "A query nothing answers reads the table's value; the stage's filter value is still its own");
     query.stages[0]={};check(runtime->bind_source_shaders(query,why) && runtime->present({},4,0,why) && warnings("declarations")>=1,
         "Unknown stage never becomes an unbound shader; the Present goes on with the warning");
+    status=runtime->status();check(value("v")==0 && !std::signbit(value("v")),"An unknown stage reads a bound shader no section names, never the unbound -0");
     auto conflict=facts;auto changed=std::make_shared<ShaderBindings>(*declarations);changed->constant_buffers[2].size=99;
     check(runtime->bind_source_shaders(facts,why),"Restore known source facts before rejected update");
     conflict.stages[1]={true,true,true,1,changed};check(!runtime->bind_source_shaders(conflict,why) && runtime->present({},5,0,why),"Conflicting declarations refuse without replacing the previous source facts");
@@ -125,11 +127,11 @@ $srv_mask = vs->srv_mask
     for(const char* index:{"14","-1","1 / 0","0 / 0"}){const auto bad=root/"bad-slot.ini";
         const std::string text="namespace = bad_slot\n[Constants]\nglobal $slot = "+std::string(index)+"\nglobal $value = 0\n[Present]\n$value = vs->cb_size($slot)\n";
         write(bad,text.c_str());config.inputs={bad};auto candidate=IniRuntime::load(config,nullptr,why);if(!candidate)throw std::runtime_error(why);
-        // Refused before the unsigned conversion; as a Present command on its own, it does nothing (the
-        // value stays) with the warning, and the Present goes on (D-155).
+        // Guarded before the unsigned conversion: the query reads the table's value for a register that is
+        // not declared (-1) with the warning, and the Present goes on (D-163).
         const bool presented=candidate->bind_source_shaders(facts,why) && candidate->present({},1,0,why);
         const auto after=candidate->status();
-        check(presented && after.variables.at("$\\bad_slot\\value")==0 && after.diagnostics>=1,"Invalid source declaration slot refuses before unsigned conversion; the Present goes on with the warning");}
+        check(presented && after.variables.at("$\\bad_slot\\value")==-1 && after.diagnostics>=1,"Invalid source declaration slot is guarded before unsigned conversion; the query reads -1 with the warning");}
     const auto duplicates=root/"duplicates.ini";
     for(bool allowed:{false,true}){std::string text="namespace = duplicate_shaders\n[Constants]\nglobal $pre = 0\nglobal $post = 0\n";
         for(unsigned i=1;i<=2;++i){text+="[ShaderOverride"+std::to_string(i)+"]\nhash = 1\n";

@@ -1018,6 +1018,19 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 if (item.operation == Op::BindVertex && item.slot < 4)
                     bound.owned.erase(std::remove_if(bound.owned.begin(), bound.owned.end(), [&](const auto& o) { return o.slot == item.slot; }),
                                       bound.owned.end());
+                if (item.application_slot >= 0) {
+                    // The application's own buffer back in its place (the draw state put the slot back): what
+                    // the draw binds where the Mod binds nothing.
+                    if (item.operation == Op::BindIndex) { bound.index_stream = kCharacterNone; index_null = false; }
+                    else if (item.slot < 4) { bound.vb[item.slot] = kCharacterNone; vb_null &= ~(1u << item.slot); }
+                    continue;
+                }
+                // A vertex slot the pipeline's vertex input does not read is nothing to the draw, as under
+                // D3D11 (R-08). The frontend leaves those out where the host told it the pipeline's slots;
+                // here for a caller that gave the vertex input alone.
+                if (item.operation == Op::BindVertex && item.slot >= 4 && vertex &&
+                    std::none_of(vertex->bindings.begin(), vertex->bindings.end(), [&](const auto& b) { return b.binding == item.slot; }))
+                    continue;
                 if (item.owned) {
                     // A buffer the owned GPU work of this draw wrote (P2, D-087).
                     if (item.operation != Op::BindVertex || item.slot >= 4) throw std::runtime_error("Owned GPU buffer outside a profiled vertex slot");
@@ -1091,7 +1104,10 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                     }
                     understood = false;
                 }
-                if (!blend || !understood) {
+                // An edit beyond those: the layer has the pipeline's Vulkan locations, not the game's DX11
+                // semantics, so it cannot tell which element the edit names, and the Mod's streams would be
+                // read wrongly. The draw stays the game's.
+                if (!understood) {
                     std::string edits;
                     for (const auto& edit : item.layout)
                         edits += " slot " + std::to_string(edit.match.input_slot) + " " + edit.match.semantic_name + " to " +
@@ -1100,8 +1116,22 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                     throw std::runtime_error("Runtime input-layout edits differ from the validated blend-index contract (" +
                                              std::to_string(item.layout.size()) + " edits:" + edits + ")");
                 }
-                bound.blend = blend->replace.format == 3 ? VK_FORMAT_R32G32B32A32_UINT : VK_FORMAT_R16G16B16A16_UINT;
-                const uint32_t index_bytes = bound.blend == VK_FORMAT_R32G32B32A32_UINT ? 4 : 2;
+                // The blend-index widening is the Mod's to make (R-08): a list without it has its blend
+                // stream read by the pipeline's own BLENDINDICES element, of the width the game declares
+                // (8-bit mostly). The width is then the pipeline's; without the pipeline (offline) it is not
+                // known and the stream's bones are not adopted.
+                uint32_t index_bytes = 0;
+                bound.pipeline_blend = !blend;
+                if (blend) {
+                    bound.blend = blend->replace.format == 3 ? VK_FORMAT_R32G32B32A32_UINT : VK_FORMAT_R16G16B16A16_UINT;
+                    index_bytes = bound.blend == VK_FORMAT_R32G32B32A32_UINT ? 4 : 2;
+                } else {
+                    bound.blend = VK_FORMAT_UNDEFINED;
+                    if (vertex)
+                        for (const auto& a : vertex->attributes)
+                            if (a.binding == 2 && blend_index_format(a.format))
+                                index_bytes = a.format == VK_FORMAT_R8G8B8A8_UINT ? 1 : a.format == VK_FORMAT_R16G16B16A16_UINT ? 2 : 4;
+                }
                 bound.count = item.index_count; bound.first = item.first_index; bound.base = item.indexed ? item.vertex_offset : 0;
                 bound.instances = item.instance_count; bound.first_instance = item.first_instance; bound.indexed = item.indexed;
                 if (item.automatic) {
@@ -1128,10 +1158,10 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 // first seen there is checked once, as decode checks a package's; one that fits neither
                 // keeps no bone mask.
                 if (bound.vb[2] == kCharacterOwned) throw std::runtime_error("An owned blend stream has no known bone indices");
-                if (bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset != kCharacterNone &&
+                if (index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset != kCharacterNone &&
                     package.streams[bound.vb[2]].bone_index_bytes != index_bytes)
                     throw std::runtime_error("One blend stream under two blend-index widths");
-                if (bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset == kCharacterNone) {
+                if (index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset == kCharacterNone) {
                     const uint32_t stride = package.streams[bound.vb[2]].stride;
                     uint32_t indices = kCharacterNone, weights = kCharacterNone, weight_bytes = 2;
                     if (vertex) {
@@ -1208,7 +1238,7 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 for (auto stream : bound.vb) put(signature, stream);
                 put(signature, uint32_t(bound.owned.size()));
                 for (const auto& o : bound.owned) { put(signature, o.slot); put(signature, o.buffer); put(signature, o.offset); put(signature, o.size); put(signature, o.stride); }
-                put(signature, uint32_t(bound.blend));
+                put(signature, uint32_t(bound.blend)); put(signature, uint8_t(bound.pipeline_blend));
                 put(signature, uint32_t(bound.offsets.size()));
                 for (const auto& o : bound.offsets) { put(signature, o.binding); put(signature, o.from); put(signature, o.to); }
                 put(signature, uint32_t(pixels.size()));

@@ -288,6 +288,7 @@ static bool stream_bones(const std::vector<CharacterComponent>& components, uint
         uint32_t total = 0;
         for (uint32_t k = 0; k < 4; ++k) {
             const uint32_t bone = s.bone_index_bytes == 4 ? at<uint32_t>(element + s.bone_index_offset + k * 4)
+                                : s.bone_index_bytes == 1 ? uint32_t(element[s.bone_index_offset + k])
                                                           : at<uint16_t>(element + s.bone_index_offset + k * 2);
             // The shader may fetch every index, weighted or not: all of them stay inside the skeleton.
             if (bone >= bone_count) { reason = "bone index outside the skeleton"; return false; }
@@ -316,7 +317,7 @@ bool CharacterPackage::adopt_bones(uint32_t stream, uint32_t index_offset, uint3
     if (stream >= streams.size()) { reason = "bone stream out of range"; return false; }
     CharacterStream s = streams[stream];
     if (s.kind != CharacterStream::Vertex || s.bone_index_offset != kCharacterNone) { reason = "bone stream already known or not a vertex stream"; return false; }
-    if (index_bytes != 2 && index_bytes != 4) { reason = "bone index width unsupported"; return false; }
+    if (index_bytes != 1 && index_bytes != 2 && index_bytes != 4) { reason = "bone index width unsupported"; return false; }
     if (weight_bytes != 2 && weight_bytes != 4) { reason = "bone weight width unsupported"; return false; }
     s.bone_index_offset = index_offset; s.bone_weight_offset = weight_offset; s.bone_index_bytes = index_bytes; s.bone_weight_bytes = weight_bytes;
     const uint32_t element = 4 * index_bytes, weights = 4 * weight_bytes;
@@ -500,7 +501,8 @@ bool CharacterPackage::vertex_input(const CharacterDraw& draw, const VertexInput
             // A live plan's blend-index edit replaces the pipeline's BLENDINDICES element whatever width
             // the game declares it with (8-bit mostly, 32-bit for some pipelines: BUG-038); the
             // package's own edits name their source format.
-            if (slot == 2 && draw.blend != VK_FORMAT_UNDEFINED && blend_index_format(a.format)) a.format = draw.blend;
+            if (slot == 2 && draw.pipeline_blend && blend_index_format(a.format)) {} // the game's own element, as it is
+            else if (slot == 2 && draw.blend != VK_FORMAT_UNDEFINED && blend_index_format(a.format)) a.format = draw.blend;
             else
                 for (const auto& e : edits)
                     if (e.binding == slot && e.source == a.format) { a.format = e.format; break; }

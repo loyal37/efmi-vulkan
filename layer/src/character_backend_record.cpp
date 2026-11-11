@@ -144,6 +144,13 @@ void CharacterGeneration::submit_draw_work(VkQueue queue)
 // for `vs` and `ps` (D-089).
 void CharacterGeneration::render_targets(const PipeInfo& pipe, efmi::frontend::RuntimeDraw& request)
 {
+    // The vertex slots the pipeline reads (D-161): a buffer the lists bind at another slot is nothing to the
+    // draw. Not known where the vertex input is set at recording, or where the pipeline states none.
+    if (!pipe.bindings.empty() &&
+        std::find(pipe.dynamic_states.begin(), pipe.dynamic_states.end(), uint32_t(VK_DYNAMIC_STATE_VERTEX_INPUT_EXT)) == pipe.dynamic_states.end()) {
+        request.vertex_slots = 0;
+        for (const auto& b : pipe.bindings) if (b.binding < 32) request.vertex_slots |= 1u << b.binding;
+    }
     if (!pipe.recipe) return;
     request.shader_stages = 0;
     for (const auto& stage : pipe.recipe->stages) request.shader_stages |= uint32_t(stage.stage);

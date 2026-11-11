@@ -48,9 +48,17 @@ int HostResourcePlanTests()
           "catalog snapshot is immutable across later frontend declaration edits");
     auto bad=plan;
     for(auto* resource:{unused,changed,pool,relative}){
-        bad.items.back()={};bad.items.back().operation=PlanOperation::BindPixelResource;bad.items.back().resource=resource;
+        // The draw state's table (draw_state.h): a resource of the Mod that is no image the layer makes at a
+        // pixel slot leaves the application's texture there (it refused the whole plan before); as a vertex
+        // buffer the Mod's geometry cannot be made of it, and the plan is refused whole.
+        bad.items.back()={};bad.items.back().operation=PlanOperation::BindPixelResource;bad.items.back().slot=9;bad.items.back().resource=resource;
+        check(compiler.compile(bad,owned,reason) && owned.items.size()==6 && !owned.items.back().resource && owned.items.back().application_slot==9 &&
+              owned.items[1].resource==previous,
+              "a resource the layer cannot bind at a pixel slot leaves the application's texture there");
+        check(compiler.compile(plan,owned,reason),"the valid plan compiles again");
+        bad.items.back().operation=PlanOperation::BindVertex;bad.items.back().slot=1;
         check(!compiler.compile(bad,owned,reason) && !reason.empty() && owned.items.size()==6 && owned.items[1].resource==previous,
-              "late unsupported used resource refuses atomically while dormant declarations are harmless");
+              "late unsupported vertex buffer refuses atomically while dormant declarations are harmless");
     }
     // D-140: a texture's colour space is the loaders' flag (and its identity), as LoadFromFile passes it.
     bad=plan;bad.items.back()={};bad.items.back().operation=PlanOperation::BindPixelResource;bad.items.back().resource=srgb;

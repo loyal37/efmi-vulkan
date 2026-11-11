@@ -1,5 +1,6 @@
 // Exercise original pool/expression/callback semantics through command mediation.
 #include "draw_plan.h"
+#include "layer_gap.h"
 #include "HackerContext.h"
 #include "globals.h"
 #include <cstdio>
@@ -157,11 +158,21 @@ reset_per_frame_limits = ResourceOne
     }else check(false,"resource reference snapshots available");
     check(run(L"again",plan,reason) && plan.items.size()==1 && plan.items[0].index_count==7,
           "cleared callback returns to its empty declaration and pools persist across transactions");
-    for(auto* name:{L"badindex",L"badread",L"badnested",L"badpoolcycle",L"badcallbackcycle",L"badexpiring"}){
+    // D-162: each of these has a command that cannot act (an index outside the integers, a cyclic alias, a
+    // reference into an expiring pool). It does nothing, the notice names it, and the execution goes on
+    // with a plan of its own; each refused the whole execution before.
+    static std::vector<std::wstring> notices;notices.clear();
+    g_layer_gap_sink=[](const wchar_t* text){notices.emplace_back(text);};
+    for(auto* name:{L"badindex",L"badread",L"badpoolcycle",L"badcallbackcycle",L"badexpiring"}){
         command_list_globals.at(L"$\\core_pools\\index").fval=1;
-        check(!run(name,plan,reason) && !reason.empty() && plan.items.size()==1 && plan.items[0].index_count==7,
-              "unsupported pool/resource/callback operations preserve the previous output");
+        const size_t before=notices.size();
+        check(run(name,plan,reason) && plan.items.empty() && notices.size()>before,
+              "a pool, resource or callback operation that cannot act does nothing with a notice, and the execution goes on");
     }
+    // A pool index from a slot's identity is answered from the draw state (D-161) and the read goes on.
+    command_list_globals.at(L"$\\core_pools\\index").fval=1;
+    check(run(L"badnested",plan,reason) && plan.items.empty(),"a pool index read off a slot's identity is answered, and the list goes on");
+    g_layer_gap_sink=nullptr;
     // A copy between declared resources the plan does not make leaves the destination null with the
     // original's warning and the list goes on (D-155); it refused the execution before.
     command_list_globals.at(L"$\\core_pools\\index").fval=1;

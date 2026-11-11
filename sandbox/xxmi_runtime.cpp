@@ -201,7 +201,8 @@ static int probe_command(const std::filesystem::path& file)
 // generation, as the character renderer hosts a Mod's lists. Each frame the Present, then the two game
 // draws of sandbox/dx11_judge_scene.h by their index region hashes (six indices from the first, one
 // instance, DrawIndexedInstanced), the game's texture at pixel slot 0 bound and of no known hash. Printed:
-// the plan of each draw of the last frame (or why it was refused) and the generation's variables.
+// the plan of each draw of the last frame (or why it was refused), the generation's variables and what the
+// layer said it did not do as the original does (its notices: a degraded line must have one).
 static int judge_scene(const std::filesystem::path& file, int frames, uint32_t first_hash, uint32_t second_hash)
 {
     const auto path = std::filesystem::absolute(file);
@@ -249,12 +250,39 @@ static int judge_scene(const std::filesystem::path& file, int frames, uint32_t f
         if (comma) putchar(','); comma = true;
         json_text(name); printf(":%.9g", value);
     }
-    printf("}}\n");
+    printf("},\"gaps\":[");
+    comma = false;
+    for (const auto& gap : runtime->status().gaps) { if (comma) putchar(','); comma = true; json_text(gap); }
+    printf("]}\n");
+    return 0;
+}
+// The draw state's two tables as the source states them (frontend/xxmi/draw_state.h): what a draw makes of
+// each slot, and what an operand reads where nothing answers. docs/ini-execution-matrix.json keeps a copy
+// that scripts/check_ini_execution_matrix.py compares with this output (--write renews the copy).
+static int state_table()
+{
+    using namespace efmi::frontend;
+    printf("{\"draw_state\":[");
+    bool comma = false;
+    for (const auto& row : honour_table()) {
+        printf("%s{\"slots\":", comma ? "," : ""); comma = true; json_text(row.slot_text);
+        printf(",\"value\":"); json_text(row.value_text);
+        printf(",\"outcome\":"); json_text(honour_name(row.honour));
+        printf(",\"note\":"); json_text(row.note); putchar('}');
+    }
+    printf("],\"operands\":[");
+    comma = false;
+    for (const auto& row : operand_table()) {
+        printf("%s{\"operand\":", comma ? "," : ""); comma = true; json_text(row.operand);
+        printf(",\"value\":%g,\"basis\":", double(row.value)); json_text(row.basis); putchar('}');
+    }
+    printf("]}\n");
     return 0;
 }
 int wmain(int argc, wchar_t** argv)
 {
     try {
+        if (argc == 2 && !wcscmp(argv[1], L"--state-table")) return state_table();
         if (argc == 6 && !wcscmp(argv[1], L"--judge-scene"))
             return judge_scene(argv[2], _wtoi(argv[3]), uint32_t(wcstoul(argv[4], nullptr, 16)), uint32_t(wcstoul(argv[5], nullptr, 16)));
         if (argc > 1 && !wcscmp(argv[1], L"--inspect-character")) return inspect_character(argc, argv);
@@ -376,14 +404,15 @@ int wmain(int argc, wchar_t** argv)
         render(first); check(plan.items.back().index_count == 9, "Failed parse leaves live generation usable");
         first.reset(); render(second);
         check(plan.items.back().index_count == 9, "Retiring one generation preserves another");
-        write(ini, "namespace = hide_fixture\n[TextureOverrideHide]\nhash = 12345678\nmatch_index_count = 30\nhandling = skip\nthis = null\n");
+        write(ini, "namespace = hide_fixture\n[TextureOverrideHide]\nhash = 12345678\nmatch_index_count = 30\nhandling = skip\nthis = null\ndrawindexed = 3, 0, 0\n");
         auto hide_config = config; hide_config.settings_name = "hide_fixture";
         auto hidden = IniRuntime::load(hide_config, {}, reason);
         if (!hidden) throw std::runtime_error("Independent IB suppression INI: " + reason);
         check(bool(hidden), "Independent IB suppression INI loads without a character skeleton");
         render(hidden);
-        check(plan.skip_original && plan.items.size() == 1 && !plan.items[0].resource &&
-              plan.items[0].operation == efmi::assets::FileOperation::BindIndex,
+        // The binding stands before the draw that sees it (D-161); a list that binds and never draws leaves no item.
+        check(plan.skip_original && plan.items.size() == 2 && !plan.items[0].resource && plan.items[0].application_slot < 0 &&
+              plan.items[0].operation == efmi::assets::FileOperation::BindIndex && plan.items[1].operation == efmi::assets::FileOperation::DrawIndexed,
               "IB override this=null uses the actual triggering index binding");
         render(second); check(plan.items.back().index_count == 9, "Pure hide does not change another generation's draw");
         const auto tree = folder / "directory";
