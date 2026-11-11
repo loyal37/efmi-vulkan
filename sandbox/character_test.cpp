@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <shellapi.h>
 #pragma comment(lib, "shell32.lib")
@@ -332,6 +333,36 @@ static void declaration_tests(const CharacterPackage& p)
               "a 32-bit bone index outside the skeleton refuses, weighted or not");
         check(!bones.adopt_bones(0, 16, 0, why, 4), "32-bit indices that do not fit the element refuse");
     }
+    {
+        // A live draw whose list has no blend-index edit (R-08, D-161): the pipeline's own BLENDINDICES element
+        // is read as the game declares it (8-bit here); the package's own widening does not apply to that draw.
+        auto own = p;
+        own.streams[own.draws[0].vb[2]].stride = 12;
+        auto draw = own.draws[0];
+        draw.pipeline_blend = true;
+        check(own.vertex_input(draw, source, result, why) && result.bindings[2].stride == 12 &&
+              result.attributes[3].format == VK_FORMAT_R8G8B8A8_UINT && result.attributes[3].offset == 8,
+              "a draw without a blend-index edit keeps the pipeline's own 8-bit element");
+        CharacterPackage bones;
+        bones.bones = 5;
+        CharacterComponent a, b; a.first = 0; a.count = 2; b.first = 2; b.count = 3;
+        bones.components = {a, b};
+        CharacterStream s; s.kind = CharacterStream::Vertex; s.stride = 12; s.offset = 0; s.size = 24;
+        bones.streams = {s};
+        bones.payload.assign(24, 0);
+        for (uint32_t v = 0; v < 2; ++v) {
+            const uint16_t weights[4] = {65535, 0, 0, 0};
+            const uint8_t indices[4] = {uint8_t(v == 0 ? 1 : 3), 4, 4, 4};
+            std::memcpy(bones.payload.data() + v * 12, weights, 8);
+            std::memcpy(bones.payload.data() + v * 12 + 8, indices, 4);
+        }
+        auto adopted = bones;
+        check(adopted.adopt_bones(0, 8, 0, why, 1) && adopted.streams[0].components == 3 && adopted.streams[0].bone_index_bytes == 1,
+              "8-bit bone indices are read as such");
+        auto outside = bones;
+        outside.payload[8 + 1] = 5;
+        check(!outside.adopt_bones(0, 8, 0, why, 1) && why == "bone index outside the skeleton", "an 8-bit bone index outside the skeleton refuses");
+    }
     auto depth_only = source;
     depth_only.bindings = {{0, 16, VK_VERTEX_INPUT_RATE_VERTEX}};
     depth_only.attributes = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}};
@@ -483,6 +514,11 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     // The same Mod files under the same layer give the same number; a change of the plan path that changes
     // any plan of an installed Mod changes it (scripts/check_mod_states.py compares with the accepted ones).
     std::vector<uint64_t> digests(found.size(), 1469598103934665603ull);
+    // EFMI_VK_PLAN_OUTCOMES=<file>: per Mod and section, every distinct outcome over all states with the
+    // number of states it had (a plan in words, or the refusal's reason). Two builds' files, compared, say
+    // which sections' plans a change of the plan path changed, and how (scripts/check_mod_states.py --explain).
+    const char* const outcomes_file = getenv("EFMI_VK_PLAN_OUTCOMES");
+    std::vector<std::map<std::string, std::map<std::string, uint64_t>>> outcomes(found.size());
     auto mix = [](uint64_t& h, uint64_t v) { for (int b = 0; b < 8; ++b) { h ^= (v >> (b * 8)) & 0xff; h *= 1099511628211ull; } };
     std::vector<std::string> present_errors;
     uint64_t frame = 0, states = 0;
@@ -504,6 +540,9 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
             for (const auto& s : m.package.sections) {
                 if (s.lod != kCharacterNone) current_lod = s.lod;
                 const uint32_t lod = s.component == kCharacterNone ? kCharacterNone : current_lod;
+                char section_key[96];
+                snprintf(section_key, sizeof(section_key), "%04zu %08x count %u first %u c%u lod%u", size_t(&s - m.package.sections.data()), s.hash,
+                         s.match_count, s.match_first, s.component, lod);
                 auto request = section_draw(s, lod, frame, *m.program, vertex);
                 CharacterList list; bool skip = false, added = false, textures = false; std::string why;
                 ++plans[i];
@@ -538,8 +577,30 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
                         if (size_t(list.first) + d < m.package.pixels.size())
                             for (const auto& pixel : m.package.pixels[list.first + d]) { mix(digest, pixel.slot); mix(digest, image_of(pixel.asset)); }
                     }
+                    if (outcomes_file) {
+                        std::string text = std::string(skip ? "skip" : "keep") + (textures ? " textures" : "") + " draws=" + std::to_string(list.count);
+                        for (uint32_t d = 0; d < list.count && size_t(list.first) + d < m.package.draws.size(); ++d) {
+                            const auto& draw = m.package.draws[list.first + d];
+                            char part[320];
+                            snprintf(part, sizeof(part), " [ib %llx n%u f%u b%d vb %llx %llx %llx %llx inst %u+%u%s%s%s blend %u",
+                                     static_cast<unsigned long long>(stream_of(draw.index_stream)), draw.count, draw.first, draw.base,
+                                     static_cast<unsigned long long>(stream_of(draw.vb[0])), static_cast<unsigned long long>(stream_of(draw.vb[1])),
+                                     static_cast<unsigned long long>(stream_of(draw.vb[2])), static_cast<unsigned long long>(stream_of(draw.vb[3])),
+                                     draw.instances, draw.first_instance, draw.indexed ? "" : " nonindexed", draw.texture_only ? " texture-only" : "",
+                                     draw.translucent ? " translucent" : "", unsigned(draw.blend));
+                            text += part;
+                            for (const auto& o : draw.offsets) { snprintf(part, sizeof(part), " off %u:%u>%u", o.binding, o.from, o.to); text += part; }
+                            if (size_t(list.first) + d < m.package.pixels.size())
+                                for (const auto& pixel : m.package.pixels[list.first + d]) {
+                                    snprintf(part, sizeof(part), " t%u=%08x", pixel.slot, unsigned(image_of(pixel.asset) & 0xffffffffu)); text += part;
+                                }
+                            text += "]";
+                        }
+                        ++outcomes[i][section_key][text];
+                    }
                     continue;
                 }
+                if (outcomes_file) ++outcomes[i][section_key]["REFUSED: " + why];
                 mix(digest, 0xdeadull); for (unsigned char c : why) mix(digest, c);
                 if (offline_limit(why)) continue; // the stand-ins' limits, not the Mod's
                 char key[64]; snprintf(key, sizeof(key), "%08x/%u/%u/", s.hash, s.component, lod);
@@ -575,6 +636,17 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     for (int f = 1; f <= 1200; ++f) {
         const std::string state = "frame " + std::to_string(f) + " after the keys";
         present(released, state); plan_all(state);
+    }
+    if (outcomes_file) {
+        if (FILE* out = fopen(outcomes_file, "wb")) {
+            for (size_t i = 0; i < found.size(); ++i) {
+                fprintf(out, "MOD %s\n", found[i].ini.lexically_relative(mods).u8string().c_str());
+                for (const auto& section : outcomes[i])
+                    for (const auto& outcome : section.second)
+                        fprintf(out, "  %s | %llu | %s\n", section.first.c_str(), static_cast<unsigned long long>(outcome.second), outcome.first.c_str());
+            }
+            fclose(out);
+        }
     }
     JsonWriter summary; summary.begin_object();
     summary.kn("key_actions", combos.size()); summary.kn("states", states);

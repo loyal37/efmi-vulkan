@@ -39,6 +39,8 @@ RULES = [
                         r"true_false_overrule", "constant", "the INI parser's section and key tables"),
     (r"runtime_input", r"XInputButtons|VKMappings", "constant", "the key parser's key and button names"),
     (r"Assembler", r"special_purpose_registers|txt_swiz", "constant", "the assembler's register tables"),
+    (r"draw_plan|resource_plan|runtime", r"lookup|rows", "constant",
+     "the draw state's tables (draw_state.h): const function statics, built once and only read"),
     (r"SignatureParser", r"format_names|global_flag_sfi_map|subshader_feature_comments|system_value_abbreviations", "constant",
      "the signature parser's tables"),
     (r"WICTextureLoader", r"g_WICConvert|g_WICFormats", "constant", "DirectXTK's format tables"),

@@ -73,7 +73,8 @@ run = CustomShaderPanel
           plan.items[0].resource->path.filename()==L"mesh.buf" && plan.items[2].operation==efmi::assets::FileOperation::DrawIndexed,
           "A declaration reference made in Constants is mirrored into the plan");
     draw.hash=0x22222222;
-    check(!ini->draw(draw,plan,why) && why.find("owned GPU scope")!=std::string::npos,"A CustomShader inside a replaced draw refuses without the host scope");
+    // D-162: without the host's scope the CustomShader's run does nothing, with a notice; the draw is planned.
+    declined(*ini,resources,ini->draw(draw,plan,why),"owned GPU scope","A CustomShader inside a replaced draw does nothing without the host scope");
     // Present opens the scope and draws into the host back buffer.
     gpu::ImageDescription description;description.format=VK_FORMAT_R32G32B32A32_SFLOAT;description.extent={8,4,1};
     description.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;

@@ -89,7 +89,8 @@ $value = vb0->hashregion(0, 4)
         vertex.present();
         bool told=false;
         for(const auto& gap:vertex.ini->status().gaps)told=told || gap.find("requires a draw context")!=std::string::npos;
-        check(told && vertex.variable("value")==0,"A vertex buffer hash outside a draw leaves its command undone, where the original dereferences no draw call");
+        // D-163: the operand reads the table's value (the original's UNKNOWN, -1), said once, and the assignment runs.
+        check(told && vertex.variable("value")==-1,"A vertex buffer hash outside a draw reads the original's unknown, where the original dereferences no draw call");
         vertex.release();
     }
 }

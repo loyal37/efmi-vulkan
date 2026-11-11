@@ -673,6 +673,17 @@ before, whose cases and sweep were run on the build before with the new records 
 
 ## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
 
+Since 2026-11-11 (D-163) the first, third and fourth rows below are no refusals any more: the operand
+reads its row of the operand table, a NOTICE line of the check says so, and the section plans. What the
+check then shows for such a section is a plan made with the table's values (for instance EFMITTL 0.5.5's
+`o0 !== null && o2 === null` with both read as bound), not the plan the game's answers give; the right-hand
+columns still say where the real answers are checked. On the Mods folder of 2026-11-11 this turned 173
+section outcomes of 19 Mods from refused into planned (147 "render targets are not known", 26 "Original
+buffer window unavailable"), and, the lists now running to their end, `$activeN = 1` is reached, the Mods'
+toggle keys act, and a toggled part has an empty plan in the states where it is off.
+`scripts/check_mod_states.py --explain` lists, for a Mod whose digest changed, every section whose
+outcomes differ from the accepted run's (build/plan-digests/outcomes-accepted.txt).
+
 `scripts/check_mod_states.py` plans every section of every installed Mod without a GPU and without the
 game. Its stand-in for the game cannot answer four things; a refusal for one of them is not counted
 against the Mod (`offline_limit` in sandbox/character_test.cpp). Each is answered somewhere else, and

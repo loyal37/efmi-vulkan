@@ -120,11 +120,18 @@ run = CustomShaderMain
         ShaderFixture f(d,directory,ini.c_str());f.backend->set_input_layout(original);
         if(which==3 || which==4){f.backend->resources().begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);frontend::RuntimeDraw draw;draw.hash=0x12345678;draw.count=3;
             assets::FilePlan result;const bool succeeded=f.ini->draw(draw,result,f.why);
-            if(which==4){check(!succeeded && f.backend->input_layout()==original,"Failed intercepted draw restores its original input layout");
-                refuses([&]{f.backend->resources().finish();},"Failed layout draw root cannot submit partial work");f.backend->resources().discard();
-                auto output=f.backend->resources().binding(L'\0',ResourceCopyTargetType::RENDER_TARGET,0).image;
-                const auto bytes=f.backend->resources().commands().readback(d.queue,output,image_region(output));
-                check(std::all_of(bytes.begin(),bytes.end(),[](auto b){return !b;}),"Failed layout draw leaves its committed image unchanged");output.reset();f.release();continue;}
+            if(which==4){
+                // D-162: the CustomShader that fails is its command's alone; the draw's lists end, the
+                // original layout is back, and the scope is dropped or kept as the owned runtime decides
+                // (dropped when the failure came after it recorded work). It refused the whole draw before.
+                check(succeeded && f.backend->input_layout()==original,"A draw whose CustomShader fails ends with its original input layout");
+                if(f.backend->resources().failed()){
+                    refuses([&]{f.backend->resources().finish();},"Failed layout draw root cannot submit partial work");f.backend->resources().discard();
+                    auto output=f.backend->resources().binding(L'\0',ResourceCopyTargetType::RENDER_TARGET,0).image;
+                    const auto bytes=f.backend->resources().commands().readback(d.queue,output,image_region(output));
+                    check(std::all_of(bytes.begin(),bytes.end(),[](auto b){return !b;}),"Failed layout draw leaves its committed image unchanged");output.reset();
+                }else f.finish();
+                f.release();continue;}
             check(succeeded,"Original texture override invokes owned layout drawing");f.finish();
             check(f.backend->input_layout()==original,"Intercepted draw completion restores original layout after all source lists");}
         else f.present();

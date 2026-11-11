@@ -39,10 +39,16 @@ draw = 3, 0
         f.backend->resources().begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);frontend::RuntimeDraw draw;draw.hash=0x12345678;draw.count=3;
         assets::FilePlan result;result.skip_original=true;const bool success=f.ini->draw(draw,result,f.why);
         check(f.backend->input_layout()==original,"All matched pre/post phases restore the original layout exactly once");
-        if(mode==3){check(!success && result.skip_original,"Later matched failure does not publish a partial caller plan");
-            refuses([&]{f.backend->resources().finish();},"Later matched failure cannot submit earlier recorded GPU work");f.backend->resources().discard();
-            const auto actual=f.backend->resources().commands().readback(d.queue,output,image_region(output));
-            check(std::all_of(actual.begin(),actual.end(),[](auto byte){return byte==0;}),"Failed multi-match drawing leaves committed output untouched");
+        if(mode==3){
+            // D-162: a later matched section's CustomShader that fails is its command's alone; the draw's
+            // lists end and the plan is made. The owned scope decides for its recorded work as in a Present:
+            // dropped whole when the failure came after it recorded (nothing reaches the committed output).
+            check(success,"A later matched section's failing command leaves the draw's lists running to their end");
+            if(f.backend->resources().failed()){
+                refuses([&]{f.backend->resources().finish();},"Later matched failure cannot submit earlier recorded GPU work");f.backend->resources().discard();
+                const auto actual=f.backend->resources().commands().readback(d.queue,output,image_region(output));
+                check(std::all_of(actual.begin(),actual.end(),[](auto byte){return byte==0;}),"Failed multi-match drawing leaves committed output untouched");
+            }else f.finish();
         }else {if(!success)throw std::runtime_error(f.why);f.finish();auto elements=layout_elements();if(mode!=1)elements[0].offset=16;
             const auto expected=native_layout_pixels(programs[0],programs[1],programs[0],frontend::SourceInputLayout(elements,programs[0].input_signature));
             check(f.backend->resources().commands().readback(d.queue,output,image_region(output))==expected,

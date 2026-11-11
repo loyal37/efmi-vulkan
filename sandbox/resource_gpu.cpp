@@ -595,7 +595,7 @@ vs-cb4 = ref PoolCB[1]->Region(16, 16)
     const std::vector<std::pair<std::string,std::string>> bad={
         {"cs-t[0:1] = ref PoolRows[0:2]\n","ranges differ"},
         {"cs-t[127:129] = ref ResourceSource\n","range is invalid"},
-        {"$first = 1 / 0\ncs-t[$first:$first] = ref ResourceSource\n","outside signed integer"},
+        {"$first = 1 / 0\ncs-t[$first:$first] = ref ResourceSource\n","range is invalid"}, // a bound that is no number: the range does not resolve (D-163)
     };
     const auto declarations=source.substr(0,source.find("[Present]"))+"[Present]\n";
     for(const auto& failure:bad){write(root/"Mods/ranges.ini",(declarations+failure.first).c_str());
@@ -1140,16 +1140,18 @@ $phase = $phase + 1
     ini=IniRuntime::load(config,backend,why);if(!ini)throw std::runtime_error(why);
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
     // In a Present each command stands for itself: the CPU query that fails does nothing, and the GPU
-    // commands recorded before it are submitted (a draw's lists, below, still stand or fall together).
+    // commands recorded before it are submitted (a draw's lists, below, run the same way since D-162).
     declined(*ini,*backend,ini->present(invalid,6,6,why),"radius outside","A CPU query that fails after GPU commands were recorded does nothing");
     ini.reset();backend.reset();
     check(!budgets.resident->used() && !budgets.staging->used(),"CPU-failed generation discards all pending GPU owners");
     backend=std::make_shared<GpuResourceRuntime>(d.resource,budgets);ini=IniRuntime::load(config,backend,why);
     if(!ini)throw std::runtime_error(why);draw.frame_seconds=invalid.frame_seconds;
     backend->begin(d.queue,GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!ini->draw(draw,plan,why) && why.find("radius outside")!=std::string::npos,"Draw CPU failure propagates its original pool context");
-    refuses([&]{backend->finish();},"Failed draw cannot publish earlier GPU commands from its scope");
-    backend->discard();ini.reset();backend.reset();
+    // D-162: in a draw's lists too, the CPU query that fails is its command's alone: the command does
+    // nothing, the notice carries its original pool context, the draw is planned, and the scope's GPU
+    // commands are submitted or dropped as in a Present (it refused the whole draw before).
+    declined(*ini,*backend,ini->draw(draw,plan,why),"radius outside","A CPU query that fails in a draw's list does nothing, and the draw is planned");
+    ini.reset();backend.reset();
     check(!budgets.resident->used() && !budgets.staging->used(),"Failed draw releases pending allocations after discard");
 }
 static void regions_gpu(Device& d,const std::filesystem::path& root){

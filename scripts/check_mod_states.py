@@ -14,6 +14,14 @@ the same files (the Mod's own, and the Core's and the folder's shared INIs): a c
 changes any plan of an installed Mod fails here and names the Mod, until it is accepted with --accept.
 A Mod whose files changed, or a new one, is accepted as it is. The accepted numbers are this machine's
 (build/plan-digests/accepted.json, not in the repository: they describe the user's Mods).
+
+Why a digest changed: the run also writes, per Mod and section, every distinct outcome over all states
+(the plan in words, or a refusal's reason) with the number of states it had (build/mod-states/outcomes.txt;
+kept beside the accepted digests when they are accepted). A changed Mod is listed with the sections whose
+outcomes differ from the accepted ones, before and now; --explain lists every one of them, not the first.
+
+What the layer said it did not do as the original does while the generation ran (its notices) is printed
+as NOTICE lines: offline that includes what the stand-in for the game cannot answer.
 No GPU. Writes build/mod-states/states.jsonl.
 """
 from __future__ import annotations
@@ -21,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -32,6 +41,48 @@ CORE = Path(os.environ.get("EFMI_VK_CHECK_CORE", r"D:\XXMI-Launcher-Portable-v2.
 
 
 ACCEPTED = ROOT / "build" / "plan-digests" / "accepted.json"
+ACCEPTED_OUTCOMES = ROOT / "build" / "plan-digests" / "outcomes-accepted.txt"
+
+
+def read_outcomes(path: Path) -> dict[str, dict[str, dict[str, int]]]:
+    """Mod (its INI from the Mods folder) -> section -> outcome -> states."""
+    mods: dict[str, dict[str, dict[str, int]]] = {}
+    current: dict[str, dict[str, int]] = {}
+    if not path.is_file():
+        return mods
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("MOD "):
+            current = mods.setdefault(line[4:], {})
+        elif line.startswith("  "):
+            section, states, outcome = line[2:].split(" | ", 2)
+            current.setdefault(section, {})[outcome] = int(states)
+    return mods
+
+
+def explain(ini: str, before: dict, now: dict, limit: int) -> None:
+    """The sections of a Mod whose outcomes differ between two runs."""
+    old, new = before.get(ini), now.get(ini)
+    if old is None or new is None:
+        print("    (no accepted outcomes to compare with: %s)" % ACCEPTED_OUTCOMES)
+        return
+    changed = [s for s in sorted(set(old) | set(new)) if old.get(s) != new.get(s)]
+    kinds = Counter()
+    for section in changed:
+        was, is_now = old.get(section, {}), new.get(section, {})
+        gone = sorted(set(was) - set(is_now))
+        come = sorted(set(is_now) - set(was))
+        kind = ("%s -> %s" % ("refused" if any(o.startswith("REFUSED") for o in gone) else "planned" if gone else "same plans",
+                              "refused" if any(o.startswith("REFUSED") for o in come) else "planned" if come else "same plans, other counts"))
+        kinds[kind] += 1
+        if kinds.total() <= limit:
+            print("    %s" % section)
+            for outcome in gone:
+                print("      was (%d states): %s" % (was[outcome], outcome[:300]))
+            for outcome in come:
+                print("      now (%d states): %s" % (is_now[outcome], outcome[:300]))
+            if not gone and not come:
+                print("      the same outcomes in other numbers of states: %s" % sorted((was[o], is_now[o]) for o in was if was[o] != is_now[o])[:6])
+    print("    %d sections changed: %s" % (len(changed), ", ".join("%d %s" % (n, k) for k, n in kinds.most_common())))
 
 
 def files_signature(folders: list[Path], whole: bool) -> str:
@@ -51,9 +102,10 @@ def files_signature(folders: list[Path], whole: bool) -> str:
     return h.hexdigest()
 
 
-def compare_digests(mods: list[dict], accept: bool) -> bool:
+def compare_digests(mods: list[dict], accept: bool, outcomes: Path) -> bool:
     """True when a Mod's plans changed while its files did not."""
     accepted = json.loads(ACCEPTED.read_text(encoding="utf-8")) if ACCEPTED.is_file() else {}
+    accepted_outcomes, current_outcomes = read_outcomes(ACCEPTED_OUTCOMES), read_outcomes(outcomes)
     roots = sorted({Path(m["ini"]).parts[0] for m in mods})
     # What every Mod's plans share: the Core's lists and the folder's INIs outside the character Mods.
     shared = hashlib.sha1()
@@ -76,11 +128,15 @@ def compare_digests(mods: list[dict], accept: bool) -> bool:
         if before and before["inputs"] == inputs and not accept:
             changed += 1
             print("  PLANS CHANGED: %s: its files are as accepted, its plans are not (%s, accepted %s)" % (key, mod["digest"], before["digest"]))
+            explain(mod["ini"], accepted_outcomes, current_outcomes, 10000 if "--explain" in sys.argv else 4)
             continue
         new += 1
         accepted[key] = {"inputs": inputs, "digest": mod["digest"]}
     ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
     ACCEPTED.write_text(json.dumps(accepted, indent=1, sort_keys=True), encoding="utf-8")
+    # The outcomes that go with the accepted digests: kept when nothing is waiting to be reviewed.
+    if not changed and outcomes.is_file():
+        shutil.copyfile(outcomes, ACCEPTED_OUTCOMES)
     print("plan digests: %d as accepted, %d accepted now (new, changed files, or --accept), %d changed%s" %
           (same, new, changed, "; review the change, then run with --accept" if changed else ""))
     return changed > 0
@@ -94,8 +150,11 @@ def main() -> int:
     if not MODS.is_dir() or not exe.is_file():
         print("mod states: the installed Mods folder or %s is missing" % exe)
         return 1
+    outcomes = out / "outcomes.txt"
+    outcomes.unlink(missing_ok=True)
     result = subprocess.run([str(exe), "--plan-folder-states", str(MODS), str(CORE), str(out / "settings")], cwd=out,
-                            capture_output=True, text=True, errors="replace", timeout=1800)
+                            capture_output=True, text=True, errors="replace", timeout=1800,
+                            env={**os.environ, "EFMI_VK_PLAN_OUTCOMES": str(outcomes)})
     (out / "states.jsonl").write_text(result.stdout, encoding="utf-8")
     if result.stderr.strip():
         (out / "stderr.txt").write_text(result.stderr, encoding="utf-8")
@@ -110,6 +169,10 @@ def main() -> int:
         print("  INPUT LEFT OUT: %s: %s" % (item["ini"], item["reason"]))
     for error in summary.get("present_errors", []):
         print("  PRESENT REFUSED: %s" % error)
+    # What the layer said while the lists ran (D-161 to D-163): a line it degrades, an operand nothing
+    # answered. The generation keeps the latest 64.
+    for notice in summary.get("gaps", []):
+        print("  NOTICE: %s" % notice)
     failed = bool(summary.get("present_errors"))
     reasons = Counter()
     for mod in mods:
@@ -143,7 +206,7 @@ def main() -> int:
         for reason, n in reasons.most_common():
             print("  %4d  %s" % (n, reason))
     # Only for the installed folder: the checks that plan a folder of their own have nothing accepted.
-    if "EFMI_VK_CHECK_MODS" not in os.environ and compare_digests(mods, "--accept" in sys.argv):
+    if "EFMI_VK_CHECK_MODS" not in os.environ and compare_digests(mods, "--accept" in sys.argv, outcomes):
         failed = True
     print("mod states: %s" % ("FAILED" if failed else "every section plans in every state"))
     return 1 if failed else 0

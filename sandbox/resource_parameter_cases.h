@@ -275,7 +275,8 @@ x = 99
     check(f.draws.empty() && value(f.read())==99 && f.backend->parameter_uploads()==3,"Hunting skip bypasses injected draw and its flush; root still publishes");
     f.extension->hunting_skip=false;f.refuse_draw=true;
     f.backend->begin(d.queue,frontend::GpuResourceRuntime::ExecutionSite::OutsideRenderPass);
-    check(!f.ini->draw(draw,plan,f.why) && f.why.find("Parameter test draw refusal")!=std::string::npos,"Draw adapter failure propagates after recording its parameter update");
-    refuses([&]{f.backend->finish();},"Failed draw cannot submit its partial parameter upload");
-    f.backend->discard();check(value(f.read())==99,"Discarded draw upload preserves last submitted GPU contents");f.release();
+    // D-162: the draw command the adapter refuses does nothing, with its reason in a notice; the list goes
+    // on to `x = 99` and the draw's lists end as a Present's do (it refused the whole draw before).
+    declined(*f.ini,*f.backend,f.ini->draw(draw,plan,f.why),"Parameter test draw refusal","A draw command the adapter refuses does nothing and its list goes on");
+    check(value(f.read())==99,"The parameters after the refused draw command are the list's last");f.release();
 }
