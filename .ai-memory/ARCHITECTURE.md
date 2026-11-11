@@ -33,7 +33,8 @@ own render passes. Nothing of the game, the launcher or the Mods is changed on d
 | `frontend/xxmi/runtime.*`, `runtime_parser.cpp`, `runtime_shim.cpp`, `engine_globals.h` | `IniRuntime`: one generation of the original engine with its own globals (D-129), its load, `draw`, `present`, `save`. |
 | `frontend/xxmi/draw_plan.*` | `DrawPlanAdapter`: wraps the original's command objects; decides per command which backend takes it; runs a replaced draw's lists against the draw state. |
 | `frontend/xxmi/draw_state.h` | The draw state (D-161): `DrawState` (D3D11's context as values per slot), `SlotValue`, the table of what a draw makes of a slot (`honour_table`), the table of what an operand reads where nothing answers (`operand_table`, D-163). |
-| `frontend/xxmi/character_core.cpp`, `efmittl_bridge.cpp`, `rabbit_textures.h` | Native replacements of the EFMI Core's lists, of RabbitFX and of EFMITTL's hooks. |
+| `frontend/xxmi/texture_properties.*` | The original's texture property getters (`->Format`, `->Width`, ...) over a description: the host's of the game's texture, a Mod's file header (D-170). |
+| `frontend/xxmi/character_core.cpp`, `efmittl_bridge.cpp`, `rabbit_textures.h` | Native replacements of the EFMI Core's lists and of RabbitFX; EFMITTL's shader groups run as their own lists, chosen by facts the host reads off SPIR-V (`layer/src/shader_hooks.cpp`, D-171). |
 | `frontend/xxmi/gpu_*.cpp`, `owned_runtime.*`, `frontend/gpu/*` | The owned GPU runtime: D3D11's resource and state semantics on Vulkan resources the layer owns. |
 | `frontend/assets/*` | DDS and WIC decoding, uploads, the file cache. |
 | `sandbox/`, `scripts/` | Test programs, the suite (`sandbox/run_all.py`), builds and checks. |
