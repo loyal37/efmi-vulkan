@@ -50,6 +50,9 @@ struct PlanItem {
     float alpha = 1;
     uint32_t mask_channel = 0;
     bool mask_invert = false;
+    // Translucent in a shadow pass (D-185): drawn in place, a texel kept with a probability equal to the opacity there,
+    // as the library's shadow shaders do; not captured.
+    bool shadow = false;
 };
 
 struct DrawPlan {
@@ -148,7 +151,10 @@ public:
     // DrawIndexed of `count` indices from `first` would be planned, with its opacity and mask (null:
     // none). False refuses with `why`.
     bool translucent(CommandListState&, uint32_t count, uint32_t first, float alpha, CustomResource* mask,
-                     uint32_t channel, bool invert, std::wstring& why);
+                     uint32_t channel, bool invert, std::wstring& why, bool shadow = false);
+    // During a plan, from a native command: `drawindexed = count, first, 0` of the current bindings, as the list's own
+    // command would be planned. False refuses with `why`.
+    bool draw_indexed(CommandListState&, uint32_t count, uint32_t first, std::wstring& why);
     using ShaderQuery=std::function<bool(CommandListOperand&,CommandListState&,float&,std::wstring&)>;
     void shader_queries(ShaderQuery);
     // Shader operands (`vs`, `ps`) the host answers on the CPU where no owned shader facts apply (a

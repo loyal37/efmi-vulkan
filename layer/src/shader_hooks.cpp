@@ -3,6 +3,8 @@
 #include "../../frontend/gpu/source_registers.h"
 #include <algorithm>
 #include <functional>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -140,9 +142,183 @@ bool outline_vertex(const std::vector<uint32_t>& code)
     return model == 0 && found;
 }
 
+uint32_t shadow_vertex(const std::vector<uint32_t>& code)
+{
+    Module m;
+    if (!m.parse(code) || m.model != 0) return 0;
+    // The skinned character's vertex input, by location: position, UV, normal, tangent, weights, indices.
+    struct Want { uint32_t location; char kind; uint32_t width; };
+    static const Want inputs[] = {{0, 'f', 3}, {1, 'f', 2}, {2, 'f', 3}, {4, 'f', 4}, {5, 'f', 4}, {6, 'i', 4}};
+    uint32_t seen = 0;
+    bool instance = false, position = false, uv = false, storage = false, uniform = false;
+    for (const auto& [id, var] : m.vars) {
+        const uint32_t pointee = m.pointee(var.type);
+        const auto builtin = m.builtin.find(id);
+        const auto location = m.location.find(id);
+        if (var.storage == SInput) {
+            if (builtin != m.builtin.end()) { instance |= builtin->second == kInstanceIndex; continue; }
+            if (location == m.location.end()) return 0;
+            const auto sv = m.scalar_vector(pointee);
+            bool matched = false;
+            for (uint32_t k = 0; k < 6; ++k) {
+                if (inputs[k].location != location->second) continue;
+                if ((sv.first == 'u' ? 'i' : sv.first) != inputs[k].kind || sv.second != inputs[k].width) return 0;
+                seen |= 1u << k; matched = true;
+            }
+            if (!matched) return 0;
+        } else if (var.storage == SOutput) {
+            if (builtin != m.builtin.end()) { position |= builtin->second == kPosition; continue; }
+            if (location == m.location.end() || location->second != 0 || m.scalar_vector(pointee) != std::make_pair('f', 2u)) return 0;
+            uv = true;
+        } else if (var.storage == SStorageBuffer || (var.storage == SUniform && m.buffer_block.count(pointee))) storage = true;
+        else if (var.storage == SUniform && m.block.count(pointee)) uniform = true;
+    }
+    if (seen != 0x3f || !instance || !position || !storage || !uniform) return 0;
+    return uv ? 5u : 4u;
+}
+
 uint32_t character_vertex_hook(const std::vector<uint32_t>& code)
 {
-    return lit_character_vertex(code) ? 1u : lit_skin_vertex(code) ? 2u : outline_vertex(code) ? 3u : 0u;
+    if (lit_character_vertex(code)) return 1u;
+    if (lit_skin_vertex(code)) return 2u;
+    if (outline_vertex(code)) return 3u;
+    return shadow_vertex(code);
+}
+
+bool add_uv_output(std::vector<uint32_t>& code, uint32_t uv_location, std::string& why)
+{
+    enum : uint32_t { OpLine = 8, OpTypeArray = 28, OpConstant = 43, OpFMul = 133, OpFAdd = 129, OpVectorShuffle = 79, OpMemberDecorate = 72,
+                      OpDecorationGroup = 73, OpGroupDecorate = 74, OpGroupMemberDecorate = 75, OpNoLine = 317, OpDecorateId = 332,
+                      OpDecorateString = 5632, OpMemberDecorateString = 5633, DecOffset = 35 };
+    if (code.size() < 5 || code[0] != 0x07230203u) { why = "not a SPIR-V module"; return false; }
+    struct Inst { size_t at; uint32_t op, count; };
+    std::vector<Inst> insts;
+    for (size_t at = 5; at < code.size();) {
+        const uint32_t count = code[at] >> 16, op = code[at] & 0xffff;
+        if (!count || at + count > code.size()) { why = "a malformed SPIR-V module"; return false; }
+        insts.push_back({at, op, count});
+        at += count;
+    }
+    uint32_t float32 = 0, vec2 = 0, vec4 = 0, int32 = 0, entry_function = 0;
+    size_t entry = SIZE_MAX, last_annotation = SIZE_MAX, first_function = SIZE_MAX;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> pointers;     // (storage, type) -> pointer type
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> constants;    // (type, value) -> constant
+    std::map<uint32_t, uint32_t> locations, sets, bindings;          // decorations by target
+    std::set<uint32_t> blocks;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> offsets;      // (struct, member) -> byte offset
+    std::map<uint32_t, std::vector<uint32_t>> structs;               // struct -> member types
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> variables;     // global variable -> (pointer type, storage)
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> pointer_of;    // pointer type -> (storage, type)
+    for (size_t i = 0; i < insts.size(); ++i) {
+        const Inst& in = insts[i];
+        const uint32_t* w = &code[in.at + 1];
+        const uint32_t n = in.count - 1;
+        switch (in.op) {
+        case OpEntryPoint: if (entry == SIZE_MAX && n >= 2 && w[0] == 0) { entry = i; entry_function = w[1]; } break;
+        case OpDecorate:
+            if (n >= 3 && w[1] == DecLocation) locations[w[0]] = w[2];
+            else if (n >= 3 && w[1] == DecSet) sets[w[0]] = w[2];
+            else if (n >= 3 && w[1] == DecBinding) bindings[w[0]] = w[2];
+            else if (n >= 2 && w[1] == DecBlock) blocks.insert(w[0]);
+            last_annotation = i; break;
+        case OpMemberDecorate:
+            if (n >= 4 && w[2] == DecOffset) offsets[{w[0], w[1]}] = w[3];
+            last_annotation = i; break;
+        case OpDecorationGroup: case OpGroupDecorate: case OpGroupMemberDecorate: case OpDecorateId: case OpDecorateString: case OpMemberDecorateString:
+            last_annotation = i; break;
+        case OpTypeFloat: if (n >= 2 && w[1] == 32 && !float32) float32 = w[0]; break;
+        case OpTypeInt: if (n >= 3 && w[1] == 32 && (!int32 || w[2] == 1)) int32 = w[0]; break;
+        case OpTypeVector:
+            if (n >= 3 && float32 && w[1] == float32) { if (w[2] == 2 && !vec2) vec2 = w[0]; if (w[2] == 4 && !vec4) vec4 = w[0]; }
+            break;
+        case OpTypeStruct: if (n >= 1) structs[w[0]].assign(w + 1, w + n); break;
+        case OpTypePointer: if (n >= 3) { pointers.emplace(std::make_pair(w[1], w[2]), w[0]); pointer_of[w[0]] = {w[1], w[2]}; } break;
+        case OpConstant: if (n >= 3) constants.emplace(std::make_pair(w[0], w[2]), w[1]); break;
+        case OpVariable: if (first_function == SIZE_MAX && n >= 3) variables[w[1]] = {w[0], w[2]}; break;
+        case OpFunction: if (first_function == SIZE_MAX) first_function = i; break;
+        default: break;
+        }
+    }
+    if (entry == SIZE_MAX || first_function == SIZE_MAX || last_annotation == SIZE_MAX || !vec2 || !vec4) { why = "no vertex entry point or vector types"; return false; }
+    // The UV input, the material block and its transform member; no output at location 0 yet.
+    uint32_t uv_in = 0, block = 0, member = UINT32_MAX;
+    for (const auto& [id, var] : variables) {
+        const auto pointer = pointer_of.find(var.first);
+        if (pointer == pointer_of.end()) continue;
+        const auto location = locations.find(id);
+        if (var.second == SOutput && location != locations.end() && location->second == 0) { why = "the module has an output at location 0"; return false; }
+        if (var.second == SInput && location != locations.end() && location->second == uv_location && pointer->second.second == vec2) uv_in = id;
+        if (var.second == SUniform && sets.count(id) && bindings.count(id) && sets[id] == kMaterialSet && bindings[id] == kMaterialBinding &&
+            blocks.count(pointer->second.second)) {
+            const auto found = structs.find(pointer->second.second);
+            if (found == structs.end()) continue;
+            for (uint32_t k = 0; k < found->second.size(); ++k) {
+                const auto offset = offsets.find({found->first, k});
+                if (offset != offsets.end() && offset->second == kUvTransformOffset && found->second[k] == vec4) { block = id; member = k; }
+            }
+        }
+    }
+    if (!uv_in) { why = "no float2 input at the UV's location"; return false; }
+    if (!block) { why = "no material block with the UV transform"; return false; }
+    // Words to add: types, the constant and the output ahead of the functions; its decoration among the annotations;
+    // the entry point with the output in its interface; the computation at the start of the entry function.
+    uint32_t bound = code[3];
+    std::vector<uint32_t> globals;
+    const auto emit = [](std::vector<uint32_t>& out, uint32_t op, std::initializer_list<uint32_t> words) {
+        out.push_back(uint32_t(words.size() + 1) << 16 | op);
+        out.insert(out.end(), words.begin(), words.end());
+    };
+    if (!int32) { int32 = bound++; emit(globals, OpTypeInt, {int32, 32, 1}); }
+    uint32_t index = 0;
+    if (const auto found = constants.find({int32, member}); found != constants.end()) index = found->second;
+    else { index = bound++; emit(globals, OpConstant, {int32, index, member}); }
+    uint32_t uniform_vec4 = 0, output_vec2 = 0;
+    if (const auto found = pointers.find({SUniform, vec4}); found != pointers.end()) uniform_vec4 = found->second;
+    else { uniform_vec4 = bound++; emit(globals, OpTypePointer, {uniform_vec4, SUniform, vec4}); }
+    if (const auto found = pointers.find({SOutput, vec2}); found != pointers.end()) output_vec2 = found->second;
+    else { output_vec2 = bound++; emit(globals, OpTypePointer, {output_vec2, SOutput, vec2}); }
+    const uint32_t out = bound++;
+    emit(globals, OpVariable, {output_vec2, out, SOutput});
+    std::vector<uint32_t> decoration;
+    emit(decoration, OpDecorate, {out, DecLocation, 0});
+    const uint32_t uv = bound++, chain = bound++, transform = bound++, scale = bound++, shift = bound++, product = bound++, sum = bound++;
+    std::vector<uint32_t> body;
+    emit(body, OpLoad, {vec2, uv, uv_in});
+    emit(body, OpAccessChain, {uniform_vec4, chain, block, index});
+    emit(body, OpLoad, {vec4, transform, chain});
+    emit(body, OpVectorShuffle, {vec2, scale, transform, transform, 0, 1});
+    emit(body, OpVectorShuffle, {vec2, shift, transform, transform, 2, 3});
+    emit(body, OpFMul, {vec2, product, uv, scale});
+    emit(body, OpFAdd, {vec2, sum, product, shift});
+    emit(body, OpStore, {out, sum});
+    // Where the computation goes: after the entry function's first label and its local variables.
+    size_t insert = SIZE_MAX;
+    bool in_entry = false, labelled = false;
+    for (size_t i = first_function; i < insts.size() && insert == SIZE_MAX; ++i) {
+        const Inst& in = insts[i];
+        if (in.op == OpFunction) { in_entry = in.count >= 3 && code[in.at + 2] == entry_function; continue; }
+        if (!in_entry) continue;
+        if (in.op == OpLabel) { if (labelled) insert = i; labelled = true; continue; }
+        if (labelled && in.op != OpVariable && in.op != OpLine && in.op != OpNoLine) insert = i;
+    }
+    if (insert == SIZE_MAX) { why = "no body in the entry function"; return false; }
+    std::vector<uint32_t> result(code.begin(), code.begin() + 5);
+    result[3] = bound;
+    for (size_t i = 0; i < insts.size(); ++i) {
+        const Inst& in = insts[i];
+        if (i == first_function) result.insert(result.end(), globals.begin(), globals.end());
+        if (i == insert) result.insert(result.end(), body.begin(), body.end());
+        if (i == entry) {
+            result.push_back(uint32_t(in.count + 1) << 16 | in.op);
+            result.insert(result.end(), code.begin() + in.at + 1, code.begin() + in.at + in.count);
+            result.push_back(out);
+        } else {
+            result.insert(result.end(), code.begin() + in.at, code.begin() + in.at + in.count);
+        }
+        if (i == last_annotation) result.insert(result.end(), decoration.begin(), decoration.end());
+    }
+    code = std::move(result);
+    return true;
 }
 
 PixelHook character_pixel_hook(const std::vector<uint32_t>& code)

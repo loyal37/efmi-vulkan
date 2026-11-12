@@ -58,6 +58,8 @@ std::unique_ptr<EfmittlBridge> EfmittlBridge::install(DrawPlanAdapter& a, std::v
     if (!b.vertex_[size_t(VertexHook::Lit)].declared) return nullptr;
     compile(b.vertex_[size_t(VertexHook::LitSkin)], L"EFMITTLLitVSSkin");
     compile(b.vertex_[size_t(VertexHook::Outline)], L"EFMITTLOutlineVS");
+    compile(b.vertex_[size_t(VertexHook::ShadowPlain)], L"EFMITTLShadowVSPlain");
+    compile(b.vertex_[size_t(VertexHook::ShadowFading)], L"EFMITTLShadowVSFading");
     compile(b.clip_first_, L"EFMITTLClipFirst");
     for (unsigned slot = 0; slot < 24; ++slot) compile(b.diffuse_at_[slot], (L"EFMITTLDiffuseAt" + std::to_wstring(slot)).c_str());
     b.adapter_ = &a; b.mask_ = &mask->second;
@@ -71,6 +73,25 @@ std::unique_ptr<EfmittlBridge> EfmittlBridge::install(DrawPlanAdapter& a, std::v
         const float channel = std::isfinite(b.channel_->fval) ? std::fmin(std::fmax(b.channel_->fval, 0.0f), 3.0f) : 0.0f;
         return b.adapter_->translucent(state, count, first, b.alpha_->fval, b.mask_, uint32_t(channel), b.invert_->fval > 0.5f, why);
     });
+    // The library's CommandListShadow (D-185), reached from CommandListDraw for a translucent call without o0 outside its
+    // fallback. Under DX11, in a pass its shadow vertex groups recognised ($vs_kind 2 or 3) it draws the call with its
+    // shadow pixel shader (shadow_a.hlsl or shadow_b.hlsl: a texel kept with a probability equal to the opacity there),
+    // and elsewhere the call as it is (`drawindexed = $count, $first, 0`). The renderer draws the former in place.
+    const std::wstring shadow = L"commandlist" + library + L"shadow";
+    const auto shadow_list = explicitCommandListSections.find(shadow);
+    b.vs_kind_ = variable(L"vs_kind");
+    if (shadow_list != explicitCommandListSections.end() && b.vs_kind_ && b.vertex_[size_t(VertexHook::ShadowPlain)].declared &&
+        b.vertex_[size_t(VertexHook::ShadowFading)].declared) {
+        boundaries.push_back(shadow);
+        a.native(shadow_list->second, shadow, [&b](CommandListState& state, unsigned phases, std::wstring& why) {
+            if (!(phases & 1)) return true;
+            uint32_t count = 0, first = 0;
+            if (!index_value(b.count_->fval, count) || !index_value(b.first_->fval, first)) { why = L"EFMITTL shadow: invalid count or first index"; return false; }
+            if (b.vs_kind_->fval != 2.0f && b.vs_kind_->fval != 3.0f) return b.adapter_->draw_indexed(state, count, first, why);
+            const float channel = std::isfinite(b.channel_->fval) ? std::fmin(std::fmax(b.channel_->fval, 0.0f), 3.0f) : 0.0f;
+            return b.adapter_->translucent(state, count, first, b.alpha_->fval, b.mask_, uint32_t(channel), b.invert_->fval > 0.5f, why, true);
+        });
+    }
     return bridge;
 }
 void EfmittlBridge::prepare()
@@ -81,7 +102,7 @@ void EfmittlBridge::prepare()
 void EfmittlBridge::before_draw(const RuntimeDraw& draw) noexcept
 {
     const auto kind = size_t(draw.vertex_hook);
-    drawing_ = kind && kind < 4 && vertex_[kind].declared ? &vertex_[kind] : nullptr;
+    drawing_ = kind && kind < 6 && vertex_[kind].declared ? &vertex_[kind] : nullptr;
     if (drawing_ && drawing_->pre_constants.whole)
         for (const auto& value : drawing_->pre_constants.values) value.first->fval = value.second;
 }

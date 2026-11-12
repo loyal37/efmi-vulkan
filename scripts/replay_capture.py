@@ -543,6 +543,8 @@ def main() -> int:
                     "target and no depth right after a pass the Mod draws in (the copy after the forward pass, D-113)")
     ap.add_argument("--expect-translucency", action="store_true", help="with --check: fail unless the layer captured translucent "
                     "calls and composited them without an error (EFMITTL, D-113)")
+    ap.add_argument("--expect-shadows", action="store_true", help="with --check: fail unless translucent calls were drawn in "
+                    "the shadow passes by their opacity (EFMITTL's shadow shaders, D-185)")
     ap.add_argument("--no-refusal", action="store_true", help="with --check: fail when a matched draw's plan was refused, "
                     "as when an INI calls a library or asks a question the plan cannot answer (D-112)")
     ap.add_argument("--two-queues", action="store_true", help="the game's use of its two graphics queues (D-119): a frame's passes "
@@ -668,6 +670,10 @@ def main() -> int:
             t = summary["runs"].get("enabled", {}).get("translucency") or {}
             if not t.get("captures") or not t.get("composites") or t.get("last_error"):
                 problems.append("translucency %s" % t)
+        if args.expect_shadows:
+            shadows = summary["runs"].get("enabled", {}).get("counters", {}).get("translucent_shadows", 0)
+            if not shadows:
+                problems.append("no translucent call was drawn in a shadow pass by its opacity (translucent_shadows %s)" % shadows)
         if args.no_refusal:
             refused = {k: v for k, v in summary["runs"].get("enabled", {}).get("counters", {}).items() if k.startswith("refused_") and v}
             if refused:

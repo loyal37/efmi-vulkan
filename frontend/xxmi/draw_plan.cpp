@@ -1824,7 +1824,7 @@ void DrawPlanAdapter::after(ExplicitCommandListSection& section,NativeCommand co
     section.command_list.runtime_populated=section.post_command_list.runtime_populated=true;
 }
 bool DrawPlanAdapter::translucent(CommandListState& state,uint32_t count,uint32_t first,float alpha,CustomResource* mask,
-                                  uint32_t channel,bool invert,std::wstring& why)
+                                  uint32_t channel,bool invert,std::wstring& why,bool shadow)
 {
     why.clear();
     try{
@@ -1832,13 +1832,24 @@ bool DrawPlanAdapter::translucent(CommandListState& state,uint32_t count,uint32_
         if(!std::isfinite(alpha) || channel>3)refuse(L"Translucent draw parameters out of range");
         if(!count)return true;
         PlanItem item;item.operation=PlanOperation::Translucent;item.index_count=count;item.first_index=first;
-        item.alpha=alpha;item.mask_channel=channel;item.mask_invert=invert;
+        item.alpha=alpha;item.mask_channel=channel;item.mask_invert=invert;item.shadow=shadow;
         if(mask){
             runtime_->direct_resource(mask);
             const SlotValue held=runtime_->held(mask);
             if(held.kind==SlotValue::Kind::Application || held.kind==SlotValue::Kind::Foreign)refuse(L"A translucency mask from the application's textures");
             item.resource=held.kind==SlotValue::Kind::Resource?held.resource:nullptr;
         }
+        runtime_->indexed(item,state);return true;
+    }catch(const Refused& e){why=e.reason;}
+    return false;
+}
+bool DrawPlanAdapter::draw_indexed(CommandListState& state,uint32_t count,uint32_t first,std::wstring& why)
+{
+    why.clear();
+    try{
+        if(!runtime_->active)refuse(L"Draw outside an active plan");
+        if(!count)return true;
+        PlanItem item;item.operation=PlanOperation::DrawIndexed;item.index_count=count;item.first_index=first;
         runtime_->indexed(item,state);return true;
     }catch(const Refused& e){why=e.reason;}
     return false;

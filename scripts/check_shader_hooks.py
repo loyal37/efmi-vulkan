@@ -31,7 +31,14 @@ ROOT = Path(__file__).resolve().parents[1]
 LIT_DX11 = "1479b2b594b9c91a"  # the library's lit vertex shader on game 1.6.3 (translucency.ini)
 SIBLING = r"F:\EFMI MCP\server"  # the DX11 disassembler (read-only)
 LIBRARY = Path(r"D:\XXMI-Launcher-Portable-v2.1.6\EFMI\Mods\EFMITTL\translucency.ini")
-VERTEX_GROUPS = {"EFMITTLLitVS": 1, "EFMITTLLitVSSkin": 2, "EFMITTLOutlineVS": 3}
+# D-185: the shadow groups as well, plain 4 and fading 5.
+VERTEX_GROUPS = {"EFMITTLLitVS": 1, "EFMITTLLitVSSkin": 2, "EFMITTLOutlineVS": 3, "EFMITTLShadowVSPlain": 4, "EFMITTLShadowVSFading": 5}
+# Vertex pairs where the pairing by draw order in a scene names a DX11 shader of another group, (Vulkan module, DX11 shader):
+# why. The check fails when one of them is no longer met.
+KNOWN_VERTEX = {
+    ("d29292e6", "d657fd46ea491719"): "the plain shadow vertex shader pairs with f11c7e1d in 204 draws and with d657fd46 in one; "
+                                      "d657fd46 (two UV sets) pairs with 1425b014 everywhere else, which has the second UV input",
+}
 # Fragment pairs where the layer's pixel facts and the DX11 partner's groups differ, (Vulkan module, DX11 shader):
 # why. Both are draws whose vertex shader is of no library group, where the pixel groups' own conditions
 # ($vs_kind 1 or 4) do nothing. The check fails when one of them no longer differs.
@@ -171,11 +178,15 @@ def main() -> int:
             return {name for name, (shader_model, pattern) in groups.items() if shader_model.startswith(model) and pattern.search(listings[h])}
 
         counts = collections.Counter()
+        known_vertex_seen = set()
         for h in sorted(paired):
             if h not in facts:
                 continue
             expected = set()
             for partner in paired[h]:
+                if (h, partner) in KNOWN_VERTEX:
+                    known_vertex_seen.add((h, partner))
+                    continue
                 found = matched(partner, "vs")
                 if found is None:
                     expected = None
@@ -208,6 +219,8 @@ def main() -> int:
                     problems.append("fragment %s: the layer gives %s, its DX11 partner %s matches %s" % (h, sorted(layer), partner, sorted(found)))
                 else:
                     counts["fragment pairs: " + (", ".join(sorted(n[len("EFMITTL"):] for n in found)) or "no group")] += 1
+        for key in sorted(set(KNOWN_VERTEX) - known_vertex_seen):
+            problems.append("known vertex pairing %s %s was not met: take it off KNOWN_VERTEX" % key)
         for key in sorted(set(KNOWN_PIXEL) - known_seen):
             problems.append("known difference %s %s was not met: take it off KNOWN_PIXEL" % key)
         print("shader hooks, the installed library's groups (%d with a pattern):" % len(groups))

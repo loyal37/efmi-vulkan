@@ -2,6 +2,7 @@
 #include "character_present.h"
 #include "../../frontend/gpu/hlsl_compiler.h"
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <set>
@@ -271,6 +272,123 @@ void Translucency::retire(uint32_t pipeline_id)
 {
     std::lock_guard<std::mutex> lock(mx_);
     for (uint32_t k = 0; k < kCaptureKinds; ++k) recipes_.erase({pipeline_id, k});
+    for (auto it = shadow_recipes_.lower_bound({pipeline_id, 0}); it != shadow_recipes_.end() && it->first.first == pipeline_id;)
+        it = shadow_recipes_.erase(it);
+}
+
+// D-185. The library's shadow shaders (shadow_a.hlsl, shadow_b.hlsl) take the DX11 shadow vertex shaders' outputs register
+// for register (the UV, four more interpolants, the instance); the game's Vulkan shadow vertex shaders output the position
+// and at most the UV, so those cannot link. Their test is the library's opacity functions; the layer's main below calls
+// them with the UV and the position alone, and takes the call's parameters as specialization constants where the library
+// reads IniParams[180] (the shadow is drawn in its pass, where no parameter image can be written).
+bool Translucency::shadow_shaders(const std::filesystem::path& library, uint32_t own_set, std::string& why)
+{
+    std::lock_guard<std::mutex> lock(mx_);
+    if (shadow_masked_.count(own_set)) return true;
+    try {
+        const auto folder = (g_cfg.m2_settings.empty() ? owned_tools_directory() / L"settings"
+                                                       : std::filesystem::absolute(std::filesystem::u8path(g_cfg.m2_settings))) / L"efmittl-shadow";
+        std::filesystem::create_directories(folder);
+        static const char* const head[2] = {"#include \"opacity.hlsli\"\n#define SHADOW_MASKED 0\n",
+                                            "#include \"opacity.hlsli\"\n#define SHADOW_MASKED 1\n"};
+        static const char* const body =
+            "#ifdef __spirv__\n"
+            "[[vk::constant_id(1)]] const float shadow_alpha = 1.0;\n"
+            "[[vk::constant_id(3)]] const uint shadow_channel = 0;\n"
+            "[[vk::constant_id(4)]] const uint shadow_invert = 0;\n"
+            "#else\n"
+            "static const float shadow_alpha = 1.0;\n"
+            "static const uint shadow_channel = 0;\n"
+            "static const uint shadow_invert = 0;\n"
+            "#endif\n"
+            "#if SHADOW_MASKED\n"
+            "void main(float2 uv : TEXCOORD0, float4 position : SV_Position)\n"
+            "{\n"
+            "    if (saturate(shadow_alpha * saturate(ttl_mask(uv, shadow_channel, shadow_invert != 0))) <= ttl_noise(position.xy)) discard;\n"
+            "}\n"
+            "#else\n"
+            "void main(float4 position : SV_Position)\n"
+            "{\n"
+            "    if (saturate(shadow_alpha) <= ttl_noise(position.xy)) discard;\n"
+            "}\n"
+            "#endif\n";
+        efmi::gpu::HlslCompiler compiler(owned_tools_directory() / L"dxcompiler.dll");
+        std::vector<uint32_t> made[2];
+        for (int masked = 0; masked < 2; ++masked) {
+            const auto file = folder / (masked ? L"shadow_masked.hlsl" : L"shadow.hlsl");
+            {
+                std::ofstream out(file, std::ios::binary | std::ios::trunc);
+                out << head[masked] << body;
+                if (!out) { why = "EFMITTL shadow shader: cannot write " + file.u8string(); return false; }
+            }
+            efmi::gpu::HlslRequest request;
+            // The library's opacity.hlsli is found through the working directory, as an include beside the source would be.
+            request.source = file; request.working_directory = library / L"shaders"; request.stage = 'p';
+            efmi::gpu::HlslProgram program;
+            std::string reason;
+            if (!compiler.compile(request, program, reason)) { why = "EFMITTL shadow shader: " + reason; return false; }
+            made[masked] = std::move(program.spirv);
+        }
+        const uint32_t mask = efmi::gpu::HlslCompiler::binding('p', 't', 100);
+        if (!repoint_bindings(made[1], {{{0, mask}, {own_set, 2}}})) { why = "EFMITTL shadow shader bindings"; return false; }
+        shadow_plain_[own_set] = std::move(made[0]);
+        shadow_masked_[own_set] = std::move(made[1]);
+    } catch (const std::exception& e) { why = std::string("EFMITTL shadow shader: ") + e.what(); return false; }
+    return true;
+}
+
+namespace {
+// The shadow fragment stage with a call's parameters as its specialization constants 1, 3 and 4.
+void shadow_stage(RecipeStage& stage, const std::vector<uint32_t>& code, const ShadowParams& params)
+{
+    auto shader = std::make_shared<ShaderInfo>();
+    shader->code = code; shader->size = uint32_t(code.size() * 4);
+    stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT; stage.shader = std::move(shader); stage.entry = "main";
+    stage.entries = {{1, 0, 4}, {3, 4, 4}, {4, 8, 4}};
+    const float alpha = float(params.alpha) / 1023.0f;
+    const uint32_t values[2] = {params.channel, params.invert ? 1u : 0u};
+    stage.data.resize(12);
+    std::memcpy(stage.data.data(), &alpha, 4);
+    std::memcpy(stage.data.data() + 4, values, 8);
+}
+}
+
+std::shared_ptr<const GraphicsRecipe> Translucency::shadow_recipe(const PipeInfo& pipe, const ShadowParams& params, uint32_t own_set, std::string& why)
+{
+    std::lock_guard<std::mutex> lock(mx_);
+    const auto key = std::make_pair(pipe.id, params.key());
+    if (const auto found = shadow_recipes_.find(key); found != shadow_recipes_.end()) return found->second;
+    if (!pipe.recipe || !pipe.recipe->complete) { why = "translucent shadow: the game pipeline has no complete recipe"; return nullptr; }
+    const auto& shaders = params.masked ? shadow_masked_ : shadow_plain_;
+    const auto fragment = shaders.find(own_set);
+    if (fragment == shaders.end()) { why = "translucent shadow: no shadow shader"; return nullptr; }
+    auto out = std::make_shared<GraphicsRecipe>(*pipe.recipe);
+    bool vertex = false, replaced = false;
+    for (auto& stage : out->stages) {
+        if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT && stage.shader) {
+            vertex = true;
+            const uint32_t kind = shadow_vertex(stage.shader->code);
+            if (!kind) { why = "translucent shadow: not a shadow vertex shader"; return nullptr; }
+            // The plain shadow vertex shader has no UV output; a masked call reads its mask at the UV.
+            if (params.masked && kind == 4) {
+                auto shader = std::make_shared<ShaderInfo>();
+                shader->id = stage.shader->id; shader->hash = stage.shader->hash; shader->code = stage.shader->code;
+                std::string reason;
+                if (!add_uv_output(shader->code, 1, reason)) { why = "translucent shadow: " + reason; return nullptr; }
+                shader->size = uint32_t(shader->code.size() * 4);
+                stage.shader = std::move(shader);
+            }
+        } else if (stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+            shadow_stage(stage, fragment->second, params);
+            replaced = true;
+        }
+    }
+    if (!vertex) { why = "translucent shadow: the game pipeline has no vertex stage"; return nullptr; }
+    // A depth-only pipeline without a fragment stage is given one.
+    if (!replaced) { RecipeStage stage; shadow_stage(stage, fragment->second, params); out->stages.push_back(std::move(stage)); }
+    if (shadow_recipes_.size() >= 4096) shadow_recipes_.clear();
+    shadow_recipes_.emplace(key, out);
+    return out;
 }
 
 std::shared_ptr<void> Translucency::prepare(uint32_t width, uint32_t height, std::string& why)

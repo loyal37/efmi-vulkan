@@ -936,8 +936,8 @@ int main(int argc, char** argv)
         return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "--shader-hooks")) {
-        // EFMITTL's hook facts (D-113, D-171) of SPIR-V modules: "<file> <lit vertex 0/1> <copy fragment 0/1>
-        // <vertex group 0-3> <pixel groups known 0/1> <colour slot or -1> <narrow first 0/1>".
+        // EFMITTL's hook facts (D-113, D-171, D-185) of SPIR-V modules: "<file> <lit vertex 0/1> <copy fragment 0/1>
+        // <vertex group 0-5> <pixel groups known 0/1> <colour slot or -1> <narrow first 0/1>".
         for (int i = 2; i < argc; ++i) {
             std::ifstream in(argv[i], std::ios::binary | std::ios::ate);
             std::vector<uint32_t> code(size_t(in.tellg()) / 4); in.seekg(0); in.read(reinterpret_cast<char*>(code.data()), code.size() * 4);

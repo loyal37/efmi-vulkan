@@ -45,8 +45,8 @@ private:
     DrawPlanAdapter* adapter_ = nullptr;
     CustomResource* mask_ = nullptr;
     CommandListVariable *lit_seen_ = nullptr, *copy_after_lit_ = nullptr, *alpha_ = nullptr,
-                        *count_ = nullptr, *first_ = nullptr, *channel_ = nullptr, *invert_ = nullptr;
-    Group vertex_[4];       // by VertexHook; the first is not used
+                        *count_ = nullptr, *first_ = nullptr, *channel_ = nullptr, *invert_ = nullptr, *vs_kind_ = nullptr;
+    Group vertex_[6];       // by VertexHook; the first is not used
     Group clip_first_, diffuse_at_[24];
     Group* drawing_ = nullptr; // the vertex group of the draw between before_draw and after_draw
 };

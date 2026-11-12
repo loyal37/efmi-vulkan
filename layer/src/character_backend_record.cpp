@@ -183,6 +183,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     bool gpu_draw = false; // this draw binds the device's merged skeleton (D-117) rather than the CPU master
     // The lists draw without hiding the game's draw (D-179): the Mod's draws are recorded and the game's goes after.
     bool beside = false;
+    uint32_t shadow_draws = 0; // translucent calls drawn in a shadow pass (D-185)
     CharacterCommand* bone_owner = nullptr; // the recording's owner, which carries the device imports (D-127)
     uint64_t borrowed_sources = 0; // components whose import this recording takes from one not yet submitted (D-127)
 
@@ -681,6 +682,37 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     }
             }
         }
+        // EFMITTL's translucent calls in a shadow pass (D-185): drawn in place with the shadow fragment stage, the call's
+        // mask (if any) its one private image. Where the library's shaders are not there, drawn as before: the library's
+        // own rule for a shadow pass it does not recognise, the full shadow.
+        shadowing.assign(list->count, 0);
+        {
+            bool any = false;
+            for (uint32_t i = 0; i < list->count; ++i) any |= package.draws[list->first + i].shadow;
+            std::string why;
+            const uint32_t own_set = static_cast<uint32_t>(pipe->second.layout->sets.size());
+            const bool ready = any && translucency && program && program->efmittl() &&
+                               translucency->shadow_shaders(program->library_folder("efmittl"), own_set, why);
+            if (any && !ready && !why.empty()) note(why);
+            for (uint32_t i = 0; ready && i < list->count; ++i) {
+                const CharacterDraw& d = package.draws[list->first + i];
+                if (!d.shadow) continue;
+                if (d.mask_image != kCharacterNone) {
+                    if (!textures || d.mask_image >= image_ids.size()) return refuse(C_IMAGE, "translucency mask outside the package's images");
+                    if (!image_counts.count(1)) return refuse(C_MATERIAL, "translucent shadow: no arena of one image");
+                    auto& mask_bindings = scratch_image_bindings;
+                    frame_image(image_ids[d.mask_image]);
+                    textures->bind({image_ids[d.mask_image]}, mask_bindings);
+                    if (mask_bindings.empty() || mask_bindings[0].failed)
+                        return refuse(C_IMAGE, "translucency mask: " + (mask_bindings.empty() ? std::string() : mask_bindings[0].reason));
+                    if (!mask_bindings[0].view) { gate_open = false; ++counters[C_IMAGE_PENDING]; return false; }
+                    material_views[i] = {SnapshotImage{mask_bindings[0].view, mask_bindings[0].owner}};
+                } else {
+                    material_views[i].clear();
+                }
+                shadowing[i] = 1; ++shadow_draws;
+            }
+        }
         struct WaitingVariant { uint32_t draw; VertexInputRecipe vertex; };
         std::vector<WaitingVariant> waiting; // Allocates only for a cold variant.
         variants.resize(list->count);
@@ -703,6 +735,29 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             return true;
         };
         for (uint32_t i = 0; i < list->count; ++i) {
+            if (shadowing[i]) {
+                const CharacterDraw& d = package.draws[list->first + i];
+                VertexInputRecipe vertex;
+                std::string reason;
+                if (!package.vertex_input(d, pipe->second.recipe->vertex, vertex, reason))
+                    return refuse(C_VERTEX, "character vertex declaration: " + reason);
+                ShadowParams params;
+                const float alpha = std::isfinite(d.alpha) ? std::min(std::max(d.alpha, 0.0f), 1.0f) : 1.0f;
+                params.alpha = uint32_t(std::lround(alpha * 1023.0f));
+                params.masked = d.mask_image != kCharacterNone; params.channel = std::min<uint32_t>(d.mask_channel, 3); params.invert = d.mask_invert;
+                const uint32_t own_set = static_cast<uint32_t>(pipe->second.layout->sets.size());
+                const auto recipe = translucency->shadow_recipe(pipe->second, params, own_set, reason);
+                if (!recipe) return refuse(C_VARIANT, reason);
+                FragmentPatch patch;
+                patch.replacement_images = params.masked ? 1 : 0;
+                const uint64_t identity_key = shadow_identity(pipe->second.id, params);
+                const auto result = cache->request(identity_key, recipe, pipe->second.layout, vertex, patch);
+                if (result.variant) { variants[i] = result.variant; continue; }
+                if (result.state == VariantState::Queued || result.state == VariantState::Building) {
+                    waiting_captures.push_back({i, UINT32_MAX, vertex, recipe, std::move(patch), identity_key}); continue;
+                }
+                return refuse(C_VARIANT, "translucent shadow variant: " + result.reason);
+            }
             if (capturing[i]) {
                 VertexInputRecipe vertex;
                 std::string reason;
@@ -719,7 +774,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     if (k < 2 && dithered) cache->prepare(capture_identity(pipe->second.id, CaptureKind(k)), recipe, pipe->second.layout, vertex, other_state(patch));
                     if (result.variant) { scratch_captures[k][i] = result.variant; continue; }
                     if (result.state == VariantState::Queued || result.state == VariantState::Building) {
-                        waiting_captures.push_back({i, k, vertex, recipe, std::move(patch)}); continue;
+                        waiting_captures.push_back({i, k, vertex, recipe, std::move(patch), capture_identity(pipe->second.id, CaptureKind(k))}); continue;
                     }
                     return refuse(C_VARIANT, "translucent capture variant: " + result.reason);
                 }
@@ -751,8 +806,8 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         for (const auto& request : waiting_captures) {
             const auto remaining = std::max(std::chrono::milliseconds(0),
                 std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
-            const auto result = cache->await(capture_identity(pipe->second.id, CaptureKind(request.kind)), request.recipe, pipe->second.layout,
-                                             request.vertex, request.patch, remaining);
+            const auto result = cache->await(request.identity, request.recipe, pipe->second.layout, request.vertex, request.patch, remaining);
+            if (result.variant && request.kind == UINT32_MAX) { variants[request.draw] = result.variant; continue; }
             if (result.variant) { scratch_captures[request.kind][request.draw] = result.variant; continue; }
             if (result.state == VariantState::Queued || result.state == VariantState::Building) { pending = true; continue; }
             return refuse(C_VARIANT, "translucent capture variant: " + result.reason);
@@ -861,6 +916,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     }
     lap(S_EMIT);
     ++counters[beside ? C_BESIDE : C_REPLACED];
+    counters[C_SHADOWED] += shadow_draws;
     game_shape().fitting.fetch_add(1, std::memory_order_relaxed);
     if (identity) identity->shown = true;
     if (material_origin) ++counters[material_origin == 1 ? C_DERIVED : C_INHERITED];

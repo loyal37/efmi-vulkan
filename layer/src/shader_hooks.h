@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace efvk {
@@ -23,8 +24,23 @@ bool lit_skin_vertex(const std::vector<uint32_t>& code);
 // The DX11 compiler folded that constant from two the Vulkan build keeps apart, 114.59157 and 0.04; the
 // first is in every outline vertex module of the catalogue and in no other.
 bool outline_vertex(const std::vector<uint32_t>& code);
-// 0 none, 1 lit, 2 lit skin, 3 outline: the values of efmi::frontend::VertexHook.
+// The shadow vertex shaders of skinned characters (D-185, the library's ShadowVSPlain and ShadowVSFading groups; game
+// 1.6.3: DX11 f11c7e1d and bbc56f5c, Vulkan d29292e6 and c8fa3abe on the paired catalogue): a skinned character's inputs
+// (float3, float2, float3, float4, float4, int4 at locations 0, 1, 2, 4, 5, 6), the instance index, a storage buffer and
+// uniform blocks; the plain one outputs the position alone, the fading one the position and the UV (float2 at location 0).
+// 4 plain, 5 fading, 0 neither.
+uint32_t shadow_vertex(const std::vector<uint32_t>& code);
+// 0 none, 1 lit, 2 lit skin, 3 outline, 4 plain shadow, 5 fading shadow: the values of efmi::frontend::VertexHook.
 uint32_t character_vertex_hook(const std::vector<uint32_t>& code);
+
+// The game's character material block and its UV transform (D-185): the fading shadow vertex shader writes its UV output as
+// `uv * t.xy + t.zw` with `t` the vec4 at byte 160 of the uniform block at set 1 binding 0 (Unity's _MainTex_ST; DX11's
+// `mad o0.xy, v1.xyxx, cb3[10].xyxx, cb3[10].zwzz` in the plain one, whose Vulkan build leaves the output out). Facts of
+// this game, as the instance entry's place is (review L-07).
+constexpr uint32_t kMaterialSet = 1, kMaterialBinding = 0, kUvTransformOffset = 160;
+// Adds that UV output at location 0 to a vertex module that has none, from its float2 input at location `uv_location` and
+// the material block's transform. False with the reason, the code unchanged, when the module has not these.
+bool add_uv_output(std::vector<uint32_t>& code, uint32_t uv_location, std::string& why);
 
 // The library's pixel shader groups (D-171, its DiffuseAt and ClipFirst groups). Their patterns read the
 // DX11 listing from its start: the first sample of a 2D texture below t24 at an interpolated input (a `v`

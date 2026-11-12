@@ -112,7 +112,7 @@ bool FilePlanCompiler::compile(const DrawPlan& source,assets::FilePlan& output,s
             if(!item.index_count || ++draws>256 || item.layout.size()>256)return refuse(L"Invalid translucent draw in resource plan");
             own.operation=assets::FileOperation::Translucent;
             own.index_count=item.index_count;own.first_index=item.first_index;own.vertex_offset=item.vertex_offset;
-            own.palette=item.palette;own.alpha=item.alpha;own.mask_channel=item.mask_channel;own.mask_invert=item.mask_invert;
+            own.palette=item.palette;own.alpha=item.alpha;own.mask_channel=item.mask_channel;own.mask_invert=item.mask_invert;own.shadow=item.shadow;
             for(const auto& layout:item.layout)own.layout.push_back(copy_layout(layout));
             if(item.resource){
                 auto found=declarations_.find(item.resource);

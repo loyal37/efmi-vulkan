@@ -106,7 +106,7 @@ enum Counter : uint32_t {
     C_ENTRY, C_BONES, C_IMPORT, C_EXHAUSTED, C_IDENTITIES, C_SET3_RESTORED,
     C_MATERIAL, C_IMAGE, C_IMAGE_PENDING, C_MATERIAL_ITEMS, C_COMPAT_ITEMS, C_DERIVED, C_INHERITED,
     C_IDENTITY_NEW, C_IDENTITY_EXPIRED, C_TEXTURED, C_KEPT, C_OWNED, C_MEMORY, C_GATED, C_GATED_FRAMES, C_SNAPSHOT_COPIES, C_IDENTITY_ADOPTED,
-    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_BESIDE, C_INSTANCED, C_COMPUTED, C_COUNT
+    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_BESIDE, C_INSTANCED, C_COMPUTED, C_SHADOWED, C_COUNT
 };
 const char* const kCounterNames[C_COUNT] = {
     "matched", "replaced", "items", "hidden", "identifying", "incomplete", "pending",
@@ -116,7 +116,7 @@ const char* const kCounterNames[C_COUNT] = {
     "material_derived", "material_inherited", "identities_created", "identities_expired", "textured",
     "kept_original", "owned_streams", "waiting_memory", "gated", "gated_frames", "snapshot_copies", "identities_adopted", "preparing",
     "translucent", "bone_jobs", "bone_ring_busy", "batches_made_at_draw", "held_before_shown", "original_before_shown",
-    "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws", "components_handed"
+    "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws", "components_handed", "translucent_shadows"
 };
 // What the layer assumes of the game's character draws (review L-07, D-183): the instance entry at set 2 binding 0
 // in mapped memory, a pipeline the tracker knows, a primary command buffer in a classic render pass, the game's
@@ -393,7 +393,9 @@ public:
     std::pair<uint32_t, uint32_t> capture_t4_binding{0, 0};   // the draw's fragment module's DX11 t4
     uint32_t capture_sets = 0;                                // the draw pipeline's sets below the private one
     std::shared_ptr<void> capture_layers;                     // the layer set of the draw's pass
-    struct WaitingCapture { uint32_t draw, kind; VertexInputRecipe vertex; std::shared_ptr<const GraphicsRecipe> recipe; FragmentPatch patch; };
+    // A capture's variant (`kind` its CaptureKind) or a translucent shadow's (`kind` UINT32_MAX, D-185) still being built.
+    struct WaitingCapture { uint32_t draw, kind; VertexInputRecipe vertex; std::shared_ptr<const GraphicsRecipe> recipe; FragmentPatch patch; uint64_t identity; };
+    std::vector<uint8_t> shadowing;                           // per list draw: a translucent call drawn in a shadow pass (D-185)
     std::vector<WaitingCapture> waiting_captures;
     std::vector<SnapshotImage> scratch_capture_views;
     std::vector<TranslucentCapture> scratch_pending_captures;

@@ -51,6 +51,7 @@ struct FilePlanItem {
     float alpha=1;
     uint32_t mask_channel=0;
     bool mask_invert=false;
+    bool shadow=false; // PlanItem's (D-185): in a shadow pass, drawn in place by the opacity
 };
 struct FilePlan {
     bool skip_original=false;

@@ -74,6 +74,9 @@ struct CharacterDraw {
     // layer at its end, with this opacity, mask image (an index of the image catalogue, or
     // kCharacterNone), channel and inversion. Not in the file.
     bool translucent = false;
+    // A live plan's translucent draw in a shadow pass (D-185): drawn in place with the same opacity and mask, a texel kept
+    // with a probability equal to the opacity there (the library's shadow shaders). Not in the file.
+    bool shadow = false;
     float alpha = 1;
     uint32_t mask_image = kCharacterNone, mask_channel = 0;
     bool mask_invert = false;

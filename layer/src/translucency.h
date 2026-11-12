@@ -28,6 +28,16 @@ inline uint64_t capture_identity(uint32_t pipeline_id, CaptureKind kind) { retur
 std::shared_ptr<const GraphicsRecipe> capture_recipe(const GraphicsRecipe&, CaptureKind, const std::vector<uint32_t>* opacity,
                                                      std::string& why);
 
+// A translucent call's shadow (D-185): its opacity (in steps of 1/1023), whether a mask gives it per texel, the mask's
+// channel and inversion. As the library's shadow shaders read IniParams[180] (opacity.hlsli).
+struct ShadowParams {
+    uint32_t alpha = 1023, channel = 0;
+    bool masked = false, invert = false;
+    uint32_t key() const { return alpha | uint32_t(masked) << 10 | channel << 11 | uint32_t(invert) << 13; }
+};
+// A variant cache identity of a shadow recipe: the game pipeline's identity in the low 32 bits, the parameters above them.
+inline uint64_t shadow_identity(uint32_t pipeline_id, const ShadowParams& p) { return 1ull << 62 | uint64_t(p.key()) << 32 | pipeline_id; }
+
 class Translucency;
 // One captured call, recorded at the end of its pass with the game's bindings of its draw.
 struct TranslucentCapture {
@@ -71,6 +81,18 @@ public:
     // with the reason. retire() forgets a pipeline's (its variants go with the cache's retirement).
     std::shared_ptr<const GraphicsRecipe> recipe(const PipeInfo&, CaptureKind, uint32_t own_set, std::string& why);
     void retire(uint32_t pipeline_id);
+    // The translucent shadow's fragment stage (D-185): the layer's own main over the library's opacity functions (its
+    // shaders/opacity.hlsli: the mask read bilinearly at the UV, the interleaved gradient noise), so that a texel is kept
+    // with a probability equal to the opacity there, as shadow_a.hlsl does. Compiled once with a mask (the UV at input
+    // location 0, the mask at private binding 2 of `own_set`) and once without (no input, no image); the opacity, channel
+    // and inversion are specialization constants 1, 3 and 4. False with the reason when they do not compile.
+    bool shadow_shaders(const std::filesystem::path& library, uint32_t own_set, std::string& why);
+    // The game's shadow pipeline drawing a translucent call: its vertex stage (the plain shadow one given the UV output when
+    // the call has a mask, add_uv_output), the shadow fragment stage with the call's parameters, everything else the
+    // game's. Once per pipeline and parameters; null with the reason.
+    std::shared_ptr<const GraphicsRecipe> shadow_recipe(const PipeInfo&, const ShadowParams&, uint32_t own_set, std::string& why);
+    uint64_t shadows() const { return shadows_; }
+    void count_shadow() { ++shadows_; }
     // The layer set of a forward pass's size, made on first need and kept per size (a frame may hold
     // passes of two sizes); null with the reason. Its four full-size layers take memory only when a
     // pass first draws into them, and a set no pass used for a few seconds goes (frame()). The views
@@ -116,13 +138,15 @@ private:
     std::vector<uint32_t> alpha_, composite_vs_, composite_ps_;
     std::map<uint32_t, std::vector<uint32_t>> alpha_by_set_; // the alpha shader's images repointed to (own_set, 2/3)
     std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const GraphicsRecipe>> recipes_; // pipeline id, kind
+    std::map<uint32_t, std::vector<uint32_t>> shadow_masked_, shadow_plain_;                  // by own set
+    std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const GraphicsRecipe>> shadow_recipes_; // pipeline id, key
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout composite_layout_ = VK_NULL_HANDLE;
     std::map<std::pair<uint32_t, uint32_t>, VkRenderPass> composite_passes_; // colour format, final layout
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, VkPipeline> composite_pipelines_; // format, layout, dynamic mask
     struct Held;
     std::map<std::pair<uint64_t, uint32_t>, std::shared_ptr<Held>> depth_views_, framebuffers_;
-    std::atomic<uint64_t> captures_{0}, composites_{0};
+    std::atomic<uint64_t> captures_{0}, composites_{0}, shadows_{0};
     std::atomic<bool> listening_{false};
     std::string error_;
 };

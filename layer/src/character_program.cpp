@@ -1369,11 +1369,14 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                     if (stream != kCharacterNone && stream != kCharacterOwned) required |= package.streams[stream].spans;
                 }
                 // A translucent draw (D-113): captured into a layer at the pass end with its opacity and mask.
-                bound.translucent = item.operation == Op::Translucent;
-                bound.alpha = bound.translucent ? item.alpha : 1.0f;
-                bound.mask_image = bound.translucent && item.resource ? image_index(item.resource) : kCharacterNone;
-                bound.mask_channel = bound.translucent ? item.mask_channel : 0;
-                bound.mask_invert = bound.translucent && item.mask_invert;
+                // In a shadow pass (D-185) it is drawn in place by the same opacity and mask.
+                const bool translucent = item.operation == Op::Translucent;
+                bound.translucent = translucent && !item.shadow;
+                bound.shadow = translucent && item.shadow;
+                bound.alpha = translucent ? item.alpha : 1.0f;
+                bound.mask_image = translucent && item.resource ? image_index(item.resource) : kCharacterNone;
+                bound.mask_channel = translucent ? item.mask_channel : 0;
+                bound.mask_invert = translucent && item.mask_invert;
                 draws.push_back(bound);
                 if (material_count == material.size()) material.emplace_back();
                 auto& slots = material[material_count++]; slots.clear();
@@ -1388,8 +1391,8 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 for (const auto& o : bound.offsets) { put(signature, o.binding); put(signature, o.from); put(signature, o.to); }
                 put(signature, uint32_t(pixels.size()));
                 for (const auto& pixel : pixels) { put(signature, pixel.first); put(signature, pixel.second); }
-                put(signature, uint8_t(bound.translucent));
-                if (bound.translucent) { put(signature, bound.alpha); put(signature, bound.mask_image); put(signature, bound.mask_channel); put(signature, uint8_t(bound.mask_invert)); }
+                put(signature, uint8_t(bound.translucent) | uint8_t(bound.shadow) << 1);
+                if (bound.translucent || bound.shadow) { put(signature, bound.alpha); put(signature, bound.mask_image); put(signature, bound.mask_channel); put(signature, uint8_t(bound.mask_invert)); }
             } else throw std::runtime_error("Unresolved runtime native operation");
         }
         auto& id = scratch_id_; id.assign(signature.begin(), signature.end());

@@ -115,8 +115,12 @@ The user's update of EFMITTL (development 0.5.5) changed what the library asks o
 Replays with the installed Mods (sandbox): last rite (vk10), ardelia (vk11) and Zhuangfangyi (vk08)
 captured and composited once per frame, no refused plan, validation clean. Not seen in the game.
 
-Limits: shadows stay full (the Vulkan shadow vertex shaders output no UV the
-library's shadow shaders could read, docs/efmittl-compatibility.md); the
+Shadows (D-185, 2026-11-12): a translucent call in a shadow pass is drawn in place with
+the layer's fragment stage over the library's opacity.hlsli (the plain shadow vertex
+shader given the UV output it lacks), so its shadow is as dense as its opacity, as
+shadow_a.hlsl and shadow_b.hlsl make it; shadow_b's own fade test is not kept.
+
+Limits: the
 composite runs at the end of the capturing pass, which for the forward pass is
 the point the game's copy marks (the next pass is that copy); the layers assume
 the game renders a frame on one queue at a time (BUG-032 saw it change queues

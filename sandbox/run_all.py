@@ -119,7 +119,7 @@ STEPS = [
     # step used Yvonne until the user's update of 2026-11-10 left out Yvonne's translucent call (BUG-088).
     ("captured frame with a library call", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
                                             r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk11", "--frames", "120", "--check", "--no-refusal",
-                                            "--copy-passes", "--expect-translucency"]),
+                                            "--copy-passes", "--expect-translucency", "--expect-shadows"]),
     # Yvonne calls the library's texture slots only (SetTextures, D-170, D-171): every plan runs.
     ("captured frame with a library's texture slots", [os.path.join(ROOT, "scripts", "replay_capture.py"), "--bundle",
                                                        r"F:\efmi vulkan\captures\catalogue-20261019\vulkan\vk01", "--frames", "120", "--check",

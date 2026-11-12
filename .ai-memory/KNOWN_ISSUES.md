@@ -10,6 +10,12 @@
 - A host-held gate would have made the scene exact, and is not valid Vulkan: setting an event a pending command buffer waits for (VUID-vkSetEvent-event-09543), and a binary semaphore wait that depends on an unsignalled timeline wait (VUID-vkQueueSubmit-pWaitSemaphores-03238, VUID-vkQueuePresentKHR-pWaitSemaphores-03268). Hence the frame that is slow in earnest.
 - Not checked in the game: the fix is in the layer's DLL, which is replaced only while the game is closed.
 
+## BUG-094: EFMITTL's translucent parts cast their full shadow on Vulkan (the user in the game 2026-11-12, 2.1.7; FIXED in the work tree, D-185, sandbox only)
+
+- Seen: Zhuangfangyi Summer Collection 1.1's see-through shirt and sarong drawn see-through, but the skin under them darker and patchy, unlike DX11 (the user's two screenshots, Vulkan and DX11).
+- Cause: the library's shadow vertex groups were never recognised on Vulkan, so its CommandListShadow took its branch for an unrecognised pass and drew the full shadow (docs/efmittl-transparency.md listed it as a limit).
+- Fixed by D-185 (sandbox): the shadow is drawn by the opacity as the library's shadow shaders do. To see in the game.
+
 ## BUG-093: A Mod whose LOD components share bone spans, or with a LOD 0 remap, is left out whole (the user's Yvonne, 2026-11-12; FIXED in the work tree 2026-11-12, sandbox only, not deployed)
 
 - Seen offline 2026-11-12 08:30 on the installed folder, on the 2.1.4 binaries and on the work tree's alike: `Yvonne Ensnared Heart 1.8\yvonne.ini` (changed 2026-11-12 00:11; the folder holds `backup-20261112-before-shared-lod-spans`, and perlica's a `backup-20261111-before-shared-lod-spans` with tools named share_lod_spans.py, patch_ini.py, validate_shared.py) is not loaded: "Skeleton components overlap". Perlica, changed the same way the evening before, loads. Not seen in the game: the 2.1.3 session was before the change.
@@ -657,6 +663,8 @@ Game, 2026-10-13 with 0.9.9: the user finds the view from below right; no draw i
 Game, 2026-10-13 with 0.9.8. The dithered fade (camera close to the character; dash) switches every pass of every component to another fragment shader. The material package knows shaders by their exact bytes, and the backend refused a draw whose shader it did not know, keeping the game's mesh; components the mod hides stayed hidden. On screen: the original model mixed with the mod's, as a flicker in the dash and steadily when looking up from below. 0.9.9 takes the rules from the profiled sibling (docs/character-materials.md) and otherwise draws the mod's mesh with the application's images. Verified on the captured game data and in the sandbox; game result pending.
 
 ## LIMIT-027: After-images of the dash keep the game's mesh
+
+- Cause found 2026-11-12 (2.1.7 in the game, the user: Zhuangfangyi's textures turn into the game's while she dashes): the dash effect pipelines' vertex shaders (5370913c, 863d7ba9, 5eb8bfbc on game 1.6.3; blended colour passes with two targets) have no bone storage buffer: they read the bones and their offsets from a uniform block of 4096 vec4 at set 3 binding 0 (the first vec4 the offsets, the bones at offset + 4 + 3 * bone). The original Core supports this source (MergedSkeleton.ini: `DetectBoneDataSource` cb3/cb4, "Sometimes used for FX shaders"; the bones imported by BoneDataImporter_ConstantBuffer, and a copy of [the four config rows][the merged bones] bound in the cb's place). The layer's vertex rewrite requires a storage buffer (`spirv_required_buffer_missing`). Their SPIR-V and pipelines: captures/dash-2.1.7-20261112.
 
 Seen in captures/flicker-0.9.8-20261013/ (frame 150562 and others): character draws on four-set pipelines whose vertex shaders (8d5133a1, 2cf51393) have no storage buffer; the variant preflight says `spirv_required_buffer_missing` and the draw is refused under `refused_variant` (954 in that session). Where these shaders take the pose from is not known. The after-image therefore has the shape of the original model.
 
