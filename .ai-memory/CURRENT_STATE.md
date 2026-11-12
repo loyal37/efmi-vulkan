@@ -6,6 +6,12 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## Offline round of 2026-11-12 afternoon (the user: build, then everything that needs no game; sandbox only, not in dist)
+
+- D-178 (BUG-091): every package catalogues every image of the folder generation; a section may bind another Mod's texture. Reproduced first with BUG-091's exact message (`other_folder_image`, 2 of 3), 3 of 3 after.
+- BUG-089: reproduced with a new status counter (`batches_made`: 33 batches in 33 frames with RabbitFX's gate set) and fixed (the twins' bind keeps the packages' owners).
+- Verified after both (work tree, sandbox): the whole build; the original frontend host, the installed folder's syntax and HLSL, the texture first-use bench, the original INI runtime 514, quick, the installed Mods' offline plans (three steps, every section in every state), broken files, containment, the eleven capture replays, character replacement 377 and 115, live INI rendering 163, Vulkan validation 76. A first run of the bench failed once on the time of one map (the machine busy; the layer's loader is not touched) and passed on the next run.
+
 ## 2.1.6: 2.1.5 and D-177 (2026-11-12)
 
 - The user, 2026-11-12: build it, then finish everything that needs no game. 2.1.6 is 2.1.5 with D-177 (below); the version commit changes EFVK_VERSION only, on a tree whose touched steps passed (below).

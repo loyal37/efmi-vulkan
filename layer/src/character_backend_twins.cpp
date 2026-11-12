@@ -79,7 +79,8 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
             return pipeline;
         }
     }
-    const auto held = owner_for(cb->owners, &b.twins, [] { return std::make_shared<TwinOwner>(); });
+    // BUG-089: the generic owner_for dropped every package's snapshot batch this recording had not used yet.
+    const auto held = character_owner_for(cb->owners, &b.twins, [] { return std::make_shared<TwinOwner>(); });
     if (!held) return pipeline;
     auto& owner = static_cast<TwinOwner&>(*held);
     owner.used = true;

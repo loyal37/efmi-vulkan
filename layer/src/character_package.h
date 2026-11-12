@@ -13,6 +13,8 @@ constexpr uint32_t kCharacterOvershoot = 64;
 // DDS images one package may declare: they load only when a draw binds them, so this is a sanity
 // budget, not memory (a Mod with a watch GUI declares 83; 64 until 1.8.1).
 constexpr uint32_t kCharacterImages = 1024;
+// A live generation's catalogue holds every image the Mods folder declares (D-178).
+constexpr uint32_t kCharacterRuntimeImages = 65536;
 // What one character's contract holds (D-141). The original Core sizes its pools by the Mod's counts and has
 // no limit of its own; these are the widths of the layer's indices and masks: a component a bit of a 64-bit
 // mask, a bone a 16-bit index after the blend-index edit, sections and mesh files far beyond any export.

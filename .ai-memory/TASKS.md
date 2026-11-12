@@ -19,7 +19,7 @@
 - Next, each test first:
   - Done 2026-11-12 (D-175, sandbox): BUG-093, the user's Yvonne with LOD components that share bones and a LOD 0 remap. To see in the game once a build with it is in dist (2.1.4 there leaves the Mod out, with a notice): Yvonne replaced at both LODs, no `incomplete` or `bones_unavailable` rising on its package.
   - Done 2026-11-12 (D-176, sandbox): P2-2, a section without a component that draws a mesh of its own, under the game's vertex stage and bones (`record_own_mesh`). No installed Mod has such a section today; to see in the game it needs one (a part's mesh replaced without the Core). (refused today: "INI hide override unexpectedly emits geometry"). The game's pipeline with its vertex stage kept (as the texture-only draw, `keep_vertex`), the Mod's buffers by `CharacterPackage::vertex_input`, no merged skeleton: the blend stream's bones are the game's own and are not validated against a merged one. Check: the scene's unmatched draw replaced by a Mod's triangle elsewhere (the scene needs a switch for what it expects at that place).
-  - A texture of another package's folder bound in a draw (the catalogue is per package; BUG-091's message may be this).
+  - Done 2026-11-12 (D-178, sandbox): a texture of another package's folder bound in a draw (BUG-091). Left: a mesh file of another package's folder.
   - Done 2026-11-12 (D-177, sandbox, not in dist): P2-3's main part, the character contract from what the Mod's lists hand to the Core instead of the exporter's names. Left of it: a section the static reading finds nothing in is not read again at its first draw (a component chosen by a value computed at draw time).
   - P2-4: instanced character draws (R-05).
 - To see in the game (nothing of it has run there): last rite's hair with the Mod's diffuse texture; no new notice for any installed Mod; the panels' `$active` marks as before.
@@ -61,7 +61,7 @@
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
   - P3-4: hashed textures in the state check, so texture-hash sections run offline (the exclusions are listed in docs/ini-semantics.md).
   - P4-3 and P4-4.
-  - BUG-089 (read while splitting, not reproduced): with RabbitFX's anti-dither on, a twin's bind drops the character packages' owners a recording has not used yet. First a check that shows it (the status with the gate set against unset: `batches_made_at_draw`, the arenas a worker makes per recording), then the fix from what the original does.
+  - Done 2026-11-12 (sandbox): BUG-089, reproduced (one snapshot batch per recording with the gate set) and fixed. To see in the game: with RabbitFX's `\` key on, a package's `batches_made` stays a handful.
   - L-07: a notice when the game's facts (shader contract, slot table) are not known for the running game version.
 - Needs game sessions and the user's choice: Phase 1's game session (its offline part is done, above), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).
 - To check in the game when the user next plays on Vulkan: the notices at the first load, F10 without a generation, nothing else changed for the installed Mods (every section of 19 Mods plans in every state offline).

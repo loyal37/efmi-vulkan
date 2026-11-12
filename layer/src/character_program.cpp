@@ -3,6 +3,7 @@
 #include "../../frontend/assets/png.h"
 #include "json.h"
 #include <chrono>
+#include <mutex>
 #include <fstream>
 #include <optional>
 #include <algorithm>
@@ -97,7 +98,35 @@ std::vector<uint8_t> read(const std::filesystem::path& path, uint64_t limit)
 // Whether the original's loader makes a texture of this file (CustomResource::LoadFromFile, D-139): a .dds
 // by its header (its levels inside the file), any other file by the system's WIC decoder (its frame 0,
 // without decoding the pixels); within the size the layer's loader reads.
+bool image_loads_now(const std::filesystem::path& path, std::string& why, uint32_t loader_flags, VkFormat& format);
+// The answer for one file as it is on disk, kept for the process (D-178): every package of a folder generation
+// catalogues every image of it, and the header is read once.
 bool image_loads(const std::filesystem::path& path, std::string& why, uint32_t loader_flags, VkFormat& format)
+{
+    struct Answer { bool loads = false; std::string why; VkFormat format = VK_FORMAT_UNDEFINED; };
+    static std::mutex mx;
+    static std::map<std::tuple<std::wstring, uint32_t, uint64_t, int64_t>, Answer> answers;
+    std::error_code error;
+    const uint64_t size = std::filesystem::file_size(path, error);
+    const int64_t stamp = error ? 0 : int64_t(std::filesystem::last_write_time(path, error).time_since_epoch().count());
+    std::wstring name = path.lexically_normal().wstring();
+    std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+    const auto key = std::make_tuple(std::move(name), loader_flags, error ? 0 : size, stamp);
+    {
+        std::lock_guard<std::mutex> lock(mx);
+        const auto found = answers.find(key);
+        if (found != answers.end()) { why = found->second.why; format = found->second.format; return found->second.loads; }
+    }
+    Answer answer;
+    answer.loads = image_loads_now(path, answer.why, loader_flags, answer.format);
+    why = answer.why; format = answer.format;
+    const bool loads = answer.loads;
+    std::lock_guard<std::mutex> lock(mx);
+    if (answers.size() >= 65536) answers.clear();
+    answers.emplace(key, std::move(answer));
+    return loads;
+}
+bool image_loads_now(const std::filesystem::path& path, std::string& why, uint32_t loader_flags, VkFormat& format)
 {
     try {
         std::ifstream in(path, std::ios::binary | std::ios::ate);
@@ -348,7 +377,11 @@ void CharacterProgram::catalogue(CharacterPackage& package, const std::map<std::
             image_checked(path, flags);
         }
         for (const auto& file : runtime_->resources()) {
-            if (!owns(file->path)) continue; // another Mod's of a folder generation
+            // A mesh file of another Mod of a folder generation is that package's. An image file is every
+            // package's (D-178): the original keeps one registry, and any section a draw matches may bind any
+            // declared texture (BUG-091: a section of another Mod's INI for the same draw). The residency holds
+            // an image once by its file and loads it at its first bind, so a catalogue entry costs nothing more.
+            if (file->usage && !owns(file->path)) continue;
             if (file->usage) {
                 const auto stream_name = stream_key(file->path, file->usage == VK_BUFFER_USAGE_INDEX_BUFFER_BIT, file->stride);
                 const auto found = streams_.find(stream_name);
@@ -367,7 +400,7 @@ void CharacterProgram::catalogue(CharacterPackage& package, const std::map<std::
                 continue; // The original's load of it fails and it binds nothing (image_index, BUG-076).
             } else if (!images_.count(image_key(file->path, file->loader_flags)) && !unloadable_.count(key(file->path))) {
                 if (!image_checked(file->path, file->loader_flags)) continue;
-                if (package.images.size() >= kCharacterImages) throw std::runtime_error("Runtime image catalogue exceeds budget");
+                if (package.images.size() >= kCharacterRuntimeImages) throw std::runtime_error("Runtime image catalogue exceeds budget");
                 package.image_flags.resize(package.images.size(), 0u);
                 images_.emplace(image_key(file->path, file->loader_flags), uint32_t(package.images.size()));
                 package.images.push_back(file->path.u8string()); package.image_flags.push_back(file->loader_flags);

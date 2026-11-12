@@ -180,6 +180,7 @@ def main():
     shared_spans(checks, validation)
     own_mesh(checks, validation)
     other_names(checks, validation)
+    other_folder_image(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -482,6 +483,54 @@ def shared_spans(checks, validation):
                      (counters.get("bone_jobs", 0) > 0) == (bones == "device"),
                      label + ": draws replaced, none left for bones not imported, the imports where the setting puts them " +
                      str({k: counters.get(k) for k in ("replaced", "incomplete", "bones_unavailable", "bone_jobs")}))
+
+
+def other_folder_image(checks, validation):
+    """D-178 (BUG-091): a section binds a texture whose file lies in another Mod's folder. The original keeps
+    one registry: any section a draw matches may bind any declared texture, wherever its file is. The scene's
+    Mods folder holds the fixture and `props\\prop.ini`, whose section gives the scene's unmatched draw the
+    fixture's red image (`filename = ..\\fixture\\red.dds`) without hiding it: the application's draw again
+    with that image (D-083). The layer catalogued a package's images by its folder and refused: "INI image not in
+    prepared resource catalogue"."""
+    root = Path(test_dir("runtime-image-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    assert (folder / "red.dds").is_file()
+    (mods / "props").mkdir()
+    (mods / "props" / "prop.ini").write_text(
+        "namespace = runtime_prop\n[TextureOverrideProp]\nhash = %08x\nmatch_index_count = 3\nmatch_first_index = 30\n"
+        "ps-t1 = ResourceBorrowed\n[ResourceBorrowed]\nfilename = ..\\fixture\\red.dds\n" % crc32c(struct.pack("<3H", 0, 1, 2)), encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_UNMATCHED_SHADE="5", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "a texture of another Mod's folder"
+    checks.equal(result.returncode, 0, label + ": the application's draw shows that texture, the character as before")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    packages = status.get("packages", [])
+    if len(packages) == 2:
+        prop = packages[1]
+        counters = prop.get("counters", {})
+        checks.check(counters.get("textured", 0) > 0 and not prop.get("last_reason"),
+                     label + ": the package without a skeleton drew the application's draw with the borrowed image, nothing refused " +
+                     str((counters.get("textured"), prop.get("last_reason"))))
+    else:
+        checks.check(False, label + ": two packages " + str(len(packages)))
 
 
 def other_names(checks, validation):
@@ -832,10 +881,24 @@ def directory_generation(checks, validation):
     if len(packages) == 5:
         own, other, zeta, colon_package = packages[:4]
         checks.check(colon_package.get("lazy") and not colon_package.get("activated"), label + ": the Mod named in another script is a package of the folder, never matched")
-        checks.equal((other["lazy"], other["activated"], other.get("images_ready", 0), other["counters"].get("replaced", 0)),
-                     (True, False, 0, 0), label + ": the other character's Mod never matched and never went to the GPU")
-        checks.check(own["activated"] and own["counters"].get("replaced", 0) > 0 and own["images_ready"] == 2,
+        # Its images_ready counts the folder's images another package loaded: every package catalogues every image
+        # of the folder, and the residency holds one image per file (D-178).
+        checks.equal((other["lazy"], other["activated"], other.get("package_bytes", 0) > 0, other["counters"].get("replaced", 0)),
+                     (True, False, True, 0), label + ": the other character's Mod never matched and never went to the GPU")
+        checks.check(own["activated"] and own["counters"].get("replaced", 0) > 0 and own["images_ready"] >= 2,
                      label + ": the fixture's Mod went to the GPU on its first match and replaced draws")
+        # BUG-089: with RabbitFX's gate set the application's dithered pipeline is bound as its twin at the start of
+        # every recording, before the character's first draw. The twin's owner took the generic owner_for, which
+        # dropped the character's snapshot batch from the command buffer each time, and the worker made another:
+        # about one batch per recording. A recording keeps its batch from one reset to the next, as D3D11 keeps
+        # what a pending command list uses whatever else is bound.
+        # Read before the scene's reloads, when one generation has drawn some thirty frames with the gate set.
+        active_path = folder / "character-active.json"
+        active = json.loads(active_path.read_text(encoding="utf-8"))["result"]["replacement"] if active_path.is_file() else {}
+        first = (active.get("packages") or [{}])[0]
+        checks.check(first.get("batches_made", 10 ** 6) <= 6 and first.get("frame", 0) >= 20,
+                     label + ": the character's snapshot batches survive the twin's bind in every recording (BUG-089): %s made in %s frames" %
+                     (first.get("batches_made"), first.get("frame")))
         # A broken line, a texture file that does not load, the file repaired, another branch (D-139).
         checks.equal((own["ini_generation"], own["ini_reloads"]), (4, 4), label + ": its reloads as with a package")
         variables = own.get("ini", {}).get("variables", {})

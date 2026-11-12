@@ -262,6 +262,27 @@ struct CharacterCommand : CommandOwner {
         return true;
     }
 };
+// This code's owner in a recording (a package's snapshot batch, the twins a recording bound), as owner_for,
+// except that another owner of this code stays while its backend keeps using the recording: every reset clears
+// `used`, so dropping the others' unused owners at the first draw destroyed their arenas and had their workers
+// make new ones for every recording (D-099, arcane 142 us per draw in the 1.6.8 session; BUG-089, the twins'
+// bind before the first draw of a recording). A package's owner goes after kIdleRecordings resets without use
+// (its generation was exchanged); any other stays, as D3D11 keeps what a pending command list uses whatever
+// else is bound.
+constexpr uint32_t kIdleRecordings = 8;
+template <class Make>
+std::shared_ptr<CommandOwner> character_owner_for(std::vector<std::shared_ptr<CommandOwner>>& owners, const void* backend, Make make)
+{
+    std::shared_ptr<CommandOwner> mine;
+    for (auto it = owners.begin(); it != owners.end();) {
+        if (*it && (*it)->backend == backend) { mine = *it; ++it; continue; }
+        const auto* other = *it ? dynamic_cast<const CharacterCommand*>(it->get()) : nullptr;
+        if (!*it || (other && !other->used && other->idle_recordings >= kIdleRecordings)) it = owners.erase(it);
+        else ++it;
+    }
+    if (!mine && (mine = make())) owners.push_back(mine);
+    return mine;
+}
 } // namespace character_internal
 
 class CharacterGeneration {
@@ -299,6 +320,7 @@ public:
     std::shared_ptr<BoneRemaps> bone_remaps;           // this package's LOD remap tables on the device
     bool bone_remaps_failed = false, bone_ring_failed = false;
     std::vector<TextureResidency::ImageId> image_ids;  // per package image
+    std::atomic<uint64_t> batches_made{0};             // snapshot batches made, by the worker or at a draw (BUG-089)
     bool images_forgotten = false;                     // the declarations given back at stop
     std::vector<std::vector<StaticMaterial>> materials; // profile x package draw, prepared at setup
     std::unordered_map<uint32_t, uint32_t> material_profiles; // pipeline generation -> exact profile

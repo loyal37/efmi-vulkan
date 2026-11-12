@@ -98,6 +98,9 @@ public:
     std::vector<std::string> runtime_gaps_since(uint32_t seen) const { return runtime_ ? runtime_->gaps_since(seen) : std::vector<std::string>{}; }
     // A package image whose file the original's loader makes nothing of (D-139): never declared, bound as nothing.
     bool image_unloadable(const std::string& path) const;
+    // Whether a file lies under the Mod's own folders (its folder, the Core's, the libraries it calls); every file
+    // in a generation of one Mod. A folder generation's catalogue holds every image of the folder (D-178).
+    bool owned(const std::string& utf8_path) const { return owns(std::filesystem::u8path(utf8_path)); }
     // The folder of the library of this namespace the generation loaded (D-112), empty without one.
     std::filesystem::path library_folder(const std::string& name) const
     {

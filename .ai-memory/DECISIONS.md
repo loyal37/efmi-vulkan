@@ -1077,6 +1077,14 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-178: Every package catalogues every image of the folder generation (BUG-091)
+
+- Date: 2026-11-12. The user: finish everything that needs no game.
+- The original keeps one registry of resources: any section a draw matches may bind any declared texture, wherever its file lies (a section of another Mod's INI for the same draw, a shared texture in another folder).
+- The layer before catalogued a package's images by its folders (`CharacterProgram::owns`): a plan that bound another folder's texture was refused, "INI image not in prepared resource catalogue" (BUG-091's notice, with two Mods of one character in the folder).
+- Decision: a package's image catalogue holds every image the folder generation declares; its mesh files stay its own (a package's mesh is one upload). The residency holds an image once by its file and loads it at its first bind, so an entry costs a declaration; whether a file loads is read once per file for the process (`image_loads`). The runtime catalogue's budget is 65536 (`kCharacterRuntimeImages`). The offline planner reports a Mod's own images (`CharacterProgram::owned`) for the comparison of a Mod alone and in the folder, and the whole catalogue as `catalogue_images`.
+- Left: a mesh file of another package's folder bound in a draw is still refused (one upload per package).
+
 ## D-177: A character is what its lists hand to the Core, not what the exporter names it (review R-04, P2-3)
 
 - Date: 2026-11-12. The user, on the open items of Phase 2: the point is that the skeleton contract was still read by the exporter's names at load, so a Mod written otherwise is left out.

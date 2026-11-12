@@ -139,6 +139,7 @@ void generation_status(CharacterGeneration& backend, JsonWriter& w)
     w.kn("unreadable", unreadable);
     w.kn("exhausted", backend.counters[C_EXHAUSTED].load());
     w.kn("sealed_batches", backend.batches->load());
+    w.kn("batches_made", backend.batches_made.load());
     w.key("counters"); w.begin_object();
     for (uint32_t c = 0; c < C_COUNT; ++c) w.kn(kCounterNames[c], backend.counters[c].load());
     w.end_object();

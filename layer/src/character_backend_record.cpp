@@ -4,28 +4,6 @@
 #include "character_backend_internal.h"
 
 namespace efvk {
-namespace {
-// This backend's owner in a recording, as owner_for, except that another backend's owner stays while
-// that backend keeps using the recording: every reset clears `used`, so dropping the others' unused
-// owners at the first draw destroyed their arenas and had their workers make new ones for every
-// recording (D-099, arcane 142 us per draw in the 1.6.8 session). One goes after kIdleRecordings
-// resets without use (its generation was exchanged), or when it is not this code's.
-constexpr uint32_t kIdleRecordings = 8;
-template <class Make>
-std::shared_ptr<CommandOwner> character_owner_for(std::vector<std::shared_ptr<CommandOwner>>& owners, const void* backend, Make make)
-{
-    std::shared_ptr<CommandOwner> mine;
-    for (auto it = owners.begin(); it != owners.end();) {
-        if (*it && (*it)->backend == backend) { mine = *it; ++it; continue; }
-        const auto* other = *it ? dynamic_cast<const CharacterCommand*>(it->get()) : nullptr;
-        if (!*it || (other && !other->used && other->idle_recordings >= kIdleRecordings)) it = owners.erase(it);
-        else ++it;
-    }
-    if (!mine && (mine = make())) owners.push_back(mine);
-    return mine;
-}
-} // namespace
-
 // One captured call (D-113): its opacity set and parameter layer, the game's sets and dynamic
 // state of the draw (`own`: the pipeline's sets below the private one), queued after the list.
 // Caller holds the mod lock.

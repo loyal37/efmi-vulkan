@@ -341,6 +341,7 @@ void CharacterGeneration::prepare()
 std::shared_ptr<CharacterCommand> CharacterGeneration::make_batch(std::string& why)
 {
     auto batch = std::make_shared<CharacterCommand>();
+    ++batches_made;
     batch->generation = generation_key; batch->backend = generation_key.get(); batch->batches = batches;
     { std::lock_guard<std::mutex> lock(pool_mx); batch->keep = mesh; }
     uint64_t total_bytes = 0;

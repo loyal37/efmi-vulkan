@@ -14,6 +14,10 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     // the character matches and draws a triangle of its own, moved by (0,.85), under the application's
     // vertex stage: on that draw's own bone it stands at (.6,.75) with the application's shading.
     const bool own_mesh=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_OWN_MESH",value,sizeof(value)) && value[0]=='1';}();
+    // D-178: with EFMI_VK_TEST_UNMATCHED_SHADE=N a section of the scene's Mods folder gives the draw no section of
+    // the character matches a texture of its own (the application's draw again with it, D-083): that draw shows
+    // shade N once its package is on the device.
+    const int unmatched_shade=[]{char value[8]={};return GetEnvironmentVariableA("EFMI_VK_TEST_UNMATCHED_SHADE",value,sizeof(value)) ? atoi(value) : 1;}();
     if(material){
         auto fs=std::make_shared<ShaderInfo>();fs->id=2;
         fs->code=variant_fixture::shader(false,true,6,dither?variant_fixture::Kill::Dither:variant_fixture::Kill::None);
@@ -260,7 +264,8 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     };
     // The draw no section of the character matches: the application's triangle at (.6,-.1), or, in D-176's
     // scene, the Mod's own in its place at (.6,.75) once its package is on the device (`live`).
-    auto unmatched=[&](bool live=true){return own_mesh ? shade_at(.6f,-.1f)==0 && shade_at(.6f,.75f)==(live?1:0) : shade_at(.6f,-.1f)==1;};
+    auto unmatched=[&](bool live=true){return own_mesh ? shade_at(.6f,-.1f)==0 && shade_at(.6f,.75f)==(live?1:0) :
+                                                  shade_at(.6f,-.1f)==(live || unmatched_shade==1 ? unmatched_shade : 0);};
     // What the game draws by itself: every component at bone zero of its own palette.
     auto original=[&]{return shade_at(-.6f,-.6f)==1 && shade_at(0,-.6f)==2 && shade_at(.6f,-.6f)==1 && shade_at(.6f,-.1f)==1 && shade_at(0,.6f)==1 &&
                              shade_at(-.6f,.3f)==0 && shade_at(0,0)==0 && shade_at(.6f,.3f)==0;};
@@ -314,6 +319,19 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     }
     row(A_CUR+3,-.6f,-.6f);
     check(follows,"20 pose changes of one component move the other component's geometry in the same frame");
+    if(unmatched_shade!=1){
+        // The texture follows the draw: the application's mesh, moved by its own bone, with the Mod's image.
+        bool moves=true;
+        for(uint32_t i=0;i<6;++i){
+            const float ux=i%2?.5f:.6f;
+            row(U_CUR+3,ux,-.1f);frame(false);
+            moves&=shade_at(ux,-.1f)==unmatched_shade && shade_at(-.6f,.3f)==a_shade && shade_at(0,0)==b_shade;
+        }
+        row(U_CUR+3,.6f,-.1f);frame(false);
+        check(moves && replaced(-.6f),"the application's draw again with a Mod's image, where no character section matches");
+        self_probe("{\"cmd\":\"status\"}","character-final.json");
+        return;
+    }
     if(own_mesh){
         // The Mod's own triangle follows the bone of the draw it stands for, which is the application's.
         bool moves=true;

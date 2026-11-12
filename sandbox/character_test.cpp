@@ -720,13 +720,18 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
 static void write_plans(JsonWriter& w, CharacterProgram& program, CharacterProgram& presenter, CharacterPackage& package,
                         const std::vector<efmi::gpu::SourceRegister>& vertex, uint64_t& frame)
 {
-    w.kn("streams", package.streams.size()); w.kn("images", package.images.size());
+    // The images under the Mod's own folders: a folder generation catalogues every image of the folder for every
+    // package (D-178), and must give each Mod its own as its own generation does.
+    size_t own_images = 0;
+    for (const auto& image : package.images) own_images += program.owned(image);
+    w.kn("streams", package.streams.size()); w.kn("images", own_images); w.kn("catalogue_images", package.images.size());
     w.kn("components", package.components.size()); w.kn("bones", package.bones);
     w.kn("left_to_game", program.left_to_game());
     w.kn("identify_components", program.identify_components());
     // The streams and images by file name, which a folder generation must give each Mod as its own does.
     w.key("image_files"); w.begin_array();
-    for (const auto& image : package.images) w.str(std::filesystem::u8path(image).filename().u8string());
+    for (const auto& image : package.images)
+        if (program.owned(image)) w.str(std::filesystem::u8path(image).filename().u8string());
     w.end_array();
     w.key("sections"); w.begin_array();
     uint32_t current_lod = 0; // as the backend: a section that assigns the LOD changes it for those that do not
