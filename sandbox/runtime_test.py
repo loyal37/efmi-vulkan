@@ -183,6 +183,7 @@ def main():
     other_folder_image(checks, validation)
     instanced_draw(checks, validation)
     computed_component(checks, validation)
+    unknown_game(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -556,6 +557,42 @@ def computed_component(checks, validation):
     counters = status.get("counters", {})
     checks.check(counters.get("components_handed", 0) > 0 and counters.get("replaced", 0) > 0,
                  label + ": taken from what the lists handed the Core " + str({k: counters.get(k) for k in ("components_handed", "replaced", "refused_state")}))
+
+
+def unknown_game(checks, validation):
+    """D-183 (review L-07): a game whose character draws are not the shape the layer knows (here the instance entries
+    lie in memory the application unmapped, which the layer cannot read). The DX11 Core probes the facts of the game
+    it runs in and replaces nothing where none fits. The layer refused draw by draw with a reason per Mod and never
+    said that the game itself is another; now it says so once."""
+    root = Path(test_dir("runtime-unknown-game-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_UNKNOWN_GAME="1", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=180)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "a game whose character draws the layer does not know"
+    checks.equal(result.returncode, 0, label + ": every frame the game's")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    shape = status.get("game_shape", {})
+    log = (root / "layer.log").read_text(encoding="utf-8", errors="replace") if (root / "layer.log").is_file() else ""
+    checks.check(shape.get("told") and not shape.get("fitting") and "this game version is probably newer than the layer" in log,
+                 label + ": said once, with the first reason " + str(shape))
 
 
 def other_folder_image(checks, validation):

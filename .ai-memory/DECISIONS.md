@@ -1077,6 +1077,13 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-183: The layer says once when the game's character draws are not what it knows (review L-07, P0-9's second part)
+
+- Date: 2026-11-12. The DX11 Core finds the facts of the game it runs in by probing (`if vs-cb2->Size / 16 == 4096 ... elif vs-cb1`) and replaces nothing where none fits; 3DMigoto itself says nothing then. The layer reads them from fixed places: the instance entry at set 2 binding 0 in mapped memory, a pipeline the tracker knows, a primary command buffer in a classic render pass, the game's vertex and index bindings tracked, a vertex input and a vertex shader its variants can take.
+- Before: a game update that moved one of them made every Mod keep the game's look, with a refusal per draw and Mod and no statement that the game itself changed.
+- Decision (`layer/src/character_backend_record.cpp`, `character_backend_internal.h`, `character_backend_status.cpp`): the refusals for those facts go through `refuse_shape`, which counts them for the process (`GameShape`); a character draw that is replaced or drawn beside counts as fitting. When 240 such refusals came and no character draw of any Mod fitted, one notice (key `game-shape`): the game's character draws are not what the layer knows (the first such reason), the game version is probably newer than the layer, every Mod keeps the game's look. The replacement status has `game_shape` (fitting, unfit, told, first_unfit). Nothing else changes: the draws stay the game's as before.
+- Check failing first: the live scene `unknown_game` (`EFMI_VK_TEST_UNKNOWN_GAME`: the application unmaps the instance entries' memory before its character draws): 2 of 3 on the build before (every frame the game's, nothing said), 3 of 3 now.
+
 ## D-182: A component computed at the draw is the one the lists handed the Core (review P2-3, last part)
 
 - Date: 2026-11-12. The original Core reads `$\EFMIv1\component_id` and `$\EFMIv1\lod_level` when the Mod's list calls it (Component_ReadConfig, DrawInstances): whatever the lists computed by then is the draw's component. Nothing is read ahead of the draw.

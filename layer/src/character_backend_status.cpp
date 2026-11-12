@@ -21,6 +21,15 @@ void character_status(CharacterBackend& b, JsonWriter& w)
     }
     if (primary) controller_status(*primary, w);
     else w.kv("package_reason", b.reason);
+    {
+        // What the layer assumes of the game's character draws (D-183): draws that met it, refusals for it.
+        GameShape& shape = game_shape();
+        w.key("game_shape"); w.begin_object();
+        w.kn("fitting", shape.fitting.load()); w.kn("unfit", shape.unfit.load()); w.kb("told", shape.told.load());
+        std::lock_guard<std::mutex> lock(shape.mx);
+        w.kv("first_unfit", shape.first);
+        w.end_object();
+    }
     w.key("record"); w.begin_object();
     w.kn("calls", b.record_calls.load()); w.kn("microseconds", b.record_us.load());
     w.kn("frame_calls", b.frame_calls.load()); w.kn("frame_microseconds", b.frame_us.load());

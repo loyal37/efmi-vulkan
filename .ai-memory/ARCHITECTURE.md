@@ -165,8 +165,8 @@ off the presenting thread. The variant cache lets go of the finished variants le
 The instance entry at set 2 binding 0 with the position at byte 48 and the bone offsets at byte 80; 512
 implicit bones; a vertex shader with one storage buffer; a pipeline layout with at least three sets and
 one free; indexed draws in a primary command buffer and a classic render pass; host-mapped index pools;
-one graphics queue family. A game update that moves one of them is not yet told from a Mod's fault
-(review L-07).
+one graphics queue family. A game update that moves one of them is told once, when no character draw
+of the process meets them (D-183, review L-07; the status's `game_shape`).
 
 ## Verification map
 

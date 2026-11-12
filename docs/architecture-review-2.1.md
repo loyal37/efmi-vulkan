@@ -414,7 +414,8 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > instance as the Core's IterateInstances; R-09 of P1-5 (D-179), a list that draws without
 > `handling = skip` draws beside the game's draw; the variant cache's eviction of P4-3 (D-181, L-08);
 > BUG-090, `vs` as a value. P2-3's last part (D-182): a component computed at the draw is the one the
-> lists handed the Core. Sandbox only.
+> lists handed the Core. L-07's notice (D-183): said once when no character draw meets what the layer
+> assumes of the game's draws. Sandbox only.
 
 Each step test first, as the working agreement says: the check that fails before, the change, the
 touched area. Phases 0 and 3a come first: they are small, and they make the rest measurable.

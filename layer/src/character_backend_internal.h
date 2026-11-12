@@ -118,6 +118,17 @@ const char* const kCounterNames[C_COUNT] = {
     "translucent", "bone_jobs", "bone_ring_busy", "batches_made_at_draw", "held_before_shown", "original_before_shown",
     "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws", "components_handed"
 };
+// What the layer assumes of the game's character draws (review L-07, D-183): the instance entry at set 2 binding 0
+// in mapped memory, a pipeline the tracker knows, a primary command buffer in a classic render pass, the game's
+// vertex and index bindings tracked, a vertex input and a vertex shader the variants can take. For the process: the
+// character draws that met them and the refusals for them, and the first such refusal.
+struct GameShape {
+    std::atomic<uint64_t> fitting{0}, unfit{0};
+    std::atomic<bool> told{false};
+    std::mutex mx;
+    std::string first; // under mx
+};
+GameShape& game_shape();
 // Where a matched draw's time goes (D-099): microseconds per stage of record(), in the status.
 enum Stage : uint32_t { S_LOCK, S_IDENTIFY, S_BONES, S_PLAN, S_MATERIALS, S_VARIANTS, S_OWNER, S_APPEND, S_SNAPSHOT, S_EMIT, S_COUNT };
 const char* const kStageNames[S_COUNT] = {"lock", "identify", "bones", "plan", "materials", "variants", "owner", "append", "snapshot", "emit"};
@@ -504,6 +515,9 @@ public:
     // pipeline and slot set (derive caches the answer).
     uint32_t refuse_profile(const std::string& reason, uint32_t result) { note(reason); logf("%s", reason.c_str()); return result; }
     bool refuse(Counter counter, const std::string& reason) { ++counters[counter]; note(reason); return false; }
+    // A refusal for what the layer assumes of the game's character draws (GameShape, D-183): when none of the
+    // process's character draws met those assumptions, told once that the game is not the one the layer knows.
+    bool refuse_shape(Counter counter, const std::string& reason);
 
     bool init();
     bool init_adopted(std::unique_ptr<CharacterProgram> adopted, CharacterPackage made, std::shared_ptr<OwnedPresenter> shared,

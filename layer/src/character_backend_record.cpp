@@ -150,6 +150,33 @@ void CharacterGeneration::render_targets(const PipeInfo& pipe, efmi::frontend::R
     request.render_pass = uint64_t(pipe.recipe->render_pass->id) << 8 | pipe.recipe->subpass;
 }
 
+GameShape& character_internal::game_shape() { static GameShape shape; return shape; }
+
+// L-07: the facts the layer reads of the game's character draws are constants of this game, as the DX11 Core's are
+// probed (`if vs-cb2->Size / 16 == 4096 ... elif vs-cb1`), and the Core replaces nothing where none fits. A game
+// update that moves one of them made every Mod keep the game's look with a reason per draw and no statement that
+// the game changed. After this many character draws of every Mod refused for them, and none that met them, the
+// game is told to be another than the one the layer knows, once for the process.
+constexpr uint64_t kShapeDraws = 240;
+bool CharacterGeneration::refuse_shape(Counter counter, const std::string& reason)
+{
+    GameShape& shape = game_shape();
+    const uint64_t unfit = ++shape.unfit;
+    std::string first;
+    {
+        std::lock_guard<std::mutex> lock(shape.mx);
+        if (shape.first.empty()) shape.first = reason;
+        first = shape.first;
+    }
+    if (unfit >= kShapeDraws && !shape.fitting.load(std::memory_order_relaxed) && !shape.told.exchange(true)) {
+        const std::string text = "EFMI Vulkan: the game's character draws are not what this layer knows (" + first +
+                                 "); this game version is probably newer than the layer, and every Mod keeps the game's look";
+        logf("%s", text.c_str());
+        notice(NoticeLevel::Warning, "game-shape", text.c_str());
+    }
+    return refuse(counter, reason);
+}
+
 bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_index, uint32_t instance_index)
 {
     if (!enabled.load(std::memory_order_relaxed) || !cache) return false;
@@ -297,17 +324,17 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         if (section->lod != kCharacterNone) lod = section->lod;
         const CharacterComponent& component = package.components[section->component];
         if (cb->secondary || !cb->in_rp || cb->dyn_rp_count || cb->m2_extended_bind)
-            return refuse(C_STATE, "character draw outside a primary classic render pass or after extended binds");
+            return refuse_shape(C_STATE, "character draw outside a primary classic render pass or after extended binds");
         if (instance_index == UINT32_MAX && (r.instances != 1 || r.first_instance != 0)) return refuse(C_INSTANCES, "character draw is instanced");
         auto pipe = device->pipes.find(r.pipeline);
         if (pipe == device->pipes.end() || !pipe->second.recipe || !pipe->second.layout)
-            return refuse(C_PIPELINE, "character draw pipeline metadata missing");
+            return refuse_shape(C_PIPELINE, "character draw pipeline metadata missing");
         lookups.pipeline = r.pipeline; lookups.pipe = &pipe->second;
 
         // The instance entry is at set 2 binding 0 in every pipeline of the game's characters.
         const auto& window = r.sets[2];
         if (window.dyn_count && uint64_t(window.dyn_first) + window.dyn_count > cb->dyn.size())
-            return refuse(C_ENTRY, "character dynamic offsets incomplete");
+            return refuse_shape(C_ENTRY, "character dynamic offsets incomplete");
         auto read_range = [&](const BoundRange* range, uint64_t offset, size_t size, uint8_t* output) {
             if (!range || offset > range->size || size > range->size - offset) return false;
             auto buffer = device->bufs.find(range->buffer);
@@ -321,7 +348,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         // An instance of an instanced draw reads its own entry, the instance's index times an entry after the first
         // (the Core's `$draw_call_instance_id * $cfg_instance_config_byte_size`).
         const uint64_t entry_at = instance_index == UINT32_MAX ? 0 : uint64_t(instance_index) * entry.size();
-        if (!read_range(instance, entry_at, entry.size(), entry.data())) return refuse(C_ENTRY, "character instance entry is not mapped");
+        if (!read_range(instance, entry_at, entry.size(), entry.data())) return refuse_shape(C_ENTRY, "character instance entry is not mapped");
         identity = identify(entry, now, present);
         if (!identity) return refuse(C_IDENTITIES, "character position invalid or all identities in use");
         identity->seen |= 1ull << section->component;
@@ -584,9 +611,9 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         for (uint32_t slot = 0; slot < 4; ++slot)
             for (uint32_t i = 0; i < list->count; ++i)
                 if (package.draws[list->first + i].vb[slot] != kCharacterNone) slots = std::max(slots, slot + 1);
-        if (!slots || !r.ib) return refuse(C_BINDINGS, "character draw without tracked vertex or index bindings");
+        if (!slots || !r.ib) return refuse_shape(C_BINDINGS, "character draw without tracked vertex or index bindings");
         for (uint32_t slot = 0; slot < slots; ++slot) {
-            if (!r.vb[slot].buf) return refuse(C_BINDINGS, "character original vertex bindings incomplete");
+            if (!r.vb[slot].buf) return refuse_shape(C_BINDINGS, "character original vertex bindings incomplete");
             original.buffers.push_back(r.vb[slot].buf); original.offsets.push_back(r.vb[slot].off);
         }
         original.index = r.ib; original.index_offset = r.ib_off;
@@ -703,13 +730,13 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             VertexInputRecipe vertex;
             std::string reason;
             if (!package.vertex_input(package.draws[list->first + i], pipe->second.recipe->vertex, vertex, reason))
-                return refuse(C_VERTEX, "character vertex declaration: " + reason);
+                return refuse_shape(C_VERTEX, "character vertex declaration: " + reason);
             // Issue all cold requests before waiting so the existing builders can run in parallel.
             const auto result = cache->request(pipe->second.id, pipe->second.recipe, pipe->second.layout, vertex, patch_of(i));
             if (dithered) cache->prepare(pipe->second.id, pipe->second.recipe, pipe->second.layout, vertex, other_state(patch_of(i)));
             if (keep_variant(i, result)) continue;
             if (result.state == VariantState::Queued || result.state == VariantState::Building) { waiting.push_back({i, std::move(vertex)}); continue; }
-            return refuse(C_VARIANT, "character variant: " + result.reason);
+            return refuse_shape(C_VARIANT, "character variant: " + result.reason);
         }
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
         for (const auto& request : waiting) {
@@ -719,7 +746,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 request.vertex, patch_of(request.draw), remaining);
             if (keep_variant(request.draw, result)) continue;
             if (result.state == VariantState::Queued || result.state == VariantState::Building) { pending = true; continue; }
-            return refuse(C_VARIANT, "character variant: " + result.reason);
+            return refuse_shape(C_VARIANT, "character variant: " + result.reason);
         }
         for (const auto& request : waiting_captures) {
             const auto remaining = std::max(std::chrono::milliseconds(0),
@@ -834,6 +861,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     }
     lap(S_EMIT);
     ++counters[beside ? C_BESIDE : C_REPLACED];
+    game_shape().fitting.fetch_add(1, std::memory_order_relaxed);
     if (identity) identity->shown = true;
     if (material_origin) ++counters[material_origin == 1 ? C_DERIVED : C_INHERITED];
     counters[C_ITEMS] += list->count;

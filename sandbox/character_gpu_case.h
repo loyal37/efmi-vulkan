@@ -18,6 +18,10 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     // vertex stage: on that draw's own bone it stands at (.6,.75) with the application's shading.
     // D-179: EFMI_VK_TEST_OWN_MESH=2, the same section without `handling = skip`: the Mod's triangle beside the
     // application's, which stays where it is, also while the package comes up.
+    // D-183 (review L-07): EFMI_VK_TEST_UNKNOWN_GAME=1, the instance entries in memory the application has unmapped:
+    // a game whose character draws the layer cannot read. Every frame is the game's, and the layer says once that the
+    // game is not the one it knows.
+    const bool unknown_game=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_UNKNOWN_GAME",value,sizeof(value)) && value[0]=='1';}();
     const int own_mesh_mode=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_OWN_MESH",value,sizeof(value)) ? atoi(value) : 0;}();
     const bool own_mesh=own_mesh_mode!=0, beside=own_mesh_mode==2;
     // D-178: with EFMI_VK_TEST_UNMATCHED_SHADE=N a section of the scene's Mods folder gives the draw no section of
@@ -306,6 +310,14 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         if(!prepared)Sleep(5);
     }
     check(prepared,"the backend is ready before the scene begins");
+    if(unknown_game){
+        vkUnmapMemory(g.device,instance.memory);instance.mapped=nullptr;
+        for(auto& buffer:g.buffers)if(buffer.memory==instance.memory)buffer.mapped=nullptr;
+        bool kept=true;
+        for(uint32_t i=0;i<100;++i){frame(false);if(!original()){shades("a game the layer does not know");kept=false;break;}}
+        check(kept,"a game whose character draws the layer cannot read: every frame the game's");
+        self_probe("{\"cmd\":\"status\"}","character-final.json");return;
+    }
     if(!lazy_packages){frame(false);if(!skipped())shades("first frame of a new character is skipped, as the Core does");check(skipped(),"first frame of a new character is skipped, as the Core does");}
     if(reject_late){
         bool refused=false;
