@@ -269,19 +269,37 @@ bool CharacterPackage::read_payload(uint8_t* out, std::string& reason) const
     return true;
 }
 
-// The component mask of a stream with bone indices (and optional weights), every index inside the
+bool CharacterPackage::make_spans(std::string& reason)
+{
+    spans.clear();
+    std::vector<uint32_t> cuts;
+    for (const auto& c : components) { cuts.push_back(c.first); cuts.push_back(c.first + c.count); }
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+        BoneSpan span{cuts[i], cuts[i + 1] - cuts[i], 0};
+        for (uint32_t c = 0; c < components.size() && c < 64; ++c)
+            if (components[c].first <= span.first && span.first + span.count <= components[c].first + components[c].count) span.cover |= 1ull << c;
+        if (!span.cover) continue; // bones between components: nothing imports them
+        if (spans.size() >= 64) { reason = "more bone spans than the layer's masks hold"; return false; }
+        spans.push_back(span);
+    }
+    return true;
+}
+
+// The span mask of a stream with bone indices (and optional weights), every index inside the
 // skeleton and the weights normalized.
-static bool stream_bones(const std::vector<CharacterComponent>& components, uint32_t bone_count, const uint8_t* payload,
+static bool stream_bones(const std::vector<BoneSpan>& spans, uint32_t bone_count, const uint8_t* payload,
                          CharacterStream& s, std::string& reason)
 {
-    const uint32_t component_count = static_cast<uint32_t>(components.size());
+    const uint32_t component_count = static_cast<uint32_t>(spans.size());
     // A bone between components belongs to none: nothing imports it, so no draw waits for it.
     auto component_of = [&](uint32_t bone) {
         for (uint32_t i = 0; i < component_count; ++i)
-            if (bone >= components[i].first && bone < components[i].first + components[i].count) return i;
+            if (bone >= spans[i].first && bone < spans[i].first + spans[i].count) return i;
         return component_count;
     };
-    s.components = 0;
+    s.spans = 0;
     const uint64_t count = s.size / s.stride;
     for (uint64_t v = 0; v < count; ++v) {
         const uint8_t* element = payload + s.offset + v * s.stride;
@@ -302,7 +320,7 @@ static bool stream_bones(const std::vector<CharacterComponent>& components, uint
                 } else weight = at<uint16_t>(element + s.bone_weight_offset + k * 2);
                 total += weight;
             }
-            if (const uint32_t c = component_of(bone); weight && c < component_count) s.components |= 1ull << c;
+            if (const uint32_t c = component_of(bone); weight && c < component_count) s.spans |= 1ull << c;
         }
         if (s.bone_weight_offset != kCharacterNone && (total < 65533 - (s.bone_weight_bytes == 4 ? 64 : 0) || total > 65537 + (s.bone_weight_bytes == 4 ? 64 : 0))) {
             reason = "bone weights are not normalized"; return false;
@@ -330,8 +348,8 @@ bool CharacterPackage::adopt_bones(uint32_t stream, uint32_t index_offset, uint3
     if (!read_stream(stream, bytes, reason)) return false;
     CharacterStream read = s;
     read.offset = 0;
-    if (!stream_bones(components, bones, bytes.data(), read, reason)) return false;
-    s.components = read.components;
+    if (!stream_bones(spans, bones, bytes.data(), read, reason)) return false;
+    s.spans = read.spans;
     streams[stream] = s;
     return true;
 }
@@ -362,15 +380,17 @@ bool CharacterPackage::decode(const std::vector<uint8_t>& file, std::string& rea
     CharacterPackage next;
     next.bones = bone_count;
     const uint8_t* p = file.data() + kHeader;
-    struct RawComponent { uint32_t first, count, remap, list0, list1; };
+    struct RawComponent { uint32_t first, count, remap, list0, list1, remap0; };
     std::vector<RawComponent> raw_components;
     uint64_t cursor = 0;
     for (uint32_t i = 0; i < component_count; ++i, p += 24) {
-        RawComponent c = {at<uint32_t>(p), at<uint32_t>(p + 4), at<uint32_t>(p + 8), at<uint32_t>(p + 12), at<uint32_t>(p + 16)};
-        // Disjoint and in order; bones between components stay as initialized (BUG-048).
-        if (!c.count || c.first < cursor || uint64_t(c.first) + c.count > bone_count) return fail("components overlap or leave the skeleton");
+        // The sixth word is the LOD 0 remap's stream plus one, 0 for none (it was a zero before BUG-093).
+        RawComponent c = {at<uint32_t>(p), at<uint32_t>(p + 4), at<uint32_t>(p + 8), at<uint32_t>(p + 12), at<uint32_t>(p + 16), at<uint32_t>(p + 20)};
+        // In the order of their first bones. Two may share bones (BUG-093); bones between components stay
+        // as initialized (BUG-048).
+        if (!c.count || c.first < cursor || uint64_t(c.first) + c.count > bone_count) return fail("components out of order or leaving the skeleton");
         if (c.list0 >= list_count || c.list1 >= list_count) return fail("component draw list out of range");
-        cursor = uint64_t(c.first) + c.count;
+        cursor = c.first;
         raw_components.push_back(c);
     }
     for (uint32_t i = 0; i < stream_count; ++i, p += 32) {
@@ -427,22 +447,31 @@ bool CharacterPackage::decode(const std::vector<uint8_t>& file, std::string& rea
         const auto& raw = raw_components[i];
         CharacterComponent c;
         c.first = raw.first; c.count = raw.count; c.lists[0] = raw.list0; c.lists[1] = raw.list1;
+        const auto remap_from = [&](uint32_t stream, std::vector<uint16_t>& table) {
+            if (stream >= stream_count) { reason = "remap stream out of range"; return false; }
+            const auto& s = next.streams[stream];
+            if (s.kind != CharacterStream::Remap || s.size != uint64_t(c.count) * 2) { reason = "remap stream has the wrong kind or length"; return false; }
+            table.resize(c.count);
+            std::memcpy(table.data(), payload + s.offset, static_cast<size_t>(s.size));
+            // A source index selects a matrix of the game's palette; bound what the importer may read.
+            for (uint16_t source : table) if (source >= 1024) { reason = "remap source bone outside the supported window"; return false; }
+            return true;
+        };
         if (raw.remap != kCharacterNone) {
             c.remap_stream = raw.remap;
-            if (raw.remap >= stream_count) return fail("remap stream out of range");
-            const auto& s = next.streams[raw.remap];
-            if (s.kind != CharacterStream::Remap || s.size != uint64_t(c.count) * 2) return fail("remap stream has the wrong kind or length");
+            if (!remap_from(raw.remap, c.remap_lod1)) return false;
             c.has_remap = true;
-            c.remap_lod1.resize(c.count);
-            std::memcpy(c.remap_lod1.data(), payload + s.offset, static_cast<size_t>(s.size));
-            // A source index selects a matrix of the game's palette; bound what the importer may read.
-            for (uint16_t source : c.remap_lod1) if (source >= 1024) return fail("remap source bone outside the supported window");
+        }
+        if (raw.remap0) {
+            c.remap_stream0 = raw.remap0 - 1;
+            if (!remap_from(c.remap_stream0, c.remap_lod0)) return false;
         }
         next.components.push_back(std::move(c));
     }
+    if (!next.make_spans(reason)) return false;
     for (auto& s : next.streams) {
         if (s.bone_index_offset == kCharacterNone) continue;
-        if (!stream_bones(next.components, bone_count, payload, s, reason)) return false;
+        if (!stream_bones(next.spans, bone_count, payload, s, reason)) return false;
     }
     for (const auto& d : next.draws) {
         if (d.index_stream >= stream_count || next.streams[d.index_stream].kind != CharacterStream::Index) return fail("draw without an index stream");
@@ -470,7 +499,7 @@ bool CharacterPackage::decode(const std::vector<uint8_t>& file, std::string& rea
         for (uint32_t i = 0; i < l.count; ++i)
             for (uint32_t slot = 0; slot < 4; ++slot) {
                 const uint32_t stream = next.draws[l.first + i].vb[slot];
-                if (stream != kCharacterNone) l.required |= next.streams[stream].components;
+                if (stream != kCharacterNone) l.required |= next.streams[stream].spans;
             }
     next.payload.assign(payload, payload + payload_bytes);
     next.payload_bytes = payload_bytes;

@@ -26,9 +26,10 @@ public:
     static constexpr size_t kBytesPerBone = 48;
     static constexpr size_t kMaxBytes = 64u << 20;
 
-    // Components are disjoint ranges of [0,bones) in order; bones between them keep their initial
-    // value (zero, the implicit ones identity), as the Core's merged skeleton leaves them. Bounds and
-    // allocation are checked before replacing state.
+    // Components are ranges of [0,bones) in the order of their first bones. Two may share bones, as the
+    // Core's pools allow (BUG-093): each one's import writes its own range, and the later one stays. Bones
+    // between them keep their initial value (zero, the implicit ones identity), as the Core's merged
+    // skeleton leaves them. Bounds and allocation are checked before replacing state.
     bool configure(uint32_t bones, uint32_t instances, const std::vector<BoneComponent>&,
                    std::string& reason);
     // A caller-owned logical update serial, not necessarily a present counter. Increasing it

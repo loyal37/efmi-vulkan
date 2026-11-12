@@ -4,7 +4,7 @@
 
 - Done (sandbox only, not deployed): P2-1, the sections of every INI of a character Mod's folder (D-173) and packages without a skeleton with a Mods folder that needs no character Mod (D-174); CURRENT_STATE.
 - Next, each test first:
-  - BUG-093 first (an installed Mod does not load): the user's Yvonne with LOD components that share bone spans and a LOD 0 remap. The contract takes neither (R-04); the original's Core does.
+  - Done 2026-11-12 (D-175, sandbox): BUG-093, the user's Yvonne with LOD components that share bones and a LOD 0 remap. To see in the game once a build with it is in dist (2.1.4 there leaves the Mod out, with a notice): Yvonne replaced at both LODs, no `incomplete` or `bones_unavailable` rising on its package.
   - P2-2: a section without a component that draws a mesh of its own. Written, not built or tested (the changes are kept outside the tree: scratchpad p_plain_draw.py; `record_own_mesh`, `FragmentPatch::own_geometry`, no bone adoption for a draw without a component). Its check needs the scene to expect the unmatched draw elsewhere (EFMI_VK_TEST_OWN_MESH). (refused today: "INI hide override unexpectedly emits geometry"). The game's pipeline with its vertex stage kept (as the texture-only draw, `keep_vertex`), the Mod's buffers by `CharacterPackage::vertex_input`, no merged skeleton: the blend stream's bones are the game's own and are not validated against a merged one. Check: the scene's unmatched draw replaced by a Mod's triangle elsewhere (the scene needs a switch for what it expects at that place).
   - A texture of another package's folder bound in a draw (the catalogue is per package; BUG-091's message may be this).
   - P2-3: the character contract from the executed lists instead of the exporter's shape at load (R-04).

@@ -325,9 +325,12 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             if (!bone_owner) gpu_draw = false;
         }
         if (site.ok && dynamic && (gpu_draw || identity->skeleton.needs_import(0, section->component, lod))) {
-            const bool remapped = lod == 1 && component.has_remap;
+            // The component's remap at this LOD, at either one (BUG-093), as the Core's importer takes the
+            // pool's entry of the component and the LOD.
+            const std::vector<uint16_t>& remap_table = component.remap(lod);
+            const bool remapped = !remap_table.empty();
             uint32_t last = component.count - 1;
-            if (remapped) last = *std::max_element(component.remap_lod1.begin(), component.remap_lod1.end());
+            if (remapped) last = *std::max_element(remap_table.begin(), remap_table.end());
             const size_t needed = (size_t(last) + 2) * MergedSkeleton::kBytesPerBone;
             current.resize(needed); previous.resize(needed);
             auto& bone_ranges = scratch_bone_ranges; bone_ranges.clear();
@@ -338,7 +341,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             for (const auto& range : bone_ranges)
                 if (range.element == 0 && range.binding == site.binding &&
                     (range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) bones = &range;
-            if (gpu_draw && !(bones && readable && prepare_bone_job(*identity, *bone_owner, section->component, component, remapped, needed, *bones, offsets, dynamic)))
+            if (gpu_draw && !(bones && readable && prepare_bone_job(*identity, *bone_owner, section->component, component, remapped, needed, *bones, offsets, dynamic, lod)))
                 gpu_draw = false; // this draw imports on the CPU and binds the master
             if (gpu_draw) {
                 identity->coverage[section->component] |= dynamic;
@@ -359,7 +362,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     std::string reason;
                     static const std::vector<uint16_t> identity_map;
                     const auto result = identity->skeleton.import_component(0, section->component, lod, entry,
-                        {current.data(), needed}, {previous.data(), needed}, remapped ? component.remap_lod1 : identity_map, 1.0f, reason);
+                        {current.data(), needed}, {previous.data(), needed}, remapped ? remap_table : identity_map, 1.0f, reason);
 #if defined(EFMI_COMMAND_TIMING) || defined(EFMI_PHASE_TIMING)
                     if (program) program->note_timing("bones import", host_time_us() - bones_import_began);
 #endif
@@ -491,24 +494,41 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         }
         lap(S_PLAN);
         if (!list->count) { if (!gate_open) return gated(); ++counters[C_HIDDEN]; return true; }
-        for (uint32_t c = 0; c < package.components.size(); ++c)
-            if ((list->required >> c & 1) && (identity->coverage[c] & dynamic) != dynamic) { ++counters[C_INCOMPLETE]; return false; }
+        // The bones the list's vertices read, span by span: each was imported by some component it lies in
+        // (BUG-093: a LOD part of its own on another part's bones fills them as well as that part does).
+        for (uint32_t s = 0; s < package.spans.size(); ++s) {
+            if (!(list->required >> s & 1)) continue;
+            bool covered = false;
+            for (uint64_t cover = package.spans[s].cover; cover && !covered; cover &= cover - 1) {
+                unsigned long c = 0; _BitScanForward64(&c, cover);
+                covered = c < identity->coverage.size() && (identity->coverage[c] & dynamic) == dynamic;
+            }
+            if (!covered) { ++counters[C_INCOMPLETE]; return false; }
+        }
         // Under the tracker's lock (D-127): each component the list's vertices read comes from an import
         // this recording carries, from the object's skeleton that a submitted batch imported it into, or
         // from a recording that drew it and is not yet submitted (its bone data valid until that recording
         // completed; the tracker's id tells a reused buffer handle apart). A draw that would read bones no
         // import wrote is refused rather than drawn with them.
         if (gpu_draw)
-            for (uint32_t c = 0; c < package.components.size() && c < 64; ++c) {
-                if (!(list->required >> c & 1)) continue;
-                if (bone_owner->has_bone_job(identity->ring.get(), c)) continue;
-                if (identity->ring->submitted.load(std::memory_order_acquire) >> c & 1) continue;
-                const BoneJob* source = c < identity->bone_sources.size() && identity->bone_sources[c].ring ? &identity->bone_sources[c] : nullptr;
-                if (source && source->recording && source->recording->pending(source->epoch)) {
-                    const auto alive = device->bufs.find(source->source);
-                    if (alive != device->bufs.end() && alive->second.id == source->source_id) { borrowed_sources |= 1ull << c; continue; }
+            for (uint32_t s = 0; s < package.spans.size(); ++s) {
+                if (!(list->required >> s & 1)) continue;
+                // By any component the span lies in: one this recording imports, one a submitted batch
+                // imported, else one a recording not yet submitted imported, which this one then takes.
+                const uint64_t cover = package.spans[s].cover;
+                bool written = false;
+                for (uint64_t left = cover; left && !written; left &= left - 1) {
+                    unsigned long c = 0; _BitScanForward64(&c, left);
+                    written = bone_owner->has_bone_job(identity->ring.get(), c) || (identity->ring->submitted.load(std::memory_order_acquire) >> c & 1);
                 }
-                return refuse(C_BONES_UNAVAILABLE, "character draw reads bones of a component no device import wrote");
+                for (uint64_t left = cover; left && !written; left &= left - 1) {
+                    unsigned long c = 0; _BitScanForward64(&c, left);
+                    const BoneJob* source = c < identity->bone_sources.size() && identity->bone_sources[c].ring ? &identity->bone_sources[c] : nullptr;
+                    if (!source || !source->recording || !source->recording->pending(source->epoch)) continue;
+                    const auto alive = device->bufs.find(source->source);
+                    if (alive != device->bufs.end() && alive->second.id == source->source_id) { borrowed_sources |= 1ull << c; written = true; }
+                }
+                if (!written) return refuse(C_BONES_UNAVAILABLE, "character draw reads bones of a component no device import wrote");
             }
         // The private set is bound right above the pipeline's own sets: slot 3 for most character
         // pipelines, slot 4 for the four-set ones (the game's visibility pass among them).

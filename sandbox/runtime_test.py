@@ -177,6 +177,7 @@ def main():
     directory_generation(checks, validation)
     plain_mods(checks, validation)
     folder_without_character(checks)
+    shared_spans(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -405,6 +406,80 @@ def plain_mods(checks, validation):
         checks.check(not prop.get("activated") and prop["counters"].get("replaced", 0) == 0 and not prop.get("last_reason"),
                      label + ": a section that only sets a variable brings nothing to the GPU and refuses nothing " +
                      str((prop.get("activated"), prop.get("last_reason"))))
+
+
+def shared_spans(checks, validation):
+    """BUG-093 (review R-04): a Mod whose LOD 1 part is a component of its own that shares the LOD 0 part's
+    bones, and whose LOD 0 part has a remap, as a tool the user ran on an installed Mod writes it. To the
+    Core a component is an offset and a count into the merged skeleton with a remap per LOD; nothing keeps
+    the spans apart. The fixture so written: component 0 keeps bones 0 and 1 with a LOD 0 remap (the
+    identity, from a file) and none at LOD 1; a fourth component has the same two bones and the LOD 1
+    remap, and the LOD 1 section names it. The scene's pictures must be those of the fixture as exported.
+    Before, the layer left such a Mod out: "Skeleton components overlap"."""
+    root = Path(test_dir("runtime-spans-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    ini = folder / "mod.ini"
+    text = ini.read_text(encoding="ascii")
+
+    def change(old, new):
+        nonlocal text
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+
+    change("global $component_count = 3\n", "global $component_count = 4\n")
+    change("Pool_MergedSkeleton_Component_LodRemaps[0*$levels+0] = null\nPool_MergedSkeleton_Component_LodRemaps[0*$levels+1] = ref ResourceS0\n",
+           "Pool_MergedSkeleton_Component_LodRemaps[0*$levels+0] = ref ResourceLod0\nPool_MergedSkeleton_Component_LodRemaps[0*$levels+1] = null\n"
+           "$Pool_MergedSkeleton_Component_VertexGroupOffsets[3] = 0\n$Pool_MergedSkeleton_Component_VertexGroupCounts[3] = 2\n"
+           "Pool_MergedSkeleton_Component_LodRemaps[3*$levels+0] = null\nPool_MergedSkeleton_Component_LodRemaps[3*$levels+1] = ref ResourceS0\n")
+    # The Core takes an object as the Mod's once that many of its components were seen; the scene draws three.
+    change("run = CommandList\\EFMIv1\\SpatialIdentity_IdentifyComponentInstances\n",
+           "$\\EFMIv1\\identification_min_components = 3\nrun = CommandList\\EFMIv1\\SpatialIdentity_IdentifyComponentInstances\n")
+    head, rest = text.split("[TextureOverride_EntryPoint_3]\n", 1)
+    section, tail = rest.split("\n[", 1)
+    assert "$lod_level = 1\n" in section and "$\\EFMIv1\\component_id = 0\n" in section, "the fixture's fourth section is component 0 at LOD 1"
+    section = section.replace("$\\EFMIv1\\component_id = 0\n", "$\\EFMIv1\\component_id = 3\n")
+    text = head + "[TextureOverride_EntryPoint_3]\n" + section + "\n[" + tail
+    text += "\n[ResourceLod0]\ntype = Buffer\nformat = R16_UINT\nfilename = lod0.buf\n"
+    ini.write_text(text, encoding="ascii")
+    (folder / "lod0.buf").write_bytes(struct.pack("<2H", 0, 1))
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", VK_LAYER_PATH=os.pathsep.join([DIST, validation]), VK_LAYER_VALIDATE_SYNC="1",
+                 VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    # Once with the bones imported on the device and once on the CPU: each has its own import and remap tables.
+    for bones in ("device", "CPU"):
+        for name in ("character-final.json", "character-active.json"):
+            if (folder / name).is_file():
+                (folder / name).unlink()
+        env = layer_env(str(root / ("layer-%s.log" % bones)), extra=dict(extra, EFMI_VK_M2_GPU_BONES="1" if bones == "device" else "0"))
+        env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+        args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+        result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+        output = result.stdout + result.stderr
+        (root / ("stdout-%s.txt" % bones)).write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+        label = "LOD parts sharing bones, bones on the %s" % bones
+        checks.equal(result.returncode, 0, label + ": the scene's pictures as with the fixture as exported, its LOD 1 frame among them")
+        checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+        if result.returncode:
+            print(output[-3000:]); print("artifacts:", root)
+        report = folder / "character-final.json"
+        status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+        fg = status.get("folder_generation", {})
+        checks.equal((fg.get("packages"), [m.get("reason") for m in fg.get("left_out", [])]), (1, []),
+                     label + ": the Mod is loaded, not left out")
+        checks.equal((status.get("components"), status.get("sections"), status.get("last_reason") or ""), (4, 4, ""),
+                     label + ": its four components, two of them on the same bones, and nothing refused")
+        counters = status.get("counters", {})
+        checks.check(counters.get("replaced", 0) > 0 and counters.get("incomplete", 0) == 0 and counters.get("bones_unavailable", 0) == 0 and
+                     (counters.get("bone_jobs", 0) > 0) == (bones == "device"),
+                     label + ": draws replaced, none left for bones not imported, the imports where the setting puts them " +
+                     str({k: counters.get(k) for k in ("replaced", "incomplete", "bones_unavailable", "bone_jobs")}))
 
 
 def folder_without_character(checks):

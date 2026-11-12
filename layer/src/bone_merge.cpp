@@ -359,9 +359,10 @@ bool BoneMerge::record(Slot& slot, const BoneBatch& batch, std::string& why)
             push.source_rows0 = job.rows[0]; push.source_rows1 = job.rows[1];
             push.destination = MergedSkeleton::kStaticRows; push.pose_rows = job.ring->bones * MergedSkeleton::kRowsPerBone;
             push.first = job.first; push.count = job.count;
-            push.flags = (job.poses & 3) | (job.remap && job.remaps && job.component < job.remaps->offsets.size() &&
-                                            job.remaps->offsets[job.component] != UINT32_MAX ? 4u : 0u);
-            push.remap_offset = push.flags & 4 ? job.remaps->offsets[job.component] : 0;
+            const uint32_t table = job.table == UINT32_MAX ? job.component : job.table;
+            push.flags = (job.poses & 3) | (job.remap && job.remaps && table < job.remaps->offsets.size() &&
+                                            job.remaps->offsets[table] != UINT32_MAX ? 4u : 0u);
+            push.remap_offset = push.flags & 4 ? job.remaps->offsets[table] : 0;
             push.scale = 1.0f;
             ctx_->CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);
             ctx_->CmdPushConstants(cmd, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);

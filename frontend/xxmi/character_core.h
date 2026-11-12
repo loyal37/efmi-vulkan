@@ -23,6 +23,7 @@ std::shared_ptr<RuntimeExtension> character_core(const std::string& mod_namespac
 struct CharacterDiscovery {
     efvk::CharacterPackage contract;                // bones, components (LOD1 remaps read), sections; no streams
     std::vector<std::filesystem::path> remap_files; // per component of the contract: its LOD1 remap file, empty for identity
+    std::vector<std::filesystem::path> remap_files0; // the same for LOD0 (BUG-093)
     size_t left_to_game = 0;                        // mesh sections of the mod the contract has no part for
     // How many of an object's components the original Core must see at one place before it takes the
     // object as the Mod's: the constant the Mod's lists assign to $\EFMIv1\identification_min_components

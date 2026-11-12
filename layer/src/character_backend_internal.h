@@ -532,8 +532,9 @@ public:
     void acquire_ring(Identity& identity);
     bool ensure_remaps();
     BoneJob scratch_bone_job;
+    // `lod`: which of the component's remaps the job reads (BUG-093).
     bool prepare_bone_job(Identity& identity, CharacterCommand& owner, uint32_t component_index, const CharacterComponent& component,
-                          bool remapped, size_t needed, const BoundRange& bones, const uint32_t offsets[2], uint8_t dynamic);
+                          bool remapped, size_t needed, const BoundRange& bones, const uint32_t offsets[2], uint8_t dynamic, uint32_t lod);
     BoneSite site_of(const PipeInfo& pipe);
     const SourceFacts& facts_of(const PipeInfo& pipe, const BoneSite& site);
     static bool vertex_stride(const PipeInfo& pipe, unsigned slot, uint32_t& stride, std::string& why);

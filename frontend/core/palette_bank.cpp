@@ -26,12 +26,12 @@ bool PaletteBank::configure(PaletteDefinition input,std::string& reason)
         }
     }
     std::sort(ids.begin(),ids.end(),[&](uint32_t a,uint32_t b){return input.components[a].range.first<input.components[b].range.first;});
-    std::vector<efvk::BoneComponent> ordered;uint64_t cursor=0;
+    std::vector<efvk::BoneComponent> ordered;
     for(uint32_t id:ids){
         const auto& range=input.components[id].range;
-        // Bones between components stay as initialized, as the Core's merged skeleton leaves them.
-        if(range.first<cursor)return fail("Palette components overlap");
-        dense[id]=static_cast<uint32_t>(ordered.size());ordered.push_back(range);cursor=uint64_t(range.first)+range.count;
+        // Bones between components stay as initialized, as the Core's merged skeleton leaves them; two
+        // components may share bones, as its pools allow (BUG-093).
+        dense[id]=static_cast<uint32_t>(ordered.size());ordered.push_back(range);
     }
     definition_=std::move(input);dense_=std::move(dense);ordered_=std::move(ordered);
     palettes_.clear();serial_=0;begun_=false;return true;

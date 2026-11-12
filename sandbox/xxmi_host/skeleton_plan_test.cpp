@@ -24,7 +24,10 @@ int HostSkeletonPlanTests()
     check(read() && result.components.size()==3 && result.components[0].first==1 && result.components[2].count==0 &&
           result.components[0].lods[0].source==RemapSource::Unassigned,"unordered component ids and empty slots retain identity; absent LODs remain unassigned");
     const auto unchanged=[&](){return result.bones==2 && result.instances==3 && result.components.size()==3 && result.components[0].first==1;};
-    set(offsets,0,0);check(!read() && !reason.empty() && unchanged(),"overlapping partitions reject atomically");
+    // BUG-093: to the Core a component is an offset and a count; two on the same bones are read as the pools have them.
+    set(offsets,0,0);check(read() && result.components[0].first==0 && result.components[0].count==1 && result.components[1].first==0 &&
+        result.components[1].count==1,"components on the same bones are read as the pools give them");
+    set(offsets,0,1);check(read() && unchanged(),"and apart again when the pools say so");
     set(offsets,0,1);set(counts,1,0);check(read() && unchanged() && result.components[1].count==0,
         "bones no component covers stay as the Core initialized them (BUG-048)");
     set(counts,1,1);set(offsets,0,.5f);check(!read() && unchanged(),"fractional component offsets are not truncated");
@@ -57,6 +60,8 @@ int HostSkeletonPlanTests()
     check(load_palette_files(source,owned,error) && owned.components[0].lods[1].available && owned.components[0].lods[1].indices.empty(),
           "a LOD no line assigned has no remap, as the original Core binds nothing for it");
     source.components[1].first=0;
-    check(!load_palette_files(source,owned,error),"invalid bone partitions refuse before file loading");
+    check(load_palette_files(source,owned,error) && owned.components.size()==2,"components on the same bones load (BUG-093)");
+    source.components[1].first=2;
+    check(!load_palette_files(source,owned,error),"a component past the skeleton refuses before file loading");
     printf("XXMI skeleton metadata: %d checks passed, %d failed\n",passed,failed);return failed;
 }

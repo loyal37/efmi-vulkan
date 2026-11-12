@@ -41,7 +41,7 @@ struct CharacterStream {
     uint32_t bone_index_offset = kCharacterNone, bone_weight_offset = kCharacterNone;
     uint32_t bone_index_bytes = 2; // width of one bone index: 2 (16-bit), 4 under a 32-bit blend-index edit, 1 as the game's own 8-bit element
     uint32_t bone_weight_bytes = 2; // width of one weight: 2 (16-bit normalized) or 4 (float, BUG-038)
-    uint64_t components = 0; // bit per component whose bones this stream refers to (computed at load)
+    uint64_t spans = 0; // bit per bone span (CharacterPackage::spans) this stream's bones lie in (computed at load)
 };
 struct CharacterDraw {
     uint32_t index_stream = 0, count = 0, first = 0;
@@ -83,14 +83,26 @@ struct CharacterDraw {
 };
 struct CharacterList {
     uint32_t first = 0, count = 0; // into draws; an empty list hides the original geometry
-    uint64_t required = 0;         // components whose bones the list's vertices use (computed at load)
+    uint64_t required = 0;         // bone spans the list's vertices use (computed at load)
 };
+// A part of the character as the Core's pools give it: an offset and a count into the merged skeleton, and a
+// remap per LOD. Nothing keeps two components' bones apart (BUG-093): a LOD 1 part may be a component of its
+// own on the LOD 0 part's bones, and then either one's import fills them.
 struct CharacterComponent {
-    uint32_t first = 0, count = 0;     // bone range in the merged skeleton
+    uint32_t first = 0, count = 0;     // its bones in the merged skeleton
     bool has_remap = false;
-    std::vector<uint16_t> remap_lod1;  // destination bone -> source bone, when has_remap
+    std::vector<uint16_t> remap_lod1;  // destination bone -> source bone at LOD 1, when has_remap
+    std::vector<uint16_t> remap_lod0;  // the same at LOD 0; empty: the identity
     uint32_t lists[2] = {0, 0};        // draw list at LOD 0 and LOD 1
-    uint32_t remap_stream = kCharacterNone;
+    uint32_t remap_stream = kCharacterNone;  // LOD 1's
+    uint32_t remap_stream0 = kCharacterNone; // LOD 0's
+    const std::vector<uint16_t>& remap(uint32_t lod) const { return lod == 1 ? remap_lod1 : remap_lod0; }
+};
+// The merged skeleton cut at every component's ends: a span lies wholly inside or outside each component,
+// and `cover` has a bit per component it lies in. With components apart, a span is a component.
+struct BoneSpan {
+    uint32_t first = 0, count = 0;
+    uint64_t cover = 0;
 };
 struct CharacterSection {
     uint32_t hash = 0, match_count = 0;
@@ -133,7 +145,11 @@ struct CharacterSource {
 
 struct CharacterPackage {
     uint32_t bones = 0;
-    std::vector<CharacterComponent> components; // in bone order, disjoint; bones between them belong to none
+    std::vector<CharacterComponent> components; // in the order of their first bones; bones between them belong to none
+    // The bones some component imports, cut at the components' ends (make_spans): what a stream's bones and a
+    // list's needs are counted in. At most 64, the width of the masks.
+    std::vector<BoneSpan> spans;
+    bool make_spans(std::string& reason);
     std::vector<CharacterStream> streams;
     std::vector<CharacterSection> sections;
     std::vector<CharacterList> lists;

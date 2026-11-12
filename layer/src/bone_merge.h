@@ -80,7 +80,7 @@ private:
 struct BoneRemaps {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    std::vector<uint32_t> offsets; // per component, in uints; UINT32_MAX for a component without one
+    std::vector<uint32_t> offsets; // per table as given, in uints; UINT32_MAX for an empty one
     ~BoneRemaps();
 private:
     friend class BoneMerge;
@@ -92,6 +92,9 @@ struct BoneJob {
     std::shared_ptr<BoneRing> ring;
     std::shared_ptr<BoneRemaps> remaps; // null without a remap
     uint32_t component = 0;
+    // The remap's table among `remaps`; by default the component's (one table per component). A package
+    // has one per component and LOD (BUG-093).
+    uint32_t table = UINT32_MAX;
     VkBuffer source = VK_NULL_HANDLE;  // the game's bone buffer as bound at the draw
     uint32_t source_id = 0;            // the tracker's id of that buffer (a handle may be reused)
     VkDeviceSize source_offset = 0, source_size = 0;

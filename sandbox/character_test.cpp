@@ -168,7 +168,7 @@ static void payload_tests(const std::vector<uint8_t>& valid, const Model& m)
           "the payload read again from the file is the one validated, zero between streams");
     // The texcoord stream (3) carries no bone indices in the file; a live plan that binds it under the
     // blend-index edit adopts it, its bytes read from the file.
-    check(p.adopt_bones(3, 0, kCharacterNone, why) && p.streams[3].components == 1, "a stream adopted for bones is read from its file");
+    check(p.adopt_bones(3, 0, kCharacterNone, why) && p.streams[3].spans == 1, "a stream adopted for bones is read from its file");
     // The position stream (2) changed in the file since the load.
     auto changed = valid;
     changed[48 + m.tables.size() + static_cast<size_t>(p.streams[2].offset) + 2] ^= 1;
@@ -315,6 +315,7 @@ static void declaration_tests(const CharacterPackage& p)
         bones.bones = 5;
         CharacterComponent a, b; a.first = 0; a.count = 2; b.first = 2; b.count = 3;
         bones.components = {a, b};
+        { std::string spans_reason; bones.make_spans(spans_reason); }
         CharacterStream s; s.kind = CharacterStream::Vertex; s.stride = 24; s.offset = 0; s.size = 48;
         bones.streams = {s};
         bones.payload.assign(48, 0);
@@ -325,7 +326,7 @@ static void declaration_tests(const CharacterPackage& p)
             std::memcpy(bones.payload.data() + v * 24 + 8, indices, 16);
         }
         auto adopted = bones;
-        check(adopted.adopt_bones(0, 8, 0, why, 4) && adopted.streams[0].components == 3 && adopted.streams[0].bone_index_bytes == 4,
+        check(adopted.adopt_bones(0, 8, 0, why, 4) && adopted.streams[0].spans == 3 && adopted.streams[0].bone_index_bytes == 4,
               "32-bit bone indices are read as such; only weighted bones count for the component mask");
         auto outside = bones;
         const uint32_t beyond = 5;
@@ -348,6 +349,7 @@ static void declaration_tests(const CharacterPackage& p)
         bones.bones = 5;
         CharacterComponent a, b; a.first = 0; a.count = 2; b.first = 2; b.count = 3;
         bones.components = {a, b};
+        { std::string spans_reason; bones.make_spans(spans_reason); }
         CharacterStream s; s.kind = CharacterStream::Vertex; s.stride = 12; s.offset = 0; s.size = 24;
         bones.streams = {s};
         bones.payload.assign(24, 0);
@@ -358,7 +360,7 @@ static void declaration_tests(const CharacterPackage& p)
             std::memcpy(bones.payload.data() + v * 12 + 8, indices, 4);
         }
         auto adopted = bones;
-        check(adopted.adopt_bones(0, 8, 0, why, 1) && adopted.streams[0].components == 3 && adopted.streams[0].bone_index_bytes == 1,
+        check(adopted.adopt_bones(0, 8, 0, why, 1) && adopted.streams[0].spans == 3 && adopted.streams[0].bone_index_bytes == 1,
               "8-bit bone indices are read as such");
         auto outside = bones;
         outside.payload[8 + 1] = 5;
@@ -1144,7 +1146,17 @@ int main(int argc, char** argv)
     { auto d = valid; d.pop_back(); reject(d, "truncated file refused"); }
     { auto d = valid; d.push_back(0); reject(d, "trailing bytes refused"); }
     { auto d = valid; poke(d, 8, uint32_t(65536)); reject(d, "bone count past 16-bit indices refused"); }
-    { auto d = valid; poke(d, tables + m.component_table + 24, uint32_t(0)); reject(d, "overlapping components refused"); }
+    { auto d = valid; poke(d, tables + m.component_table + 0, uint32_t(3)); reject(d, "components out of the order of their first bones refused"); }
+    {
+        // BUG-093: the second component (three bones) from the first one's first bone on, as the Core's
+        // pools allow. The two bones they share are one span, which either component's import fills; the
+        // second's third bone is a span of its own.
+        auto d = valid; poke(d, tables + m.component_table + 24, uint32_t(0)); seal(d);
+        CharacterPackage shared; std::string reason;
+        check(shared.decode(d, reason) && shared.spans.size() == 2 && shared.spans[0].first == 0 && shared.spans[0].count == 2 &&
+              shared.spans[0].cover == 3 && shared.spans[1].first == 2 && shared.spans[1].count == 1 && shared.spans[1].cover == 2,
+              "two components on the same bones decode: one span of both, then the rest of the second");
+    }
     { auto d = valid; poke(d, tables + m.component_table + 24, uint32_t(5000)); reject(d, "a component past the skeleton refused"); }
     { auto d = valid; poke(d, tables + m.component_table + 24, uint32_t(3)); poke(d, tables + m.component_table + 28, uint32_t(2)); seal(d);
       CharacterPackage gap; std::string reason;

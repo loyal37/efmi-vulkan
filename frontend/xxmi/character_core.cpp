@@ -390,7 +390,8 @@ class CharacterCore : public RuntimeExtension {
     bool lod_agrees(const efvk::CharacterPackage& expected)
     {
         const auto lod = integer(v(L"lod_level").fval);
-        return lod == current.lod || ((lod == 0 || lod == 1) && !expected.components[current.component].has_remap);
+        const auto& component = expected.components[current.component];
+        return lod == current.lod || ((lod == 0 || lod == 1) && !component.has_remap && component.remap_lod0.empty());
     }
     bool contract(const Mod& m, std::wstring& reason)
     {
@@ -876,31 +877,34 @@ global $mod_id = -1
     {
         std::vector<uint32_t> order;
         for (uint32_t i = 0; i < metadata.components.size(); ++i) if (metadata.components[i].count) order.push_back(i);
-        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return metadata.components[a].first < metadata.components[b].first; });
+        // In the order of their first bones, and of the pools where two begin at the same bone.
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return metadata.components[a].first < metadata.components[b].first; });
         if (order.empty() || order.size() > efvk::kCharacterComponents) return fail(why, L"Original skeleton has no or too many active components");
         efvk::CharacterPackage contract;
         contract.bones = metadata.bones;
-        std::vector<std::filesystem::path> remaps;
+        std::vector<std::filesystem::path> remaps, remaps0;
         std::map<uint32_t, uint32_t> dense;
-        uint32_t cursor = 0;
         for (uint32_t original : order) {
             const auto& got = metadata.components[original];
             const auto& maps = palette.components[original].lods;
-            // Bones between components stay as initialized, as the Core's merged skeleton leaves them.
-            if (got.first < cursor) return fail(why, L"Original components overlap");
-            cursor = got.first + got.count;
-            if (!maps[0].available || !maps[0].indices.empty() || !maps[1].available)
-                return fail(why, L"Original component has a LOD0 remap or no LOD1 assignment");
+            // Bones between components stay as initialized, as the Core's merged skeleton leaves them. Two
+            // components may share bones, and either LOD may have a remap: to the Core a component is an
+            // offset and a count into the skeleton and a remap per LOD (MergedSkeleton.ini, BUG-093).
+            if (uint64_t(got.first) + got.count > metadata.bones) return fail(why, L"Original components exceed the skeleton");
+            if (!maps[0].available || !maps[1].available) return fail(why, L"Original component without a LOD0 or a LOD1 assignment");
             efvk::CharacterComponent c;
             c.first = got.first; c.count = got.count;
             c.has_remap = !maps[1].indices.empty(); c.remap_lod1 = maps[1].indices;
+            c.remap_lod0 = maps[0].indices;
+            const auto& lod0 = got.lods[0];
             const auto& lod1 = got.lods[1];
             if (c.has_remap && (lod1.source != RemapSource::File || lod1.path.empty())) return fail(why, L"Original LOD1 remap without its file");
+            if (!c.remap_lod0.empty() && (lod0.source != RemapSource::File || lod0.path.empty())) return fail(why, L"Original LOD0 remap without its file");
             remaps.push_back(c.has_remap ? lod1.path : std::filesystem::path{});
+            remaps0.push_back(!c.remap_lod0.empty() ? lod0.path : std::filesystem::path{});
             dense.emplace(original, uint32_t(contract.components.size()));
             contract.components.push_back(std::move(c));
         }
-        if (cursor > metadata.bones) return fail(why, L"Original components exceed the skeleton");
         size_t left = m.outside_package;
         for (const auto& s : m.found) {
             auto section = s.section;
@@ -918,6 +922,7 @@ global $mod_id = -1
         m.expected = contract;
         m.discovery->contract = std::move(contract);
         m.discovery->remap_files = std::move(remaps);
+        m.discovery->remap_files0 = std::move(remaps0);
         m.discovery->left_to_game = left;
         return true;
     }
@@ -992,16 +997,17 @@ global $mod_id = -1
         for (size_t i = 0; i < metadata.components.size(); ++i) {
             const auto& got = metadata.components[i];
             if (!got.count) continue;
+            // The contract's component of these bones not yet taken: two may have the same (BUG-093), in the
+            // pools' order then, as the contract has them.
             size_t dense = 0;
-            while (dense < expected.components.size() && expected.components[dense].first != got.first) ++dense;
-            if (dense == expected.components.size() || m.original_components[dense] != UINT32_MAX)
-                return fail(why, L"Unprofiled or overlapping active component");
+            while (dense < expected.components.size() &&
+                   (expected.components[dense].first != got.first || expected.components[dense].count != got.count ||
+                    m.original_components[dense] != UINT32_MAX)) ++dense;
+            if (dense == expected.components.size()) return fail(why, L"Unprofiled active component");
             const auto& want = expected.components[dense];
             const auto& maps = palette.components[i].lods;
-            if (got.first != want.first || got.count != want.count ||
-                !maps[0].available || !maps[0].indices.empty() || !maps[1].available ||
-                maps[1].indices != want.remap_lod1)
-                return fail(why, L"Original bone ranges or LOD1 remaps differ from the renderer profile");
+            if (!maps[0].available || maps[0].indices != want.remap_lod0 || !maps[1].available || maps[1].indices != want.remap_lod1)
+                return fail(why, L"Original LOD remaps differ from the renderer profile");
             m.original_components[dense] = uint32_t(i);
         }
         if (std::find(m.original_components.begin(), m.original_components.end(), UINT32_MAX) != m.original_components.end())

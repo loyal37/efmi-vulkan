@@ -160,7 +160,8 @@ bool CharacterGeneration::ensure_remaps()
 {
     if (bone_remaps || bone_remaps_failed) return bool(bone_remaps);
     std::vector<std::vector<uint16_t>> tables;
-    for (const auto& c : package.components) tables.push_back(c.has_remap ? c.remap_lod1 : std::vector<uint16_t>{});
+    // Two per component: LOD 0's, then LOD 1's (BUG-093).
+    for (const auto& c : package.components) { tables.push_back(c.remap_lod0); tables.push_back(c.has_remap ? c.remap_lod1 : std::vector<uint16_t>{}); }
     std::string why;
     bone_remaps = bones_gpu->remaps(tables, why);
     if (!bone_remaps) { bone_remaps_failed = true; note("bone remaps: " + why); }
@@ -171,7 +172,7 @@ bool CharacterGeneration::ensure_remaps()
 // the draw, as the Core imports in the draw's list; false when the source cannot be bound (its
 // bounds, alignment or remap table), and the CPU import follows for this draw.
 bool CharacterGeneration::prepare_bone_job(Identity& identity, CharacterCommand& owner, uint32_t component_index, const CharacterComponent& component,
-                                           bool remapped, size_t needed, const BoundRange& bones, const uint32_t offsets[2], uint8_t dynamic)
+                                           bool remapped, size_t needed, const BoundRange& bones, const uint32_t offsets[2], uint8_t dynamic, uint32_t lod)
 {
     for (uint32_t p = 0; p < 2; ++p)
         if ((dynamic >> p & 1) && (uint64_t(offsets[p]) * 16 > bones.size || needed > bones.size - uint64_t(offsets[p]) * 16)) return false;
@@ -179,6 +180,7 @@ bool CharacterGeneration::prepare_bone_job(Identity& identity, CharacterCommand&
     if (remapped && !ensure_remaps()) return false;
     BoneJob& job = scratch_bone_job;
     job.ring = identity.ring; job.remaps = remapped ? bone_remaps : nullptr; job.component = component_index;
+    job.table = component_index * 2 + (lod == 1 ? 1 : 0);
     job.source = bones.buffer; job.source_id = bones.buffer_id; job.source_offset = bones.off; job.source_size = bones.size;
     job.rows[0] = offsets[0]; job.rows[1] = offsets[1];
     job.first = component.first; job.count = component.count; job.poses = dynamic; job.remap = remapped;

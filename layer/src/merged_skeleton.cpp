@@ -30,8 +30,8 @@ bool MergedSkeleton::configure(uint32_t bones, uint32_t instances,
     uint32_t largest = 0;
     for (const auto& c : components) {
         if (!c.count || c.first < cursor || uint64_t(c.first) + c.count > bones)
-            return reject(reason, "components must be disjoint ranges of the skeleton in order");
-        cursor = uint64_t(c.first) + c.count;
+            return reject(reason, "components must be ranges of the skeleton in the order of their first bones");
+        cursor = c.first;
         largest = std::max(largest, c.count);
     }
     try {

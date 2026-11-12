@@ -92,7 +92,8 @@ static void native_tests()
     auto cur = source(3, 10), prev = source(3, 100);
     check(!s.begin_update(0, why) && !why.empty(), "unconfigured update rejected");
     {
-        // BUG-048: components with bones between them, as the Core allows; overlap and disorder refuse.
+        // BUG-048: components with bones between them, as the Core allows. BUG-093: so are components that
+        // share bones (each import writes its own range, the later one stays); disorder refuses.
         MergedSkeleton g; std::string reason;
         check(g.configure(10, 1, {{2,3},{7,2}}, reason) && g.bytes().size() == (512 + 2 * 10) * 48,
               "disjoint components with bones between and after them configure");
@@ -100,8 +101,18 @@ static void native_tests()
         check(g.begin_update(1, reason) && g.import_component(0,1,0,entry(),view(gap_source),view(gap_previous),{},1,reason) == BoneImportResult::Imported &&
               bone(g,0,0,7) != 0 && bone(g,0,0,0) == 0 && bone(g,0,0,6) == 0,
               "a component imports at its own range; the bones between stay zero, as the Core leaves them");
-        check(!g.configure(10, 1, {{2,3},{4,2}}, reason) && !g.configure(10, 1, {{7,2},{2,3}}, reason) && !g.configure(10, 1, {{8,3}}, reason),
-              "overlapping, disordered or out-of-range components refuse");
+        check(!g.configure(10, 1, {{7,2},{2,3}}, reason) && !g.configure(10, 1, {{8,3}}, reason),
+              "disordered or out-of-range components refuse");
+        MergedSkeleton shared;
+        auto first_source = source(3, 10), first_previous = source(3, 100), second_source = source(2, 50), second_previous = source(2, 500);
+        check(shared.configure(10, 1, {{2,3},{4,2}}, reason) && shared.begin_update(1, reason) &&
+              shared.import_component(0,0,0,entry(),view(first_source),view(first_previous),{},1,reason) == BoneImportResult::Imported &&
+              bone(shared,0,0,2) != 0 && bone(shared,0,0,4) != 0 && bone(shared,0,0,5) == 0,
+              "components that share bones configure, and the first one's import fills its range");
+        const float before = bone(shared,0,0,4), kept = bone(shared,0,0,2);
+        check(shared.import_component(0,1,0,entry(),view(second_source),view(second_previous),{},1,reason) == BoneImportResult::Imported &&
+              bone(shared,0,0,4) != before && bone(shared,0,0,5) != 0 && bone(shared,0,0,2) == kept,
+              "the second one's import writes the bones they share and its own, and leaves the first one's others");
     }
     check(!s.patch_entry(0, in, patched, why) && patched == untouched, "unconfigured patch is atomic");
     check(s.configure(5, 2, {{0,3},{3,2}}, why), "configure two instances and components");
@@ -195,7 +206,7 @@ static void native_tests()
     check(s.import_component(1,1,0,in,{unaligned.data()+1,cur.size()},view(prev),{},1,why) == BoneImportResult::Imported,
           "unaligned input and unused implicit NaN never cause an extra read");
     saved = s.bytes();
-    check(!s.configure(5,2,{{0,3},{2,2}},why) && s.bytes() == saved, "overlap layout rejected without losing master");
+    check(!s.configure(5,2,{{2,2},{0,3}},why) && s.bytes() == saved, "disordered layout rejected without losing master");
     { MergedSkeleton tail; check(tail.configure(5,2,{{0,3}},why), "bones after the last component stay as initialized (BUG-048)"); }
     check(!s.configure(5,0,{{0,5}},why) && !s.configure(65537,1,{{0,65537}},why), "invalid dimensions rejected");
     check(!s.configure(65536,0xffffffff,{{0,65536}},why) && s.bytes() == saved, "large arithmetic bounded before allocation");

@@ -1077,6 +1077,18 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-175: Components may share bones, and either LOD may have a remap (BUG-093; review R-04, a part of P2-3)
+
+- Date: 2026-11-12. The user's Yvonne Mod, changed that night by a tool that puts the LOD 1 parts on the LOD 0 part's bones, was left out whole: "Skeleton components overlap".
+- The original (the Core's MergedSkeleton.ini): `CommandListMergedSkeleton_AttachComponent` reads the component's offset and count from the Mod's pools; the importer (`CustomShader_MergedSkeleton_BonesImporter_RollingBuffer` and `_ConstantBuffer`) binds `PoolInput_MergedSkeleton_Component_LodRemaps[$component_id * levels + $lod_level]`, uses it when it is not null (`z0 = @cs-t1 != 0`) and writes `count` bones at the skeleton's offset plus the component's. No component is compared with another, and a remap is one entry per component and LOD. Two components on the same bones are thus filled by whichever is drawn, which is what the tool relies on: the game draws an object's LOD 0 part or its LOD 1 part, each through its own remap onto the same merged bones.
+- The layer before: components had to lie apart, in order, at five places (the skeleton plan read from the pools, the palette, the contract, the package format, the CPU skeleton); a LOD 0 remap refused the Mod; and the bones a draw needs were counted in components.
+- Decision:
+  - Components are ranges in the order of their first bones and may share bones. A package has `spans`: the bones some component imports, cut at every component's end, each with the components it lies in (`CharacterPackage::make_spans`). With components apart a span is a component, and every mask is as it was. A stream's bones (`CharacterStream::spans`) and a list's needs (`CharacterList::required`) are masks of spans; at most 64.
+  - A draw's bones are there when every span it needs was imported by some component the span lies in: on the CPU by that component's coverage, on the device by a job of this recording, by one a submitted batch carried, or by one taken from a recording not yet submitted.
+  - A component has a remap per LOD (`remap_lod0` beside `remap_lod1`, `CharacterComponent::remap(lod)`). The package format's sixth component word, zero until now, is the LOD 0 remap's stream plus one. The device's remap tables are two per component, and a bone job names its table (`BoneJob::table`).
+  - `discover_contract` refuses neither; `prepare_mod` matches the contract's components by first bone and count, two of the same in the pools' order. `lod_agrees` takes LOD 0 and 1 as the same only for a component without a remap at either.
+- Not changed: LOD 2 and 3 stay the game's; the rest of R-04 (the skeleton and the sections read by the exporter's names at load). A remap pool element no line assigned was no remap before as well, as the original takes it (`load_palette_files`).
+
 ## D-174: A package without a skeleton, and a Mods folder without a character Mod (review Phase 2, P2-1, second part)
 
 - Date: 2026-11-12 (the user, 2026-11-11: loading should not tell characters from other Mods at all).

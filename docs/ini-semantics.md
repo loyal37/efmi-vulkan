@@ -723,6 +723,25 @@ The layer:
   `meshonly` INI as a package. On the build before: no second package, and the folder without a
   character Mod loads nothing.
 
+## A character's components and their bones (D-175, BUG-093)
+
+The original Core: a component is an offset and a count into the Mod's merged skeleton
+(`Pool_MergedSkeleton_Component_VertexGroupOffsets` and `...Counts`) and a remap per LOD
+(`...LodRemaps[component * levels + lod]`, null for none). `AttachComponent` and the bones importer use
+exactly these per draw; no component is compared with another.
+
+The layer:
+
+- Components may share bones (a tool the user runs on installed Mods puts a LOD 1 part, a component of
+  its own, on the LOD 0 part's bones) and either LOD may have a remap. Each component's import writes its
+  own range; with two on the same bones the later import stays, as under the original.
+- What a draw needs is counted in spans: the skeleton cut at every component's end. A span is there
+  when any component it lies in was imported. With components apart, a span is a component.
+- A remap pool element no line assigned is no remap, as the original binds nothing for it. Limits: at
+  most 64 components and 64 spans (the masks' width), LOD 0 and 1 only.
+- Checked: `sandbox/runtime_test.py` shared_spans (the scene's pictures with such a fixture, bones on the
+  device and on the CPU), the bone and package unit checks, the installed Mods in every key state.
+
 ## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
 
 Since 2026-11-11 (D-163) the first, third and fourth rows below are no refusals any more: the operand

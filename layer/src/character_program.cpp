@@ -185,7 +185,8 @@ bool validate_refreshed(CharacterPackage& package, std::string& reason)
                       uint32_t(package.lists.size()), uint32_t(package.draws.size()), uint32_t(package.edits.size()), 0u}) put(bytes, value);
     put(bytes, uint64_t(package.payload.size()));
     for (const auto& c : package.components)
-        for (auto value : {c.first, c.count, c.remap_stream, c.lists[0], c.lists[1], 0u}) put(bytes, value);
+        for (auto value : {c.first, c.count, c.remap_stream, c.lists[0], c.lists[1], c.remap_stream0 == kCharacterNone ? 0u : c.remap_stream0 + 1})
+            put(bytes, value);
     for (const auto& s : package.streams) {
         put(bytes, s.kind); put(bytes, s.stride); put(bytes, s.offset); put(bytes, s.size); put(bytes, s.bone_index_offset); put(bytes, s.bone_weight_offset);
     }
@@ -599,14 +600,17 @@ bool CharacterProgram::adopt(efmi::frontend::CharacterDiscovery& found, Characte
             files.push_back({path.u8string(), 0, 0, whole});
             return uint32_t(made.streams.size() - 1);
         };
-        for (size_t i = 0; i < made.components.size(); ++i)
-            if (!found.remap_files[i].empty()) {
-                const auto k = key(found.remap_files[i]);
-                auto it = remaps.find(k);
-                if (it == remaps.end()) it = remaps.emplace(k, add(found.remap_files[i], CharacterStream::Remap, 2)).first;
-                if (it->second == kCharacterNone) throw std::runtime_error("LOD remap file unreadable: " + found.remap_files[i].u8string());
-                made.components[i].remap_stream = it->second;
-            }
+        const auto remap_stream = [&](const std::filesystem::path& file) {
+            const auto k = key(file);
+            auto it = remaps.find(k);
+            if (it == remaps.end()) it = remaps.emplace(k, add(file, CharacterStream::Remap, 2)).first;
+            if (it->second == kCharacterNone) throw std::runtime_error("LOD remap file unreadable: " + file.u8string());
+            return it->second;
+        };
+        for (size_t i = 0; i < made.components.size(); ++i) {
+            if (i < found.remap_files.size() && !found.remap_files[i].empty()) made.components[i].remap_stream = remap_stream(found.remap_files[i]);
+            if (i < found.remap_files0.size() && !found.remap_files0[i].empty()) made.components[i].remap_stream0 = remap_stream(found.remap_files0[i]);
+        }
         // Every mesh file the generation declares (a folder Mod: under its folders); those of sections
         // the renderer has no part for are never bound by a replaced draw. In the order of their files,
         // whatever order the generation keeps its resources in: the same files make the same mesh, which
@@ -1266,7 +1270,7 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 }
                 for (uint32_t slot = 0; slot < 4; ++slot) {
                     const uint32_t stream = bound.vb[slot];
-                    if (stream != kCharacterNone && stream != kCharacterOwned) required |= package.streams[stream].components;
+                    if (stream != kCharacterNone && stream != kCharacterOwned) required |= package.streams[stream].spans;
                 }
                 // A translucent draw (D-113): captured into a layer at the pass end with its opacity and mask.
                 bound.translucent = item.operation == Op::Translucent;
