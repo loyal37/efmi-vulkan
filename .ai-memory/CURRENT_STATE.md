@@ -9,6 +9,7 @@
 ## 2.1.8: 2.1.7 and D-185 (2026-11-12)
 
 - EFVK_VERSION only, on a tree whose touched areas passed after D-185 (the whole suite ran on 2.1.7's tree).
+- Deployed for the development setup, 2026-11-12 21:24: the main checkout's `dist` built from f7962bf with the game not running (checked before and after); `efmi_vk.cfg` and the saved settings as they were; the 2.1.7 binaries kept in `build/dist-2.1.7-20261112`. Loaded there in the sandbox with dist's configuration: version 2.1.8, 22 packages, none left out, the notices only Xaihi's two inert lines, validation clean. Not loaded into the game.
 
 ## 2.1.7 in the game, and the two findings of that session (2026-11-12 evening)
 

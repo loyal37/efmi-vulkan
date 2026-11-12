@@ -2,7 +2,7 @@
 
 ## Active: the 2.1.7 session's findings (2026-11-12 evening)
 
-- Done (D-185, sandbox): translucent shadows by opacity (BUG-094). To see in the game: Zhuangfangyi's skin under the shirt and sarong lit as under DX11.
+- Done (D-185, in the main checkout's dist as 2.1.8 since 21:24): translucent shadows by opacity (BUG-094). To see in the game: Zhuangfangyi's skin under the shirt and sarong lit as under DX11; the status's `translucent_shadows` rising. If something broke: 2.1.7's binaries in `build/dist-2.1.7-20261112`.
 - Next: bones from a uniform block (LIMIT-027, the dash): the dash effect vertex shaders read the bones from a uniform block of 4096 vec4 at set 3 binding 0 (captures/dash-2.1.7-20261112); the original Core imports from it and binds a copy of [its four config rows][the merged bones] in its place (MergedSkeleton.ini: BoneDataImporter_ConstantBuffer, InstanceConfigOverrider_ConstantBuffer).
 - Route 2 (the Vulkan loader): started in a session of its own (SPIR-V-hash ShaderOverride and hunting), on its own branch.
 
