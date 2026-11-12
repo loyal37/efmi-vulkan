@@ -106,7 +106,7 @@ enum Counter : uint32_t {
     C_ENTRY, C_BONES, C_IMPORT, C_EXHAUSTED, C_IDENTITIES, C_SET3_RESTORED,
     C_MATERIAL, C_IMAGE, C_IMAGE_PENDING, C_MATERIAL_ITEMS, C_COMPAT_ITEMS, C_DERIVED, C_INHERITED,
     C_IDENTITY_NEW, C_IDENTITY_EXPIRED, C_TEXTURED, C_KEPT, C_OWNED, C_MEMORY, C_GATED, C_GATED_FRAMES, C_SNAPSHOT_COPIES, C_IDENTITY_ADOPTED,
-    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_BESIDE, C_INSTANCED, C_COMPUTED, C_SHADOWED, C_COUNT
+    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_BESIDE, C_INSTANCED, C_COMPUTED, C_SHADOWED, C_CONSTANT_BONES, C_COUNT
 };
 const char* const kCounterNames[C_COUNT] = {
     "matched", "replaced", "items", "hidden", "identifying", "incomplete", "pending",
@@ -116,7 +116,8 @@ const char* const kCounterNames[C_COUNT] = {
     "material_derived", "material_inherited", "identities_created", "identities_expired", "textured",
     "kept_original", "owned_streams", "waiting_memory", "gated", "gated_frames", "snapshot_copies", "identities_adopted", "preparing",
     "translucent", "bone_jobs", "bone_ring_busy", "batches_made_at_draw", "held_before_shown", "original_before_shown",
-    "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws", "components_handed", "translucent_shadows"
+    "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws", "components_handed", "translucent_shadows",
+    "constant_bones" // replaced draws whose bones a uniform block of 4096 vectors gave (D-186)
 };
 // What the layer assumes of the game's character draws (review L-07, D-183): the instance entry at set 2 binding 0
 // in mapped memory, a pipeline the tracker knows, a primary command buffer in a classic render pass, the game's
@@ -162,6 +163,7 @@ struct Identity {
     uint64_t seen = 0;               // components met since this identity appeared
     MergedSkeleton skeleton;
     std::vector<uint8_t> coverage;   // per component: bit 0 current pose imported, bit 1 previous
+    std::vector<uint8_t> cpu_coverage; // the same for the imports into the CPU master alone (D-186)
     // The merged skeleton on the device (D-117, D-127), and whether this recording's draws of the object
     // import on the device.
     std::shared_ptr<BoneRing> ring;
@@ -190,7 +192,9 @@ inline uint64_t twin_identity(uint32_t pipeline_id) { return (uint64_t(0x40) << 
 inline FragmentPatch twin_patch() { FragmentPatch patch; patch.keep_vertex = true; patch.no_dither = true; return patch; }
 // The same patch the other way round, for the state the key turns on next (built behind requested work).
 inline FragmentPatch other_state(FragmentPatch patch) { patch.no_dither = !patch.no_dither; return patch; }
-struct BoneSite { bool ok = false; uint32_t set = 0, binding = 0; };
+// Where the vertex shader of a pipeline reads its bones; `constant` 3 or 4 when that is a uniform block of 4096
+// vectors, the original Core's vs-cb3 / vs-cb4 source (D-186), 0 for the bone storage buffer.
+struct BoneSite { bool ok = false; uint32_t set = 0, binding = 0; uint32_t constant = 0; };
 using StaticMaterial = CharacterMaterial;
 // Rules of a fragment shader the package has no profile for, read off its module by the DX11
 // register rule (D-076), prepared like a profile.
@@ -371,6 +375,7 @@ public:
     // declaration queries (D-124), null where the stage is absent or the rule refused its SPIR-V.
     struct SourceFacts {
         int32_t vs_config_slot = -1; bool rolling_bones = false;
+        uint32_t constant_bones = 0; // the Core's vs-cb3 / vs-cb4 bone source where the bone site is that block (D-186)
         std::array<std::shared_ptr<const std::vector<efmi::gpu::SourceRegister>>, 5> registers;
     };
     std::unordered_map<uint32_t, SourceFacts> source_facts;
@@ -450,6 +455,7 @@ public:
     uint32_t identity_logs = 0;
     std::unordered_map<uint32_t, BoneSite> sites;
     std::vector<uint8_t> current, previous;
+    std::vector<uint8_t> scratch_block; // a uniform block of bones as the draw's vertex shader reads it (D-186)
     // The per-draw containers of record(), kept for their capacity: the allocations of fresh ones
     // were a sixth of the recording in a profile (D-108). record() holds mod_mx.
     std::vector<std::shared_ptr<const PipelineVariant>> scratch_variants;

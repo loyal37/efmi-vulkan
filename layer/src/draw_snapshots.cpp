@@ -182,6 +182,22 @@ bool DrawSnapshots::append_shared(const uint8_t* bones, size_t size, uint64_t ke
     if (!shared_ || sealed_ || !mapped_ || !bones || size != bone_bytes_) {
         reason = "shared snapshot is sealed, uncreated or has mismatched bone bytes"; return false;
     }
+    return append_slice(bones, size, key, entry, images, output);
+}
+
+bool DrawSnapshots::append_rows(const uint8_t* rows, size_t size, uint64_t key, const InstanceEntry& entry,
+                                const std::vector<SnapshotImage>& images, SnapshotSlot& output)
+{
+    reason.clear();
+    if (!shared_ || sealed_ || !mapped_ || !rows || !size || size > bone_bytes_) {
+        reason = "shared snapshot is sealed or uncreated, or the bone block does not fit a slice"; return false;
+    }
+    return append_slice(rows, size, key, entry, images, output);
+}
+
+bool DrawSnapshots::append_slice(const uint8_t* bones, size_t size, uint64_t key, const InstanceEntry& entry,
+                                 const std::vector<SnapshotImage>& images, SnapshotSlot& output)
+{
     if (used_ >= capacity_) { reason = "snapshot entries are full"; return false; }
     const auto known = slices_by_key_.find(key);
     const bool reuse = known != slices_by_key_.end();
@@ -194,7 +210,7 @@ bool DrawSnapshots::append_shared(const uint8_t* bones, size_t size, uint64_t ke
         slices_by_key_.emplace(key, slices_used_++);
         const uint64_t now = clock_us(); g_snapshot_timing.copy_us += now - mark; mark = now;
     }
-    VkDescriptorBufferInfo info = {buffer_, bone_stride_ * slice, bone_bytes_};
+    VkDescriptorBufferInfo info = {buffer_, bone_stride_ * slice, size};
     VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = sets_[used_]; write.dstBinding = 0; write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; write.pBufferInfo = &info;

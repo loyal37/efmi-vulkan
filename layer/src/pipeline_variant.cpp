@@ -108,7 +108,8 @@ bool prepare_vertex_variant(const GraphicsRecipe& recipe, const PipelineLayoutIn
         return storage ? type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC :
                          type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     };
-    if (!buffer_binding(rewritten.bone_set, rewritten.bone_binding, true) || !buffer_binding(2, 0, false)) {
+    // Bones of a uniform block (D-186) are bound by the application as a uniform buffer.
+    if (!buffer_binding(rewritten.bone_set, rewritten.bone_binding, rewritten.constant_slot == 0) || !buffer_binding(2, 0, false)) {
         reason = "vertex_buffer_layout_mismatch"; return false;
     }
     return true;

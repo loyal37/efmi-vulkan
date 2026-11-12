@@ -230,6 +230,13 @@ CoreSourceFacts core_source_facts(const std::vector<SourceRegister>& registers)
     const auto* t0 = find_source_register(registers, 't', 0);
     if (t0 && t0->kind == SourceRegister::BufferSrv && t0->count == 1 && t0->stride == 16) facts.bones = t0;
     facts.rolling_bones = facts.bones && facts.vs_config_slot != -1;
+    if (!facts.rolling_bones)
+        for (uint32_t slot : {4u, 3u}) {
+            const auto* cb = find_source_register(registers, 'b', slot);
+            if (cb && cb->kind == SourceRegister::ConstantBuffer && cb->count == 1 && cb->bytes == 4096 * 16) {
+                facts.constant_bones = cb; facts.constant_slot = slot; break;
+            }
+        }
     return facts;
 }
 

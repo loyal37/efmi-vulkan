@@ -182,6 +182,7 @@ def main():
     other_names(checks, validation)
     other_folder_image(checks, validation)
     instanced_draw(checks, validation)
+    constant_bones(checks, validation)
     computed_component(checks, validation)
     unknown_game(checks, validation)
     implicit_namespace(checks)
@@ -522,6 +523,47 @@ def instanced_draw(checks, validation):
     counters = status.get("counters", {})
     checks.check(counters.get("instanced_draws", 0) > 0 and counters.get("refused_instances", 0) == 0,
                  label + ": decomposed, not refused " + str({k: counters.get(k) for k in ("instanced_draws", "refused_instances", "replaced")}))
+
+
+def constant_bones(checks, validation):
+    """LIMIT-027, D-186: the game's dash after-images draw a character with vertex shaders that have no bone buffer: the
+    bones and their offsets are in a uniform block of 4096 vectors at set 3 binding 0 (5370913c, 863d7ba9, 5eb8bfbc). The
+    original Core takes that block as the bone source (MergedSkeleton_DetectBoneDataSource: `vs->cb_size(4) == 4096`,
+    then cb3), imports from it and binds [its four config rows][the merged bones] in its place. The scene draws the whole
+    character with such a pipeline; the layer refused its variant (`vertex_rewrite:spirv_required_buffer_missing`) and the
+    character stayed the application's. With the bones imported on the device for the other draws (the default) and on
+    the CPU."""
+    for bones in ("device", "cpu"):
+        root = Path(test_dir("runtime-constant-bones-"))
+        mods = root / "Mods"
+        folder = mods / "fixture"
+        folder.mkdir(parents=True)
+        fixture(folder)
+        (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                       "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+        settings = root / "settings"
+        settings.mkdir()
+        extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1",
+                     EFMI_VK_M2_TEXTURE_PRELOAD="1", EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_CB_BONES="1",
+                     EFMI_VK_M2_GPU_BONES="1" if bones == "device" else "0", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                     VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+        env = layer_env(str(root / "layer.log"), extra=extra)
+        env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+        args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+        result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+        output = result.stdout + result.stderr
+        (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+        label = f"bones in a uniform block of 4096 vectors ({bones} imports elsewhere)"
+        checks.equal(result.returncode, 0, label + ": the character drawn by the after-image pipeline is the Mod's and follows its poses")
+        checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+        if result.returncode:
+            print(output[-3000:]); print("artifacts:", root)
+        report = folder / "character-final.json"
+        status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+        counters = status.get("counters", {})
+        names = ("replaced", "refused_variant", "incomplete", "bones_unavailable", "unreadable_bones", "import_rejected")
+        checks.check(counters.get("replaced", 0) > 0 and all(counters.get(name, 0) == 0 for name in names[1:]),
+                     label + ": replaced, no variant refused and no bones missing " + str({k: counters.get(k) for k in names}))
 
 
 def computed_component(checks, validation):

@@ -619,7 +619,8 @@ global $mod_id = -1
                                  L"spatialidentity_identifycomponentinstances", L"mergedskeleton_attachcomponent", L"component_drawinstances",
                                  L"callback_mergedskeleton_connectcomponent", L"callback_component_drawcustom"}) list(name);
         for (const auto* name : {L"bones_count", L"bones_data_source", L"component_id", L"custom_mesh_scale", L"draw_call_has_modded_instance",
-                                 L"draw_call_has_unknown_instance", L"enum_bones_source_vs_t0", L"enum_override_type_custom",
+                                 L"draw_call_has_unknown_instance", L"enum_bones_source_vs_t0", L"enum_bones_source_cb3",
+                                 L"enum_bones_source_cb4", L"enum_override_type_custom",
                                  L"enum_override_type_original", L"enum_override_type_skip", L"gpu_posed", L"instance_config_vs_cb_slot",
                                  L"lod_level", L"cfg_ms_max_lod_level_count", L"version", L"required_version", L"mod_id"}) var(name);
         for (const auto* name : {L"outputmergedskeleton_template", L"output_mergedskeleton"}) core_resource(name);
@@ -747,8 +748,13 @@ global $mod_id = -1
             if (!m || !m->prepared || (m == owner() && !contract(*m, why))) return false;
             // Never invent a source slot from Vulkan descriptor coordinates.
             // Unknown input preserves the original Core's no-replacement path.
-            v(L"bones_data_source").fval = current.rolling_bone_source && current.source_vs_config_slot != -1
-                ? v(L"enum_bones_source_vs_t0").fval : 0;
+            // The original's order: the rolling buffer with an instance window, then a block of 4096 vectors at
+            // vs-cb4, then at vs-cb3 (D-186).
+            float source = 0;
+            if (current.rolling_bone_source && current.source_vs_config_slot != -1) source = v(L"enum_bones_source_vs_t0").fval;
+            else if (current.constant_bone_source == 4) source = v(L"enum_bones_source_cb4").fval;
+            else if (current.constant_bone_source == 3) source = v(L"enum_bones_source_cb3").fval;
+            v(L"bones_data_source").fval = source;
             return true;
         });
         native(L"spatialidentity_identifycomponentinstances", [this](CommandListState&, unsigned phases, std::wstring& why) {

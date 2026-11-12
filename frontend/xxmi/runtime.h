@@ -116,6 +116,9 @@ struct RuntimeDraw {
     // binding number alone does not establish the original DX11 constant slot.
     bool rolling_bone_source = false;
     int32_t source_vs_config_slot = -1;
+    // 3 or 4: the bones in a constant buffer of 4096 vectors at vs-cb3 or vs-cb4, the Core's next bone sources after
+    // the rolling buffer (D-186); 0 none.
+    uint32_t constant_bone_source = 0;
     float frame_seconds = 0;
     // With RuntimeConfig::texture_identity: the application's texture at a DX11 pixel slot of this
     // draw, as the original's resource hash and description (`bound` false for an empty slot). False refuses.
