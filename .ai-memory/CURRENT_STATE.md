@@ -6,6 +6,10 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.6: 2.1.5 and D-177 (2026-11-12)
+
+- The user, 2026-11-12: build it, then finish everything that needs no game. 2.1.6 is 2.1.5 with D-177 (below); the version commit changes EFVK_VERSION only, on a tree whose touched steps passed (below).
+
 ## P2-3: a character is what its lists hand to the Core (D-177, 2026-11-12; sandbox only, not in dist)
 
 - The user, after 2.1.5: of the three open items of Phase 2 the point is the second, the contract read by the exporter's names at load.
