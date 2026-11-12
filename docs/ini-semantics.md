@@ -797,9 +797,12 @@ only there:
 | "render targets are not known": `oN`, `rt_width` of the replaced draw | the draw's render pass and target size from the host | the INI runtime test with given targets and the replay; in the game otherwise |
 | "offline ...": the pixel shader's declarations (`ps->srv_type`), the game's vertex buffer strides other than the one a section was split by | the draw's SPIR-V and its vertex bindings | the judge and the INI runtime test for the rule; in the game for the values |
 
-Also not run offline: sections matched by a texture's hash. Every pixel slot of the stand-in's draws is
-bound without a hash, so `CheckTextureOverride = ps-tN` meets no section there; their lists are planned
-only where the host names the game's textures (the live scene and the game). The BUG-051 kind of
+Sections matched by a texture's hash (D-184): every pixel slot of the stand-in's draws is bound without a
+hash, so `CheckTextureOverride = ps-tN` met no section there. After every other state, each section is
+planned once more per hash of a section whose list puts a resource in `this`, with that hash at every
+slot (on the installed folder 5 hashes, 1595 plans, 900 of them binding otherwise than
+without it). A hash at one slot alone, or two hashed textures together, are still planned only where the
+host names the game's textures (the live scene and the game). The BUG-051 kind of
 failure (nearly every draw refused in the game for a reason the offline check leaves out) is what this
 table is for: a refusal of the first kind seen in a game log is not covered by a green offline run.
 

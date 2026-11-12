@@ -902,6 +902,22 @@ std::vector<std::vector<int>> IniRuntime::key_combos() const
 {
     Scope scope(impl_->state); return ::RuntimeInputKeys();
 }
+std::vector<uint32_t> IniRuntime::texture_hashes() const
+{
+    Scope scope(impl_->state);
+    std::vector<uint32_t> out;
+    for (const auto& hashed : G->mTextureOverrideMap)
+        for (const auto& entry : hashed.second) {
+            if (entry.match_index_count.op != FuzzyMatchOp::ALWAYS) continue;
+            bool sets_this = false;
+            for (const CommandList* list : {&entry.command_list, &entry.post_command_list})
+                for (const auto& command : list->commands)
+                    if (const auto* copy = dynamic_cast<const ResourceCopyOperation*>(DrawPlanAdapter::original(*command)))
+                        sets_this |= copy->dst.type == ResourceCopyTargetType::THIS_RESOURCE;
+            if (sets_this) { out.push_back(hashed.first); break; }
+        }
+    return out;
+}
 void IniRuntime::library_hook(LibraryHook hook)
 {
     Scope scope(impl_->state); if (impl_->extension) impl_->extension->library_hook(hook);

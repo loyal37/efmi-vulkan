@@ -165,6 +165,10 @@ def main() -> int:
     summary, mods = lines[0], lines[1:]
     print("mod states: %d key actions, %d states, %d Mods, %d of them drawing in the default state" %
           (summary["key_actions"], summary["states"], len(mods), sum(1 for m in mods if m.get("drawn"))))
+    # D-184 (review P3-4): the texture-hash sections, run with their texture at every slot of every section.
+    print("mod states: %d texture hashes whose sections put a resource in `this`, %d plans with one of them at every slot, "
+          "%d of them binding otherwise than without it" %
+          (summary.get("texture_hashes", 0), summary.get("texture_plans", 0), summary.get("texture_effects", 0)))
     for item in summary.get("left_inputs", []):
         print("  INPUT LEFT OUT: %s: %s" % (item["ini"], item["reason"]))
     for error in summary.get("present_errors", []):

@@ -142,6 +142,8 @@ public:
     efmi::frontend::RuntimeStatus status() const { return runtime_ ? runtime_->status() : efmi::frontend::RuntimeStatus{}; }
     // The keys of the generation's key actions (D-137 checks press them as a player does).
     std::vector<std::vector<int>> key_combos() const { return runtime_ ? runtime_->key_combos() : std::vector<std::vector<int>>{}; }
+    // The texture hashes whose sections put a resource in `this` (D-184), for checks that plan with them bound.
+    std::vector<uint32_t> texture_hashes() const { return runtime_ ? runtime_->texture_hashes() : std::vector<uint32_t>{}; }
     // D-133: the IniParams elements ShaderRegex replacements gate a discard on, as the last presentation left them.
     std::vector<efmi::frontend::IniRuntime::DiscardGate> discard_gates() const
     {

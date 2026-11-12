@@ -1077,6 +1077,14 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-184: The state check runs the texture-hash sections (review V-05, P3-4)
+
+- Date: 2026-11-12. The original runs a TextureOverride matched by a texture's hash where a list asks for the override of a slot (`CheckTextureOverride = ps-tN`; the EFMI Core's CommandListOverrideTextures asks t0 to t22, and Mods ask single slots) and the resource there has the section's hash; its list usually puts the Mod's texture in `this`.
+- Before: the state check (`scripts/check_mod_states.py`, `plan_folder_states` in sandbox/character_test.cpp) answered every pixel slot as bound without a hash, so those sections never ran offline; what their lists do was checked only in the live scene and the game.
+- Decision: `IniRuntime::texture_hashes()` lists the hashes of the sections without an index match whose lists put a resource in `this`. After every other state (so that nothing their lists change enters a digest) every section of every Mod is planned once more per such hash, with that hash at every pixel slot; a refusal is reported as the others are. The same section is planned again without the hash, and the plans whose bindings differ are counted: evidence that the sections ran. The digests are unchanged.
+- On the installed folder: 5 such hashes, 1595 plans, 900 of them binding otherwise than without the hash, no refusal.
+- Left: a hash at every slot at once is not a game's draw (one texture at one slot); a section that checks two textures together is not combined.
+
 ## D-183: The layer says once when the game's character draws are not what it knows (review L-07, P0-9's second part)
 
 - Date: 2026-11-12. The DX11 Core finds the facts of the game it runs in by probing (`if vs-cb2->Size / 16 == 4096 ... elif vs-cb1`) and replaces nothing where none fits; 3DMigoto itself says nothing then. The layer reads them from fixed places: the instance entry at set 2 binding 0 in mapped memory, a pipeline the tracker knows, a primary command buffer in a classic render pass, the game's vertex and index bindings tracked, a vertex input and a vertex shader its variants can take.

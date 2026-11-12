@@ -246,6 +246,10 @@ public:
     // The virtual keys each of the generation's key actions needs held, in the original's order (a
     // controller's buttons left out), for checks that press them as a player does (D-137).
     std::vector<std::vector<int>> key_combos() const;
+    // The hashes of the TextureOverride sections without an index match whose lists put a resource in `this`: a
+    // texture the game binds with that hash at a slot a list checks (`checktextureoverride = ps-tN`, the Core's
+    // OverrideTextures over t0 to t22) runs them. For checks that plan with such a texture bound (D-184).
+    std::vector<uint32_t> texture_hashes() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

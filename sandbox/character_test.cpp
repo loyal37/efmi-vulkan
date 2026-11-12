@@ -666,6 +666,57 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
         const std::string state = "frame " + std::to_string(f) + " after the keys";
         present(released, state); plan_all(state);
     }
+    // P3-4 (review V-05, D-184): a texture-hash section runs where a list asks for the override of a slot
+    // (`checktextureoverride = ps-tN`, the Core's OverrideTextures over t0 to t22) and the game's texture there has
+    // the section's hash. Offline no slot had a hash, so those sections never ran here. Last, so that what their
+    // lists change is in no digest: every section once more per texture hash of the generation whose sections put a
+    // resource in `this`, that hash at every slot; a refusal is reported as the others are.
+    const auto texture_hashes = presenter->texture_hashes();
+    uint64_t texture_plans = 0, texture_effects = 0;
+    // What a plan binds, in one number: whether the game's draw is hidden, and each draw's images by slot.
+    auto bound_by = [](const CharacterPackage& package, const CharacterList& list, bool skip, bool textures) {
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&h](uint64_t v) { for (int b = 0; b < 8; ++b) { h ^= (v >> (b * 8)) & 0xff; h *= 1099511628211ull; } };
+        mix(uint64_t(skip) | uint64_t(textures) << 1); mix(list.count);
+        for (uint32_t d = 0; d < list.count && size_t(list.first) + d < package.pixels.size(); ++d)
+            for (const auto& pixel : package.pixels[list.first + d]) {
+                mix(pixel.slot);
+                for (unsigned char c : pixel.asset < package.images.size() ? package.images[pixel.asset] : std::string("none")) mix(c);
+            }
+        return h;
+    };
+    for (const uint32_t hashed : texture_hashes) {
+        char state[48]; snprintf(state, sizeof(state), "the game's texture %08x at every slot", hashed);
+        for (size_t i = 0; i < found.size(); ++i) {
+            auto& m = found[i];
+            if (!m.program) continue;
+            uint32_t current_lod = 0;
+            for (const auto& s : m.package.sections) {
+                if (s.lod != kCharacterNone) current_lod = s.lod;
+                const uint32_t lod = s.component == kCharacterNone ? kCharacterNone : current_lod;
+                uint32_t first = 0;
+                if (!section_first(m.package.sections, s, first)) continue;
+                auto request = section_draw(s, first, lod, frame, *m.program, vertex);
+                request.pixel_texture = [hashed](unsigned, efmi::frontend::RuntimeTexture& texture, std::string&) {
+                    texture = {}; texture.bound = true; texture.hash = hashed; return true; };
+                CharacterList list; bool skip = false, added = false, textures = false; std::string why;
+                ++texture_plans;
+                if (m.program->plan(request, m.package, list, skip, added, why, nullptr, &textures)) {
+                    // The same draw without the hash: what the texture sections changed of it.
+                    const uint64_t with = bound_by(m.package, list, skip, textures);
+                    auto plain = section_draw(s, first, lod, frame, *m.program, vertex);
+                    CharacterList without; bool skip0 = false, added0 = false, textures0 = false; std::string why0;
+                    if (m.program->plan(plain, m.package, without, skip0, added0, why0, nullptr, &textures0) &&
+                        bound_by(m.package, without, skip0, textures0) != with) ++texture_effects;
+                    continue;
+                }
+                if (offline_limit(why)) continue;
+                char key[64]; snprintf(key, sizeof(key), "%08x/%u/%u/", s.hash, s.component, lod);
+                if (!seen_refusals[i].insert(key + why).second) continue;
+                refusals[i].push_back({state, why, s.hash, s.component, lod});
+            }
+        }
+    }
     if (outcomes_file) {
         if (FILE* out = fopen(outcomes_file, "wb")) {
             for (size_t i = 0; i < found.size(); ++i) {
@@ -679,6 +730,7 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     }
     JsonWriter summary; summary.begin_object();
     summary.kn("key_actions", combos.size()); summary.kn("states", states);
+    summary.kn("texture_hashes", texture_hashes.size()); summary.kn("texture_plans", texture_plans); summary.kn("texture_effects", texture_effects);
     summary.key("present_errors"); summary.begin_array(); for (const auto& e : present_errors) summary.str(e); summary.end_array();
     // The inputs the folder was loaded without, and what the layer did not do as the original does while
     // the generation ran (the host shows both).

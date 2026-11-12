@@ -59,7 +59,7 @@
   - Done 2026-11-11 (Phase 1, above): the sweep's 12 recorded differences. No line refuses a draw; what is left differs for one draw or one slot, each recorded with what may differ (`only`).
   - Done 2026-11-12: `vs` as a value (BUG-090) reads the Core's ShaderRegex value; the sweep judges every line. `vbN->stride` and a query on `ib` are answered from the draw state.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
-  - P3-4: hashed textures in the state check, so texture-hash sections run offline (the exclusions are listed in docs/ini-semantics.md).
+  - Done 2026-11-12 (D-184): P3-4, the texture-hash sections run in the state check with their hash at every slot (the exclusions are listed in docs/ini-semantics.md).
   - P4-3: the variant cache's eviction done 2026-11-12 (D-181, sandbox). Left: the residency's image table never shrinks, one deferred-destruction queue, L-04's first-use waits under the tracker's lock, L-06's failed image. P4-4.
   - Done 2026-11-12 (sandbox): BUG-089, reproduced (one snapshot batch per recording with the gate set) and fixed. To see in the game: with RabbitFX's `\` key on, a package's `batches_made` stays a handful.
   - Done 2026-11-12 (D-183, sandbox): L-07, one notice when no character draw of the process meets what the layer assumes of the game's draws. To see in the game: the notice never shows in a normal session (`game_shape.fitting` rising, `unfit` low).
