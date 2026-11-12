@@ -178,6 +178,7 @@ def main():
     plain_mods(checks, validation)
     folder_without_character(checks)
     shared_spans(checks, validation)
+    own_mesh(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -480,6 +481,64 @@ def shared_spans(checks, validation):
                      (counters.get("bone_jobs", 0) > 0) == (bones == "device"),
                      label + ": draws replaced, none left for bones not imported, the imports where the setting puts them " +
                      str({k: counters.get(k) for k in ("replaced", "incomplete", "bones_unavailable", "bone_jobs")}))
+
+
+def own_mesh(checks, validation):
+    """D-176 (review P2-2): a section without a component that draws a mesh of its own. The original runs
+    its lists on the game's draw state: `handling = skip` drops the game's draw, the lists bind the Mod's
+    buffers, and their draw goes out with the game's shaders and whatever else the game bound, its bones
+    among it. The scene's Mods folder holds the fixture and `props\\prop.ini`, whose section stands for the
+    scene's unmatched draw: a triangle moved by (0,.85), weighted to that draw's bone zero, with the
+    position, blend and index files of its own and the game's texture coordinates. Before, such a plan
+    was refused ("INI hide override unexpectedly emits geometry") and the game's draw stayed."""
+    root = Path(test_dir("runtime-own-mesh-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    props = mods / "props"
+    props.mkdir()
+    base = ((-.22, -.2), (.22, -.2), (0, .22))
+    (props / "position.buf").write_bytes(b"".join(struct.pack("<4f", x, y + .85, 0, 0) for x, y in base))
+    (props / "blend.buf").write_bytes(struct.pack("<8H", 65535, 0, 0, 0, 0, 0, 0, 0) * 3)
+    (props / "index.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (props / "prop.ini").write_text(
+        "namespace = runtime_prop\n[Constants]\nglobal persist $own_seen = 0\n[TextureOverrideProp]\nhash = %08x\nmatch_index_count = 3\n"
+        "match_first_index = 30\nhandling = skip\nvb0 = ResourcePosition\nvb2 = ResourceBlend\nvb3 = ResourcePosition\nib = ResourceIndex\n"
+        "drawindexed = 3, 0, 0\n$own_seen = 1\n"
+        "[ResourcePosition]\ntype = Buffer\nstride = 16\nfilename = position.buf\n"
+        "[ResourceBlend]\ntype = Buffer\nstride = 16\nfilename = blend.buf\n"
+        "[ResourceIndex]\ntype = Buffer\nformat = R32_UINT\nfilename = index.buf\n" % crc32c(struct.pack("<3H", 0, 1, 2)), encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_OWN_MESH="1", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "a section without a component that draws a mesh of its own"
+    checks.equal(result.returncode, 0, label + ": the Mod's triangle stands where the game's draw stood, on the game's bone, and follows it")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    packages = status.get("packages", [])
+    checks.equal([(Path(p.get("path", "")).parent.name, p.get("components", -1) > 0) for p in packages], [("fixture", True), ("props", False)],
+                 label + ": the character Mod's package and the one without a skeleton")
+    if len(packages) == 2:
+        prop = packages[1]
+        counters = prop.get("counters", {})
+        checks.check(prop.get("activated") and counters.get("own_mesh", 0) > 0 and prop.get("package_bytes", 0) > 0 and not prop.get("last_reason"),
+                     label + ": its package went to the GPU with its mesh files and drew, nothing refused " +
+                     str((prop.get("activated"), counters.get("own_mesh"), prop.get("package_bytes"), prop.get("last_reason"))))
+        checks.equal(packages[0].get("ini", {}).get("variables", {}).get("$\\runtime_prop\\own_seen"), 1, label + ": its lists ran to their end")
 
 
 def folder_without_character(checks):

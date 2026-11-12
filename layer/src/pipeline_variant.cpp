@@ -141,8 +141,11 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
             for (const auto& pair : s->bindings)
                 if (!pair.second.immutable_samplers.empty() || pair.second.flags) { reason = "immutable_sampler_or_binding_flags"; return false; }
         }
-        // A texture-only draw moves images; a twin of the application's pipeline (D-133) only drops the dither.
-        if (patch.images.empty() && patch.nulls.empty() && !patch.no_dither) { reason = "texture_only_variant_without_images"; return false; }
+        // A texture-only draw moves images; a twin of the application's pipeline (D-133) only drops the dither;
+        // a Mod's own mesh under the application's vertex stage (D-176) may change the vertex input alone.
+        if (patch.images.empty() && patch.nulls.empty() && !patch.no_dither && !patch.own_geometry) {
+            reason = "texture_only_variant_without_images"; return false;
+        }
     } else if (!prepare_vertex_variant(recipe, source, max_sets, rewritten, reason)) return false;
     size_t fs_index=recipe.stages.size();std::vector<uint32_t> fragment;
     own_set = static_cast<uint32_t>(source.sets.size());

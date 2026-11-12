@@ -32,6 +32,9 @@ struct FragmentPatch {
     // The fragment stage without the character dither (D-133, efmi::gpu::remove_dither), as RabbitFX's
     // replaced shader skips its discard while its gate is set. A module without the dither is unchanged.
     bool no_dither = false;
+    // With keep_vertex: the variant draws a Mod's own buffers under the application's vertex stage (D-176),
+    // so one for its vertex input alone, without an image moved, is a variant.
+    bool own_geometry = false;
 };
 std::vector<VkDescriptorSetLayoutBinding> private_draw_bindings(uint32_t image_count);
 

@@ -22,6 +22,7 @@ VariantCache::Key VariantCache::key_for(uint64_t identity, const VertexInputReci
     }
     key.fragment.push_back(fragment.keep_vertex ? 1u : 0u);
     key.fragment.push_back(fragment.no_dither ? 1u : 0u);
+    key.fragment.push_back(fragment.own_geometry ? 1u : 0u);
     return key;
 }
 

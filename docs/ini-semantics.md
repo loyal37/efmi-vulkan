@@ -709,9 +709,12 @@ The layer:
   images. A Mods folder without any character Mod loads, presents and reloads as any other (the
   generation is the folder's own program). A character INI disabled by its file's name leaves its
   folder's other INIs enabled, as under the original: their sections then have such a package.
-- Not yet: a section without a component that draws a mesh of its own (refused: "INI hide override
-  unexpectedly emits geometry"), and a texture of another package's folder bound in a draw ("INI image
-  not in prepared resource catalogue").
+- A section without a component that draws a mesh of its own (D-176, 2026-11-12): the game's pipeline
+  with its vertex stage kept, the vertex input the Mod's streams need, the Mod's images; the game's sets
+  stay bound, so the vertices read the game's own bones of that draw, as under the original, where the
+  lists' draw goes out with the game's shaders and bindings. No identity, no import, no merged skeleton.
+- Not yet: a texture of another package's folder bound in a draw ("INI image not in prepared resource
+  catalogue").
 - Checked: the live INI scene's Mods folder has `fixture\parts\part.ini` with a section for the scene's
   draw that no section of the character INI matches (three indices at 30); its variable is 1 after the
   scene, and the package has that section. Offline, the installed Mods in every key state: 277 sections
@@ -722,6 +725,10 @@ The layer:
   presents, the section runs at the program's fifth mesh, both entries); the Mods folder scene's
   `meshonly` INI as a package. On the build before: no second package, and the folder without a
   character Mod loads nothing.
+- Checked for D-176: the scene with the fixture and `props\prop.ini`, whose section hides the scene's
+  unmatched draw and draws a triangle of its own, moved, weighted to that draw's bone: it stands on the
+  application's bone and follows it, the package without a skeleton went to the GPU with its mesh files,
+  a runtime disable returns the application's mesh. On the build before: the plan refused.
 
 ## A character's components and their bones (D-175, BUG-093)
 

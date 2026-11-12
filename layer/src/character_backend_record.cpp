@@ -254,7 +254,9 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     request.vertex_stride = [&found](unsigned slot, uint32_t& stride, std::string& why) { return vertex_stride(found->second, slot, stride, why); };
                 }
                 bool skip = false, added = false, textures = false; std::string reason;
-                if (!plan_draw(request, runtime_list, skip, added, reason, nullptr, &textures)) return refuse(C_STATE, "INI hide: " + reason);
+                // With the pipeline's vertex input, which a list that draws a mesh of its own is planned by (D-176).
+                const VertexInputRecipe* const vertex = found != device->pipes.end() && found->second.recipe ? &found->second.recipe->vertex : nullptr;
+                if (!plan_draw(request, runtime_list, skip, added, reason, vertex, &textures)) return refuse(C_STATE, "INI hide: " + reason);
                 if (!skip && !textures) return false;
                 // A draw the plan added gets its material plans now: a later plan of the same state adds nothing.
                 if (added && !refresh_materials()) return false;
@@ -265,7 +267,12 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                         return refuse(C_PIPELINE, "texture-only draw pipeline metadata missing");
                     return record_textures(cb, r, pipe->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
                 }
-                if (runtime_list.count) return refuse(C_STATE, "INI hide override unexpectedly emits geometry");
+                if (runtime_list.count) {
+                    // The lists hide the game's draw and draw a mesh of their own (D-176).
+                    if (found == device->pipes.end() || !found->second.recipe || !found->second.layout)
+                        return refuse(C_PIPELINE, "a Mod's own mesh: pipeline metadata missing");
+                    return record_own_mesh(cb, r, found->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                }
             } else if (!on_device) return bring_up();
             // With the package's mesh left to the game this frame, what it would hide stays as well.
             if (!gate_open) return gated();
@@ -899,6 +906,141 @@ bool CharacterGeneration::record_textures(CmdBuf* cb, const DrawRec& r, const Pi
     if (origin) ++counters[origin == 1 ? C_DERIVED : C_INHERITED];
     ++counters[C_MATERIAL_ITEMS];
     if (plans[0]->compatibility) ++counters[C_COMPAT_ITEMS];
+    return true;
+}
+
+// The original runs such a section's lists with the game's draw state on the context: `handling = skip`
+// drops the game's draw, the lists bind the Mod's buffers and textures, and their draw calls draw with the
+// game's shaders and whatever else the game bound, its bone buffer among it. Here that is the game's
+// pipeline with its vertex stage kept (as a texture-only draw's, D-083) and the vertex input the Mod's
+// streams need; the game's sets stay bound, so the vertices read the game's own bones of this draw.
+bool CharacterGeneration::record_own_mesh(CmdBuf* cb, const DrawRec& r, const PipeInfo& pipe, uint32_t section, uint64_t present,
+                                          const CharacterList& list)
+{
+    if (cb->secondary || !cb->in_rp || cb->dyn_rp_count || cb->m2_extended_bind)
+        return refuse(C_STATE, "a Mod's own mesh outside a primary classic render pass or after extended binds");
+    auto& plans = scratch_material_plans; plans.clear();
+    auto& views = scratch_material_views;
+    uint32_t origin = 0;
+    if (!material_draws(pipe, section, r, present, list, plans, views, origin)) return false;
+    if (plans.size() != list.count) return refuse(C_MATERIAL, "a Mod's own mesh: material plans incomplete");
+    // The private set above the pipeline's own sets, and an application set there bound again after.
+    uint32_t restore_slot = 0;
+    VkPipelineLayout restore_layout = VK_NULL_HANDLE;
+    VkDescriptorSet restore_set = VK_NULL_HANDLE;
+    auto& restore_offsets = scratch_restore_offsets; restore_offsets.clear();
+    const uint32_t own = static_cast<uint32_t>(pipe.layout->sets.size());
+    if (own >= kMaxSets) {
+        if (device->max_layout_sets > own) return refuse(C_SET3, "a Mod's own mesh: the slot above the pipeline's sets is in use and not tracked");
+    } else if (r.sets[own].pushed) {
+        return refuse(C_SET3, "a Mod's own mesh with pushed descriptors at the private set's slot");
+    } else if (r.sets[own].set) {
+        const SetBind& app = r.sets[own];
+        restore_slot = own;
+        auto live = device->pipeline_layouts.find(app.layout_handle);
+        if (!app.layout_handle || !app.layout || app.unsupported || live == device->pipeline_layouts.end() ||
+            live->second != app.layout || (app.dyn_count && uint64_t(app.dyn_first) + app.dyn_count > cb->dyn.size()))
+            return refuse(C_SET3, "a Mod's own mesh with an application set that cannot be bound again");
+        restore_layout = app.layout_handle; restore_set = app.set;
+        restore_offsets.assign(cb->dyn.begin() + app.dyn_first, cb->dyn.begin() + app.dyn_first + app.dyn_count);
+    }
+    // The application's geometry, put back after: the vertex bindings the pipeline reads among the tracked
+    // ones. A stream the lists bind at a slot the pipeline does not read is nothing to the draw.
+    DrawGeometry& original = scratch_original;
+    uint32_t slots = 0;
+    for (const auto& b : pipe.recipe->vertex.bindings) if (b.binding < kMaxVb) slots = std::max(slots, b.binding + 1);
+    if (!slots || !r.ib) return refuse(C_BINDINGS, "a Mod's own mesh without tracked vertex or index bindings");
+    for (uint32_t slot = 0; slot < slots; ++slot) {
+        if (!r.vb[slot].buf) return refuse(C_BINDINGS, "a Mod's own mesh: the game's vertex bindings incomplete");
+        original.buffers.push_back(r.vb[slot].buf); original.offsets.push_back(r.vb[slot].off);
+    }
+    original.index = r.ib; original.index_offset = r.ib_off;
+    original.index_type = r.index_size == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+    // One variant per draw: the game's stages, the Mod's vertex input, the Mod's images.
+    const bool dithered = g_dither_gated.load(std::memory_order_relaxed) && pipeline_dither(pipe.id, *pipe.recipe);
+    const bool no_dither = dithered && g_dither_off.load(std::memory_order_relaxed);
+    auto& variants = scratch_variants; variants.assign(list.count, {});
+    struct Waiting { uint32_t draw; VertexInputRecipe vertex; FragmentPatch patch; };
+    std::vector<Waiting> waiting; // allocates only for a cold variant
+    for (uint32_t i = 0; i < list.count; ++i) {
+        VertexInputRecipe vertex;
+        std::string reason;
+        if (!package.vertex_input(package.draws[list.first + i], pipe.recipe->vertex, vertex, reason))
+            return refuse(C_VERTEX, "a Mod's own mesh: vertex declaration: " + reason);
+        FragmentPatch patch = plans[i]->patch;
+        patch.keep_vertex = true; patch.own_geometry = true; patch.no_dither = no_dither;
+        const auto result = cache->request(pipe.id, pipe.recipe, pipe.layout, vertex, patch);
+        if (dithered) cache->prepare(pipe.id, pipe.recipe, pipe.layout, vertex, other_state(patch));
+        if (result.variant) { variants[i] = result.variant; continue; }
+        if (result.state == VariantState::Queued || result.state == VariantState::Building) { waiting.push_back({i, std::move(vertex), std::move(patch)}); continue; }
+        return refuse(C_VARIANT, "a Mod's own mesh: variant: " + result.reason);
+    }
+    bool pending = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    for (const auto& request : waiting) {
+        const auto remaining = std::max(std::chrono::milliseconds(0),
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
+        const auto result = cache->await(pipe.id, pipe.recipe, pipe.layout, request.vertex, request.patch, remaining);
+        if (result.variant) { variants[request.draw] = result.variant; continue; }
+        if (result.state == VariantState::Queued || result.state == VariantState::Building) { pending = true; continue; }
+        return refuse(C_VARIANT, "a Mod's own mesh: variant: " + result.reason);
+    }
+    if (pending) { gate_open = false; frame_variants_pending = true; ++counters[C_PENDING]; return false; }
+    // Images and variants were asked for above, so a closed frame still brings them up.
+    if (!gate_open) return gated();
+    const auto held = character_owner_for(cb->owners, generation_key.get(), [this] { return std::shared_ptr<CommandOwner>(command()); });
+    if (!held) return refuse(C_EXHAUSTED, "character snapshot pool is at capacity or refilling");
+    CharacterCommand* const command_owner = static_cast<CharacterCommand*>(held.get());
+    command_owner->used = true;
+    const auto mesh_owner = std::static_pointer_cast<const GpuMesh>(command_owner->keep);
+    if (!mesh_owner) return refuse(C_EXHAUSTED, "character command owner has no mesh");
+    // Everything is decided; nothing is emitted before every draw has its set and its buffers.
+    auto& geometry = scratch_geometry; if (geometry.size() < list.count) geometry.resize(list.count);
+    auto& items = scratch_items; items.clear();
+    static const InstanceEntry unused{};
+    for (uint32_t i = 0; i < list.count; ++i) {
+        const CharacterDraw& d = package.draws[list.first + i];
+        const uint32_t count = static_cast<uint32_t>(views[i].size());
+        const auto arena = count ? command_owner->material_snapshots.find(count) : command_owner->material_snapshots.end();
+        DrawSnapshots* const snapshots = count ? (arena == command_owner->material_snapshots.end() ? nullptr : arena->second.get())
+                                               : command_owner->snapshots.get();
+        if (!snapshots) return refuse(C_EXHAUSTED, "a Mod's own mesh: no arena for its images");
+        SnapshotSlot slot;
+        if (!snapshots->append_images(unused, views[i], slot)) return refuse(C_EXHAUSTED, snapshots->reason);
+        DrawGeometry& g = geometry[i];
+        g = original;
+        for (uint32_t s = 0; s < g.buffers.size() && s < 4; ++s) {
+            if (d.vb[s] == kCharacterOwned) {
+                // Checked by vertex_input above: the slot has its owned buffer.
+                const auto* o = d.owned_stream(s);
+                g.buffers[s] = reinterpret_cast<VkBuffer>(o->buffer); g.offsets[s] = o->offset;
+                command_owner->owned.push_back(o->keep); ++counters[C_OWNED];
+            } else if (d.vb[s] != kCharacterNone) { g.buffers[s] = mesh_owner->buffer; g.offsets[s] = package.streams[d.vb[s]].offset; }
+        }
+        if (d.indexed) {
+            const auto& index = package.streams[d.index_stream];
+            g.index = mesh_owner->buffer; g.index_offset = index.offset;
+            g.index_type = index.stride == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+        }
+        IndexedDraw args; args.count = d.count; args.first = d.first; args.vertex_offset = d.base;
+        args.instances = d.instances; args.first_instance = d.first_instance; args.indexed = d.indexed;
+        items.push_back({variants[i].get(), slot.set, slot.offset, &g, args});
+    }
+    command_owner->variants.insert(command_owner->variants.end(), variants.begin(), variants.end());
+    if (!emit_variant_draws(draw, cb->handle, items.data(), items.size(), r.bound ? r.bound : r.pipeline, original))
+        return refuse(C_VARIANT, "a Mod's own mesh: draw transaction refused");
+    if (restore_layout) {
+        draw.CmdBindDescriptorSets(cb->handle, VK_PIPELINE_BIND_POINT_GRAPHICS, restore_layout, restore_slot, 1, &restore_set,
+                                   static_cast<uint32_t>(restore_offsets.size()), restore_offsets.empty() ? nullptr : restore_offsets.data());
+        ++counters[C_SET3_RESTORED];
+    }
+    ++counters[C_OWN_MESH];
+    if (origin) ++counters[origin == 1 ? C_DERIVED : C_INHERITED];
+    counters[C_ITEMS] += list.count;
+    for (const auto* plan : plans) {
+        if (!plan->patch.images.empty() || !plan->patch.nulls.empty()) ++counters[C_MATERIAL_ITEMS];
+        if (plan->compatibility) ++counters[C_COMPAT_ITEMS];
+    }
     return true;
 }
 

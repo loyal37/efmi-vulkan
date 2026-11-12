@@ -1052,7 +1052,11 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
         auto& draws = scratch_draws_; draws.clear();
         auto& material = scratch_material_; size_t material_count = 0;
         uint64_t required = 0;
+        // A draw without a component (D-176) draws under the game's own vertex stage: its blend stream's bones
+        // are the game's of that draw, not a merged skeleton's, and are neither checked against one nor required.
+        const bool own_bones = request.component == UINT32_MAX;
         auto& signature = scratch_signature_; signature.clear();
+        signature.push_back(own_bones ? 'P' : 'C');
         for (const auto& item : plan.items) {
             using Op = efmi::assets::FileOperation;
             if (item.operation == Op::BindPixelResource) {
@@ -1206,11 +1210,11 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                 // indices in the last 8 bytes of an 8- or 16-byte element, weights before them. A stream
                 // first seen there is checked once, as decode checks a package's; one that fits neither
                 // keeps no bone mask.
-                if (bound.vb[2] == kCharacterOwned) throw std::runtime_error("An owned blend stream has no known bone indices");
-                if (index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset != kCharacterNone &&
+                if (!own_bones && bound.vb[2] == kCharacterOwned) throw std::runtime_error("An owned blend stream has no known bone indices");
+                if (!own_bones && index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset != kCharacterNone &&
                     package.streams[bound.vb[2]].bone_index_bytes != index_bytes)
                     throw std::runtime_error("One blend stream under two blend-index widths");
-                if (index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset == kCharacterNone) {
+                if (!own_bones && index_bytes && bound.vb[2] != kCharacterNone && package.streams[bound.vb[2]].bone_index_offset == kCharacterNone) {
                     const uint32_t stride = package.streams[bound.vb[2]].stride;
                     uint32_t indices = kCharacterNone, weights = kCharacterNone, weight_bytes = 2;
                     if (vertex) {
@@ -1268,7 +1272,7 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
                         logf("INI draw reads vertices past its files (the original reads zeros there); that draw is left out");
                     continue;
                 }
-                for (uint32_t slot = 0; slot < 4; ++slot) {
+                for (uint32_t slot = 0; slot < 4 && !own_bones; ++slot) {
                     const uint32_t stream = bound.vb[slot];
                     if (stream != kCharacterNone && stream != kCharacterOwned) required |= package.streams[stream].spans;
                 }

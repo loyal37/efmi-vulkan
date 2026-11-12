@@ -404,7 +404,8 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > panel INIs' marks. The gate A of section 2 is thereby no longer a gate for an INI beside a character INI.
 > 2026-11-12 (D-174): P2-1's second part. An INI outside every character Mod's folder has a package
 > without a skeleton for its mesh sections, and a Mods folder without a character Mod loads: gate A now
-> decides only which packages have a skeleton. P2-2 is written and not yet tested; P2-4 is not begun.
+> decides only which packages have a skeleton. P2-2 done the same day (D-176): a section without a
+> component draws a mesh of its own under the game's vertex stage and bones. P2-4 is not begun.
 > An installed Mod met R-04 that night (BUG-093), and a part of R-04 went with it (D-175): components
 > may share bones and either LOD may have a remap. Left of P2-3: the skeleton and the sections are read
 > by the exporter's names at load.

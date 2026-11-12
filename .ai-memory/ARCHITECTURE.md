@@ -107,7 +107,8 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
    (D-173). One of the Mod's namespace whose list assigns a constant component and LOD is a part of the
    character; one that assigns none, and one of another INI of the Mod's folder, is a section without a
    component (its lists run at the draws it matches, and the plan says whether the draw is hidden, drawn
-   with the Mod's textures, or left). The skeleton comes from the Mod's initializer and its pools: a
+   with the Mod's textures, replaced by a mesh of the Mod's under the game's vertex stage and bones
+   (D-176), or left). The skeleton comes from the Mod's initializer and its pools: a
    component is an offset and a count of bones with a remap per LOD, and two may share bones (D-175; the
    package's `spans` are what a draw's needed bones are counted in). A LOD no line assigned has no remap. The mesh sections of an INI outside every character Mod's folder are
    the sections of that folder's package without a skeleton (D-174).

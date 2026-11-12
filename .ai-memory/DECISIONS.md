@@ -1077,6 +1077,15 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-176: A section without a component draws a mesh of its own under the game's vertex stage (review Phase 2, P2-2)
+
+- Date: 2026-11-12.
+- The original: a TextureOverride's lists run on the game's draw state. `handling = skip` drops the game's draw; `vbN = Resource`, `ib = Resource` and the texture assignments bind the Mod's resources on the context, and `drawindexed` is a DrawIndexed there: with the game's shaders, its constant buffers and whatever else the game bound, the bone buffer its vertex shader reads among it. No Core list is called; the bones are the game's own of that draw, so the Mod's blend stream names the bones of the game's part. D3D11 takes the Mod's buffers under the game's input layout by their strides.
+- The layer before: only a section with a component drew a mesh, through the merged skeleton (identity, import, the vertex stage re-pointed to the private set). A section without one could hide the draw or give it textures (D-083); a plan with a draw was refused, "INI hide override unexpectedly emits geometry", and the game's draw stayed.
+- Decision: `CharacterGeneration::record_own_mesh`. The game's pipeline with its vertex stage kept (a variant with `keep_vertex` and `own_geometry`: one for its vertex input alone is a variant now), the vertex input the Mod's streams need (`CharacterPackage::vertex_input`: their strides, the list's blend-index and offset edits), the Mod's images through the private set as in a texture-only draw. The game's sets stay bound, so the vertices read the game's bones of this draw. `CharacterProgram::plan` checks no blend stream of a draw without a component against a merged skeleton and requires no bones of it (`own_bones`); such plans are kept apart from a component's by their signature.
+- Counter `own_mesh`. It serves an INI beside a character Mod and one in a package without a skeleton alike (D-173, D-174).
+- Limits: the vertex slots the pipeline reads among the four tracked; a translucent draw of the EFMITTL library in such a list is drawn in the pass, not captured; an owned GPU buffer bound as a vertex stream is taken as in a component's draw.
+
 ## D-175: Components may share bones, and either LOD may have a remap (BUG-093; review R-04, a part of P2-3)
 
 - Date: 2026-11-12. The user's Yvonne Mod, changed that night by a tool that puts the LOD 1 parts on the LOD 0 part's bones, was left out whole: "Skeleton components overlap".
