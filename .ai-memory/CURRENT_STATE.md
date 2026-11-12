@@ -6,6 +6,11 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.5: Phase 2's first steps and BUG-093 as one build (2026-11-12)
+
+- What it holds beyond 2.1.4: D-173 (the sections of every INI of a Mod's folder), D-174 (packages without a skeleton, a Mods folder without a character Mod), D-175 (components that share bones, a remap at either LOD: BUG-093, the user's Yvonne), D-176 (a section without a component draws a mesh of its own). The sections below have each.
+- Verified on the work tree's build of the version commit (sandbox): the whole build (shared header stamp 0x4437a4d9119220e0, unchanged) and the whole regression suite, 57 steps, all passed.
+
 ## Phase 2, P2-2: a section without a component draws a mesh of its own (D-176, 2026-11-12; sandbox only, not deployed)
 
 - From the original: such a section's lists run on the game's draw state; their draw goes out with the game's shaders and bindings, its bone buffer among them. D-176 has it.
