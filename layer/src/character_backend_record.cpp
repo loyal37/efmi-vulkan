@@ -198,6 +198,10 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     auto lap = [&](Stage s) { const uint64_t now_us = host_time_us(); stage_us[s] += now_us - mark_us; mark_us = now_us; };
     const uint64_t present = frame.load(std::memory_order_relaxed);
     InstanceEntry entry, patched;
+    // A draw whose vertex shader reads its bones from a uniform block of 4096 vectors (D-186): the block's four
+    // config rows as the game bound them, and whether its row 0 names a previous pose of its own.
+    uint8_t block_config[64] = {};
+    bool constant_bones = false, block_previous = false;
     const CharacterList* list = nullptr;
     CharacterList runtime_list;
     Identity* identity = nullptr;
@@ -364,11 +368,32 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         // Import this component's poses into the identity's master, whatever happens to the draw.
         uint32_t offsets[2];
         std::memcpy(offsets, entry.data() + 80, 8);
-        const uint8_t dynamic = (offsets[0] >= MergedSkeleton::kStaticRows ? 1 : 0) | (offsets[1] >= MergedSkeleton::kStaticRows ? 2 : 0);
+        uint8_t dynamic = (offsets[0] >= MergedSkeleton::kStaticRows ? 1 : 0) | (offsets[1] >= MergedSkeleton::kStaticRows ? 2 : 0);
         const BoneSite site = site_of(pipe->second);
+        // Bones in a uniform block of 4096 vectors, the Core's vs-cb3 / vs-cb4 source (D-186): the block where the draw
+        // binds it. Its row 0 has the poses' rows (y the current, z the previous; bone i at row offset + 4 + 3 * i), and
+        // the Core's importer takes the current pose, and the previous where z differs from y, whatever the entry says.
+        BoundRange block;
+        constant_bones = site.ok && site.constant;
+        if (constant_bones) {
+            const auto& bound = r.sets[site.set];
+            if ((bound.dyn_count && uint64_t(bound.dyn_first) + bound.dyn_count > cb->dyn.size()) ||
+                !bound_range(bound, site.set, site.binding, bound.dyn_count ? cb->dyn.data() + bound.dyn_first : nullptr, bound.dyn_count, block) ||
+                (block.type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && block.type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) ||
+                !read_range(&block, 0, sizeof(block_config), block_config))
+                return refuse_shape(C_BONES, "character bones in a uniform block: the block is not bound or not mapped");
+            std::memcpy(offsets, block_config + 4, 8);
+            block_previous = offsets[0] != offsets[1];
+            dynamic = block_previous ? 3 : 1;
+            // The block the draw then reads has the four config rows and at least the current pose (the Core's copy of the
+            // merged skeleton, read past its 4096 vectors, would give zeros).
+            if (4 + size_t(package.bones) * MergedSkeleton::kRowsPerBone > 4096)
+                return refuse(C_IMPORT, "character bones in a uniform block: the merged skeleton is larger than the block's 4096 vectors");
+        }
         // On the device (D-127) every draw's component is imported in its own recording, whatever happens
-        // to the draw; on the CPU the master is imported once per frame.
-        gpu_draw = identity->gpu_frame && identity->ring;
+        // to the draw; on the CPU the master is imported once per frame. The device's import reads a storage
+        // buffer, so a uniform block's bones are imported on the CPU (D-186).
+        gpu_draw = identity->gpu_frame && identity->ring && !constant_bones;
         if (gpu_draw) {
             const auto held = character_owner_for(cb->owners, generation_key.get(), [this] { return std::shared_ptr<CommandOwner>(command()); });
             bone_owner = static_cast<CharacterCommand*>(held.get());
@@ -386,11 +411,16 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             auto& bone_ranges = scratch_bone_ranges; bone_ranges.clear();
             const auto& bound = r.sets[site.set];
             bool readable = !(bound.dyn_count && uint64_t(bound.dyn_first) + bound.dyn_count > cb->dyn.size());
-            if (readable) collect_buffer_ranges_locked(device, bound, bound.dyn_count ? cb->dyn.data() + bound.dyn_first : nullptr, bound.dyn_count, site.set, bone_ranges);
-            const BoundRange* bones = nullptr;
-            for (const auto& range : bone_ranges)
-                if (range.element == 0 && range.binding == site.binding &&
-                    (range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) bones = &range;
+            const BoundRange* bones = constant_bones ? &block : nullptr;
+            if (!constant_bones) {
+                if (readable) collect_buffer_ranges_locked(device, bound, bound.dyn_count ? cb->dyn.data() + bound.dyn_first : nullptr, bound.dyn_count, site.set, bone_ranges);
+                for (const auto& range : bone_ranges)
+                    if (range.element == 0 && range.binding == site.binding &&
+                        (range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || range.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) bones = &range;
+            }
+            // The window begins at the matrix before bone zero (offset + 3 + 3 * i is bone i); in a uniform block bone i
+            // is at offset + 4 + 3 * i, one row further.
+            const uint64_t window = constant_bones ? 1 : 0;
             if (gpu_draw && !(bones && readable && prepare_bone_job(*identity, *bone_owner, section->component, component, remapped, needed, *bones, offsets, dynamic, lod)))
                 gpu_draw = false; // this draw imports on the CPU and binds the master
             if (gpu_draw) {
@@ -400,8 +430,8 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
 #if defined(EFMI_COMMAND_TIMING) || defined(EFMI_PHASE_TIMING)
                 const uint64_t bones_read_began = host_time_us();
 #endif
-                readable = readable && (!(dynamic & 1) || read_range(bones, uint64_t(offsets[0]) * 16, needed, current.data())) &&
-                           (!(dynamic & 2) || read_range(bones, uint64_t(offsets[1]) * 16, needed, previous.data()));
+                readable = readable && (!(dynamic & 1) || read_range(bones, (uint64_t(offsets[0]) + window) * 16, needed, current.data())) &&
+                           (!(dynamic & 2) || read_range(bones, (uint64_t(offsets[1]) + window) * 16, needed, previous.data()));
 #if defined(EFMI_COMMAND_TIMING) || defined(EFMI_PHASE_TIMING)
                 if (program) program->note_timing("bones read", host_time_us() - bones_read_began);
                 const uint64_t bones_import_began = host_time_us();
@@ -411,13 +441,17 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 } else {
                     std::string reason;
                     static const std::vector<uint16_t> identity_map;
-                    const auto result = identity->skeleton.import_component(0, section->component, lod, entry,
-                        {current.data(), needed}, {previous.data(), needed}, remapped ? remap_table : identity_map, 1.0f, reason);
+                    const auto result = constant_bones
+                        ? identity->skeleton.import_poses(0, section->component, lod, dynamic,
+                              {current.data(), needed}, {previous.data(), needed}, remapped ? remap_table : identity_map, 1.0f, reason)
+                        : identity->skeleton.import_component(0, section->component, lod, entry,
+                              {current.data(), needed}, {previous.data(), needed}, remapped ? remap_table : identity_map, 1.0f, reason);
 #if defined(EFMI_COMMAND_TIMING) || defined(EFMI_PHASE_TIMING)
                     if (program) program->note_timing("bones import", host_time_us() - bones_import_began);
 #endif
                     if (result == BoneImportResult::Imported) {
                         identity->coverage[section->component] |= dynamic;
+                        identity->cpu_coverage[section->component] |= dynamic;
                         ++identity->generation;
                     } else if (result == BoneImportResult::Rejected) {
                         ++counters[C_IMPORT];
@@ -510,6 +544,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             const SourceFacts& facts = facts_of(pipe->second, site);
             request.source_vs_config_slot = facts.vs_config_slot;
             request.rolling_bone_source = facts.rolling_bones;
+            request.constant_bone_source = facts.constant_bones;
             request.source_srv = [&facts](wchar_t stage, unsigned slot, uint32_t& type, uint32_t& dimension, uint32_t& stride, std::string& why) {
                 const wchar_t* names = L"vhdgp";
                 const wchar_t* at = stage ? wcschr(names, stage) : nullptr;
@@ -549,13 +584,15 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         lap(S_PLAN);
         if (!list->count) { if (!gate_open) return gated(); ++counters[C_HIDDEN]; return true; }
         // The bones the list's vertices read, span by span: each was imported by some component it lies in
-        // (BUG-093: a LOD part of its own on another part's bones fills them as well as that part does).
+        // (BUG-093: a LOD part of its own on another part's bones fills them as well as that part does). A uniform
+        // block's bones are read off the CPU master: only an import into it covers them (D-186).
+        const std::vector<uint8_t>& imported = constant_bones ? identity->cpu_coverage : identity->coverage;
         for (uint32_t s = 0; s < package.spans.size(); ++s) {
             if (!(list->required >> s & 1)) continue;
             bool covered = false;
             for (uint64_t cover = package.spans[s].cover; cover && !covered; cover &= cover - 1) {
                 unsigned long c = 0; _BitScanForward64(&c, cover);
-                covered = c < identity->coverage.size() && (identity->coverage[c] & dynamic) == dynamic;
+                covered = c < imported.size() && (imported[c] & dynamic) == dynamic;
             }
             if (!covered) { ++counters[C_INCOMPLETE]; return false; }
         }
@@ -817,7 +854,10 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         // Images and variants were asked for above, so a closed frame still brings them up.
         if (!gate_open) return gated();
         std::string reason;
-        if (!identity->skeleton.patch_entry(0, entry, patched, reason)) return refuse(C_IMPORT, reason);
+        // With a uniform block's bones the Core moves the instance window to the instance and patches nothing (its
+        // SetInstanceConfig_VS); the offsets are the block's (D-186).
+        if (constant_bones) patched = entry;
+        else if (!identity->skeleton.patch_entry(0, entry, patched, reason)) return refuse(C_IMPORT, reason);
     }
 
     lap(S_VARIANTS);
@@ -843,7 +883,32 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     scratch_pending_captures.clear(); // nothing of an earlier refused draw goes to the queue
     const std::vector<uint8_t>& master = identity->skeleton.bytes();
     const uint64_t key = identity->id << 32 ^ identity->generation;
+    // A uniform block's bones (D-186): binding 0 is the block the vertex shader reads, the Core's ResourceConfigWithBones:
+    // the game's four config rows, then the object's merged current pose, then its previous pose where the game's block
+    // has one of its own and both fit the 4096 vectors. Row 0's y names the current pose (from row 4), z the previous
+    // (0, the current, without one); the Core keeps the game's offsets, which name its copy's rows where y is 0.
+    uint64_t block_key = 0;
+    if (constant_bones) {
+        const size_t pose = size_t(identity->skeleton.bones()) * MergedSkeleton::kRowsPerBone;
+        const bool both = block_previous && 4 + 2 * pose <= 4096;
+        auto& rows = scratch_block;
+        rows.resize((4 + pose * (both ? 2 : 1)) * 16);
+        std::memcpy(rows.data(), block_config, sizeof(block_config));
+        const uint32_t at[2] = {0, both ? uint32_t(pose) : 0};
+        std::memcpy(rows.data() + 4, at, sizeof(at));
+        const size_t base = size_t(identity->skeleton.rows_for_instance(0)) * 16;
+        std::memcpy(rows.data() + 64, master.data() + base, pose * 16);
+        if (both) std::memcpy(rows.data() + 64 + pose * 16, master.data() + base + pose * 16, pose * 16);
+        // One slice per block of a recording, as the master's copies: the game's rows and the master's state name it.
+        block_key = 0xcbf29ce484222325ull;
+        auto mix = [&block_key](const void* data, size_t size) {
+            for (size_t i = 0; i < size; ++i) { block_key ^= static_cast<const uint8_t*>(data)[i]; block_key *= 0x100000001b3ull; }
+        };
+        mix(block_config, sizeof(block_config)); mix(&key, sizeof(key));
+        block_key |= 1ull << 63; // never a master's key, whose identity number in the high half stays far below
+    }
     const AppendBones append_bones = [&](DrawSnapshots& arena, const std::vector<SnapshotImage>& views, SnapshotSlot& out) {
+        if (constant_bones) return arena.append_rows(scratch_block.data(), scratch_block.size(), block_key, patched, views, out);
         if (!gpu_draw) return arena.append_shared(master.data(), master.size(), key, patched, views, out);
         const auto& ring = identity->ring;
         if (!arena.append_external(ring->buffer(snapshot_slot), ring->offset(snapshot_slot), ring->slot_bytes, patched, views, out)) return false;
@@ -916,6 +981,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     }
     lap(S_EMIT);
     ++counters[beside ? C_BESIDE : C_REPLACED];
+    if (constant_bones) ++counters[C_CONSTANT_BONES];
     counters[C_SHADOWED] += shadow_draws;
     game_shape().fitting.fetch_add(1, std::memory_order_relaxed);
     if (identity) identity->shown = true;

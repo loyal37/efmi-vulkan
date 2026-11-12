@@ -62,6 +62,10 @@ public:
     bool append_shared(const uint8_t* bones, size_t size, uint64_t key, const InstanceEntry&, SnapshotSlot&);
     bool append_shared(const uint8_t* bones, size_t size, uint64_t key, const InstanceEntry&,
                        const std::vector<SnapshotImage>&, SnapshotSlot&);
+    // A draw whose vertex shader reads its bones from a uniform block of 4096 vectors (D-186): binding 0 is `size`
+    // bytes laid out as that block, at most a slice, copied as append_shared copies the bones (one slice per key).
+    bool append_rows(const uint8_t* rows, size_t size, uint64_t key, const InstanceEntry&,
+                     const std::vector<SnapshotImage>&, SnapshotSlot&);
     // A texture-only draw (D-083): the entry and images; the bone binding points at the arena's
     // first slice without copying (the pipeline does not read it). Shared arenas only.
     bool append_images(const InstanceEntry&, const std::vector<SnapshotImage>&, SnapshotSlot&);
@@ -83,6 +87,9 @@ public:
     void recycle_completed() { for(auto& owner:image_owners_)owner.reset(); used_ = 0; sealed_ = false; slices_used_ = 0; slices_by_key_.clear(); }
 private:
     void clear();
+    // append_shared and append_rows: `size` bytes in the slice of `key` (or the next one), binding 0 that range.
+    bool append_slice(const uint8_t* bytes, size_t size, uint64_t key, const InstanceEntry&,
+                      const std::vector<SnapshotImage>&, SnapshotSlot&);
     bool valid_images(const std::vector<SnapshotImage>&);
     void write_images(const std::vector<SnapshotImage>&);
     bool create_storage(const VkPhysicalDeviceMemoryProperties&, const VkPhysicalDeviceLimits&, uint32_t capacity,

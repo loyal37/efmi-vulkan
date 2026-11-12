@@ -22,6 +22,11 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     // a game whose character draws the layer cannot read. Every frame is the game's, and the layer says once that the
     // game is not the one it knows.
     const bool unknown_game=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_UNKNOWN_GAME",value,sizeof(value)) && value[0]=='1';}();
+    // D-186 (LIMIT-027): EFMI_VK_TEST_CB_BONES=1, the character's three components drawn with a pipeline of four sets whose
+    // vertex shader reads its bones and their offsets from a uniform block of 4096 vectors at set 3 binding 0, as the
+    // game's dash after-images do (m2_fixture::constant_bones_shader). Each component's block is the bone buffer at an
+    // offset: row 0 its flags and the rows of its poses, its palette at rows offset + 4 + 3 * i of the block.
+    const bool cb_bones=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_CB_BONES",value,sizeof(value)) && value[0]=='1';}();
     const int own_mesh_mode=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_OWN_MESH",value,sizeof(value)) ? atoi(value) : 0;}();
     const bool own_mesh=own_mesh_mode!=0, beside=own_mesh_mode==2;
     // D-178: with EFMI_VK_TEST_UNMATCHED_SHADE=N a section of the scene's Mods folder gives the draw no section of
@@ -71,6 +76,28 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         VK(recipe.create(g.device,vkCreateGraphicsPipelines,four.layout,g.pass,with_extra,&four.pipeline));
         vkDestroyShaderModule(g.device,fragment,nullptr);
     }
+    // D-186: the after-image pipeline, the character's with the vertex shader that reads its bones from set 3.
+    struct Constant{VkDevice device;VkDescriptorSetLayout set=VK_NULL_HANDLE;VkPipelineLayout layout=VK_NULL_HANDLE;VkPipeline pipeline=VK_NULL_HANDLE;
+        ~Constant(){vkDeviceWaitIdle(device);if(pipeline)vkDestroyPipeline(device,pipeline,nullptr);if(layout)vkDestroyPipelineLayout(device,layout,nullptr);
+                    if(set)vkDestroyDescriptorSetLayout(device,set,nullptr);}
+    } constant{g.device};
+    if(cb_bones){
+        VkDescriptorSetLayoutBinding bindings[]={{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr},
+                                                 {1,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr},
+                                                 {2,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}};
+        VkDescriptorSetLayoutCreateInfo ci={VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};ci.bindingCount=3;ci.pBindings=bindings;
+        VK(vkCreateDescriptorSetLayout(g.device,&ci,nullptr,&constant.set));
+        VkDescriptorSetLayout layouts[]={g.sets[0],g.sets[1],g.sets[2],constant.set};
+        VkPipelineLayoutCreateInfo lc={VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};lc.setLayoutCount=4;lc.pSetLayouts=layouts;
+        VK(vkCreatePipelineLayout(g.device,&lc,nullptr,&constant.layout));
+        const auto code=m2_fixture::constant_bones_shader();
+        VkShaderModuleCreateInfo cc={VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};cc.codeSize=code.size()*4;cc.pCode=code.data();
+        VkShaderModule vertex;VK(vkCreateShaderModule(g.device,&cc,nullptr,&vertex));
+        size_t vs=0;while(recipe.stages[vs].stage!=VK_SHADER_STAGE_VERTEX_BIT)++vs;
+        auto with_constant=modules;with_constant[vs]=vertex;
+        VK(recipe.create(g.device,vkCreateGraphicsPipelines,constant.layout,g.pass,with_constant,&constant.pipeline));
+        vkDestroyShaderModule(g.device,vertex,nullptr);
+    }
     // Material runs: the character's fragment shader once more with its image at binding 8 of set
     // 1 instead of 6. The package has no profile for these bytes. The application binds the same
     // texture there, in a set of the layout this pipeline needs.
@@ -115,7 +142,8 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     auto tex=g.buffer(sizeof(uv),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);memcpy(tex.mapped,uv,sizeof(uv));
     auto blend=g.buffer(sizeof(blends),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);memcpy(blend.mapped,blends,sizeof(blends));
     auto index=g.buffer(sizeof(indices),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);memcpy(index.mapped,indices,sizeof(indices));
-    auto bones=g.buffer(65536,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    // With the after-image pipeline the bone buffer is also where its uniform blocks are, 64 KiB from each block's offset.
+    auto bones=cb_bones ? g.buffer(131072,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) : g.buffer(65536,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     auto row=[&](uint32_t r,float x,float y){float v[4]={x,y,0,0};memcpy(static_cast<uint8_t*>(bones.mapped)+r*16,v,16);};
     float tint[]={material?1.f:0.f,1,1,1};memcpy(bones.mapped,tint,16);
     if(material)memcpy(static_cast<uint8_t*>(bones.mapped)+258*16,tint,16);
@@ -132,6 +160,18 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     // The two four-set draws stand where components A and B stood before they were replaced.
     row(X_CUR+3,-.6f,-.6f);row(Y_CUR+3,0,-.6f);
     const uint32_t dynamic=static_cast<uint32_t>(std::max<VkDeviceSize>(256,g.properties.limits.minUniformBufferOffsetAlignment));
+    // D-186: each component's uniform block begins at an offset the device allows below its palette, and its row 0 says
+    // skinned with four weights and where its two poses are, counted from the block's row 4: bone i of the current pose is
+    // the palette's row current + 3 + 3 * i, as the bone buffer's.
+    uint32_t block_of[3]={};
+    if(cb_bones){
+        const uint32_t palettes[3][2]={{A_CUR,A_PREV},{B_CUR,B_PREV},{C_CUR,C_PREV}};
+        for(uint32_t k=0;k<3;++k){
+            const uint32_t at=(palettes[k][0]-1)*16/dynamic*dynamic,base=at/16;
+            const uint32_t config[4]={32|4,palettes[k][0]-1-base,palettes[k][1]-1-base,0x3f800000};
+            memcpy(static_cast<uint8_t*>(bones.mapped)+at,config,16);block_of[k]=at;
+        }
+    }
     auto instance=g.buffer(8*dynamic+65536,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     auto entry=[&](uint32_t slot,uint32_t current,uint32_t previous,float green,float x=10){
         uint8_t* e=static_cast<uint8_t*>(instance.mapped)+slot*dynamic;
@@ -150,8 +190,11 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     auto extra=g.buffer(dynamic+65536,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     {float shade[]={1,.25f,0,.5f};memcpy(static_cast<uint8_t*>(extra.mapped)+dynamic+16,shade,16);}
     auto readback=g.buffer(64*64*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,2},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,2}};
-    VkDescriptorPoolCreateInfo pi={VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=5;pi.poolSizeCount=material?3:2;pi.pPoolSizes=sizes;
+    std::vector<VkDescriptorPoolSize> sizes={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,cb_bones?3u:2u}};
+    if(material)sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,2});
+    if(cb_bones)sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,2});
+    VkDescriptorPoolCreateInfo pi={VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=cb_bones?6:5;
+    pi.poolSizeCount=static_cast<uint32_t>(sizes.size());pi.pPoolSizes=sizes.data();
     VK(vkCreateDescriptorPool(g.device,&pi,nullptr,&g.descriptors));
     VkDescriptorSet shifted_set=VK_NULL_HANDLE;
     VkDescriptorSet sets[4];VkDescriptorSetAllocateInfo si={VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -162,6 +205,17 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         writes[i].descriptorCount=1;writes[i].descriptorType=i?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo=&infos[i];}
     vkUpdateDescriptorSets(g.device,3,writes,0,nullptr);
+    // D-186: the after-image pipeline's set 3: the blocks in the bone buffer (by a dynamic offset), two small blocks.
+    VkDescriptorSet constant_set=VK_NULL_HANDLE;
+    if(cb_bones){
+        VkDescriptorSetAllocateInfo cs={VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        cs.descriptorPool=g.descriptors;cs.descriptorSetCount=1;cs.pSetLayouts=&constant.set;VK(vkAllocateDescriptorSets(g.device,&cs,&constant_set));
+        VkDescriptorBufferInfo blocks[]={{bones.handle,0,65536},{extra.handle,0,256},{extra.handle,dynamic,256}};
+        VkWriteDescriptorSet cw[3]={};
+        for(uint32_t i=0;i<3;++i){cw[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;cw[i].dstSet=constant_set;cw[i].dstBinding=i;cw[i].descriptorCount=1;
+            cw[i].descriptorType=i?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;cw[i].pBufferInfo=&blocks[i];}
+        vkUpdateDescriptorSets(g.device,3,cw,0,nullptr);
+    }
     if(material){
         VkDescriptorImageInfo image{VK_NULL_HANDLE,original_image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};write.dstSet=sets[1];write.dstBinding=6;
@@ -222,6 +276,14 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         vkCmdBindIndexBuffer(cmd,index.handle,0,VK_INDEX_TYPE_UINT16);
         auto bind=[&](uint32_t slot){uint32_t offset=slot*dynamic;
             vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,g.layout,0,3,sets,1,&offset);};
+        // D-186: a component drawn by the after-image pipeline with its block; the character's pipeline again after it.
+        auto constant_draw=[&](uint32_t slot,uint32_t block,uint32_t count,uint32_t first){
+            VkDescriptorSet four_sets[]={sets[0],sets[1],sets[2],constant_set};uint32_t offsets[]={slot*dynamic,block};
+            vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,constant.pipeline);
+            vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,constant.layout,0,4,four_sets,2,offsets);
+            vkCmdDrawIndexed(cmd,count,1,first,0,0);
+            vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,g.pipeline);
+        };
         if(four_sets){
             // The application draws with its four-set pipeline, then switches to the character's
             // pipeline and binds only sets 0 to 2: its set 3 stays bound and valid.
@@ -249,10 +311,13 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
             vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,g.pipeline);
         }
+        else if(cb_bones)constant_draw(E_A,block_of[0],3,0);
         else{bind(E_A);vkCmdDrawIndexed(cmd,3,1,0,0,0);}
         if(instanced && dynamic==256){bind(E_I0);vkCmdDrawIndexed(cmd,6,2,3,0,0);}
+        else if(cb_bones)constant_draw(E_B,block_of[1],6,3);
         else{bind(E_B);vkCmdDrawIndexed(cmd,6,1,3,0,0);}
-        bind(E_C);vkCmdDrawIndexed(cmd,9,1,9,0,0);
+        if(cb_bones)constant_draw(E_C,block_of[2],9,9);
+        else{bind(E_C);vkCmdDrawIndexed(cmd,9,1,9,0,0);}
         // Not a section of the package; drawn right after replaced draws without rebinding pipeline or buffers.
         bind(E_U);vkCmdDrawIndexed(cmd,3,1,30,0,0);
         // The neighbour draws B's index region with its own entry. It is never the character.
@@ -341,6 +406,11 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     }
     row(A_CUR+3,-.6f,-.6f);
     check(follows,"20 pose changes of one component move the other component's geometry in the same frame");
+    if(cb_bones){
+        // The whole character drawn by the after-image pipeline is the Mod's, on bones its uniform blocks hold.
+        self_probe("{\"cmd\":\"status\"}","character-final.json");
+        return;
+    }
     if(instanced){
         // The Core's IterateInstances: the character's instance is the Mod's, the other one the application's,
         // drawn alone with its own entry (`drawindexedinstanced = INDEX_COUNT, 1, ..., FIRST_INSTANCE + id`).

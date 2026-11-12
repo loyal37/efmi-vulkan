@@ -42,6 +42,11 @@ public:
                                       const InstanceEntry&, BoneWindow current, BoneWindow previous,
                                       const std::vector<uint16_t>& remap, float scale,
                                       std::string& reason);
+    // The same with the poses to import given (bit 0 the current, bit 1 the previous) instead of read off the
+    // entry's offsets: a source whose offsets are its own, the uniform block of the Core's cb3/cb4 source (D-186).
+    BoneImportResult import_poses(uint32_t instance, uint32_t component, uint32_t lod, uint8_t poses,
+                                  BoneWindow current, BoneWindow previous, const std::vector<uint16_t>& remap,
+                                  float scale, std::string& reason);
     // Copies all 256 bytes, replacing only nonstatic x/y offsets of constant 5. The new offsets are
     // one matrix below the instance's first merged bone, as the vertex shader expects.
     bool patch_entry(uint32_t instance, const InstanceEntry&, InstanceEntry& output,

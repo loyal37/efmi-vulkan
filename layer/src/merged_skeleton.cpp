@@ -91,6 +91,13 @@ BoneImportResult MergedSkeleton::import_component(uint32_t instance, uint32_t co
     const InstanceEntry& entry, BoneWindow current, BoneWindow previous,
     const std::vector<uint16_t>& remap, float scale, std::string& reason)
 {
+    const uint8_t poses = (word(entry, 80) >= kStaticRows ? 1 : 0) | (word(entry, 84) >= kStaticRows ? 2 : 0);
+    return import_poses(instance, component, lod, poses, current, previous, remap, scale, reason);
+}
+
+BoneImportResult MergedSkeleton::import_poses(uint32_t instance, uint32_t component, uint32_t lod, uint8_t poses,
+    BoneWindow current, BoneWindow previous, const std::vector<uint16_t>& remap, float scale, std::string& reason)
+{
     reason.clear();
     auto fail = [&](const char* text) { reason = text; return BoneImportResult::Rejected; };
     if (!begun_ || instance >= instances_ || component >= components_.size())
@@ -106,7 +113,7 @@ BoneImportResult MergedSkeleton::import_component(uint32_t instance, uint32_t co
     if (!remap.empty()) last = *std::max_element(remap.begin(), remap.end());
     // Core skips one matrix before source bone zero, then copies three float4 rows per bone.
     const size_t needed = (size_t(last) + 2) * kBytesPerBone;
-    const bool dynamic[2] = {word(entry, 80) >= kStaticRows, word(entry, 84) >= kStaticRows};
+    const bool dynamic[2] = {(poses & 1) != 0, (poses & 2) != 0};
     const BoneWindow sources[2] = {current, previous};
     for (uint32_t pose = 0; pose < 2; ++pose)
         if (dynamic[pose] && (!sources[pose].data || sources[pose].size < needed))

@@ -129,6 +129,7 @@ Identity* CharacterGeneration::identify(const InstanceEntry& entry, uint64_t now
         vacant->first_frame = now; vacant->first_present = present; vacant->update_frame = 0;
         vacant->id = next_identity++; vacant->generation = 0;
         vacant->coverage.assign(package.components.size(), 0);
+        vacant->cpu_coverage.assign(package.components.size(), 0);
         best = vacant;
     }
     std::memcpy(best->cell, cell, sizeof(cell));
@@ -203,7 +204,7 @@ BoneSite CharacterGeneration::site_of(const PipeInfo& pipe)
             if (stage.stage != VK_SHADER_STAGE_VERTEX_BIT || !stage.shader) continue;
             VertexRepoint out;
             if (repoint_vertex(stage.shader->code, static_cast<uint32_t>(pipe.layout->sets.size()), out) && out.bone_set < kMaxSets)
-                site = {true, out.bone_set, out.bone_binding};
+                site = {true, out.bone_set, out.bone_binding, out.constant_slot};
         }
     }
     if (sites.size() >= 4096) sites.clear();
@@ -238,8 +239,12 @@ const CharacterGeneration::SourceFacts& CharacterGeneration::facts_of(const Pipe
                 facts.vs_config_slot = core.vs_config_slot;
                 facts.rolling_bones = core.rolling_bones && site.ok && core.bones->set == site.set && core.bones->binding == site.binding;
             }
+            // The Core's next sources, a block of 4096 vectors at vs-cb4, then vs-cb3 (D-186), where the bone site took it.
+            if (core.constant_bones && site.ok && site.constant == core.constant_slot && core.constant_bones->set == site.set &&
+                core.constant_bones->binding == site.binding)
+                facts.constant_bones = core.constant_slot;
         }
-    if (!facts.rolling_bones) ++facts_unknown;
+    if (!facts.rolling_bones && !facts.constant_bones) ++facts_unknown;
     return source_facts[pipe.id] = std::move(facts);
 }
 

@@ -1,6 +1,8 @@
 // CPU tests for ownership, ignored pointers, fail-closed rewrites and partial GPU-build cleanup.
 #include "variant_fixture.h"
+#include "m2_fixture.h"
 #include "../frontend/gpu/dither_kills.h"
+#include "../frontend/gpu/source_registers.h"
 #include <spirv-tools/libspirv.h>
 #include <filesystem>
 #include "../layer/src/state.h"
@@ -347,6 +349,94 @@ static void dither_tests()
     check(patched_valid == dithered, "every captured dithered module patches into valid SPIR-V without its dither");
 }
 
+// D-186 (LIMIT-027): the bones of the game's dash after-images, in a uniform block of 4096 vectors: the original Core's
+// vs-cb4 or vs-cb3 bone source (MergedSkeleton_DetectBoneDataSource), found by the Core's order on the D-076 registers
+// and moved to the private set's binding 0 as a read-only storage block of the same layout.
+static std::vector<uint32_t> module_words(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) return {};
+    const auto size = input.tellg();
+    if (size < 20 || size % 4) return {};
+    std::vector<uint32_t> words(static_cast<size_t>(size) / 4);
+    input.seekg(0); input.read(reinterpret_cast<char*>(words.data()), size);
+    return input ? words : std::vector<uint32_t>{};
+}
+
+static void constant_bones_tests()
+{
+    std::string error, why;
+    const auto original = m2_fixture::constant_bones_shader();
+    check(spirv_valid(original, error), ("the after-image fixture is valid SPIR-V " + error).c_str());
+    std::vector<efmi::gpu::SourceRegister> registers;
+    check(efmi::gpu::source_registers(original, registers, why), "the after-image fixture's registers are read");
+    const auto facts = efmi::gpu::core_source_facts(registers);
+    check(facts.vs_config_slot == 2 && !facts.rolling_bones && facts.constant_slot == 3 && facts.constant_bones &&
+          facts.constant_bones->set == 3 && facts.constant_bones->binding == 0,
+          "the Core's facts of the fixture: the instance window at vs-cb2, the bones at vs-cb3 (set 3, binding 0)");
+    VertexRepoint out;
+    check(repoint_vertex(original, 4, out) && out.constant_slot == 3 && out.bone_set == 3 && out.bone_binding == 0,
+          ("the rewrite takes the block at vs-cb3 for the bones " + out.reason).c_str());
+    check(spirv_valid(out.words, error), ("the rewritten after-image module is valid SPIR-V " + error).c_str());
+    check(out.words.size() == original.size() + 8, "the rewrite adds the two members' NonWritable and nothing else");
+    registers.clear();
+    const bool reread = efmi::gpu::source_registers(out.words, registers, why);
+    const auto* moved = reread ? efmi::gpu::find_source_register(registers, 't', 0) : nullptr;
+    const auto* window = reread ? efmi::gpu::find_source_register(registers, 'b', 2) : nullptr;
+    check(moved && moved->kind == efmi::gpu::SourceRegister::BufferSrv && moved->set == 4 && moved->binding == 0 && moved->stride == 16,
+          "the block is now a read-only storage buffer of 16-byte rows at the private set's binding 0");
+    check(window && window->set == 4 && window->binding == 1, "and the instance window is at the private set's binding 1");
+    check(!repoint_vertex(original, 3, out) && out.reason == "spirv_target_collision", "the private set cannot be at the block's own set");
+    auto newer = original; newer[1] = 0x00010400;
+    check(!repoint_vertex(newer, 4, out) && out.reason == "spirv_constant_bones_version", "a module after SPIR-V 1.3 has no BufferBlock to make");
+    // The game's modules of the dash (captures/dash-2.1.7-20261112, 2.1.7 in the game, 2026-11-12): the after-images'
+    // three with their bones at vs-cb3 or vs-cb4, three other effects' without bones.
+    const std::filesystem::path dash = "F:/efmi vulkan/captures/dash-2.1.7-20261112";
+    std::error_code ignored;
+    if (!std::filesystem::is_directory(dash, ignored)) { printf("constant bones: the dash capture is absent, skipped\n"); return; }
+    const struct { const char* name; uint32_t slot; } modules[] = {
+        {"5370913c", 3}, {"863d7ba9", 4}, {"5eb8bfbc", 4}, {"271587d4", 0}, {"30ceb263", 0}, {"7e7383a5", 0}};
+    for (const auto& m : modules) {
+        const auto words = module_words(dash / (std::string(m.name) + "-vs.spv"));
+        registers.clear();
+        const bool read = !words.empty() && efmi::gpu::source_registers(words, registers, why);
+        const auto core = efmi::gpu::core_source_facts(registers);
+        const bool accepted = repoint_vertex(words, 4, out);
+        const std::string label = std::string("dash vertex module ") + m.name + ": ";
+        if (m.slot) {
+            check(read && core.vs_config_slot == 2 && !core.rolling_bones && core.constant_slot == m.slot && core.constant_bones &&
+                  core.constant_bones->set == 3 && core.constant_bones->binding == 0,
+                  (label + "the Core's bones at vs-cb" + std::to_string(m.slot) + ", set 3 binding 0").c_str());
+            check(accepted && out.constant_slot == m.slot && out.bone_set == 3 && out.bone_binding == 0,
+                  (label + "the rewrite takes that block " + out.reason).c_str());
+            check(accepted && spirv_valid(out.words, error), (label + "valid SPIR-V after the rewrite " + error).c_str());
+        } else {
+            check(read && core.constant_slot == 0 && !core.rolling_bones, (label + "no bone source for the Core").c_str());
+            check(!accepted && out.reason == "spirv_required_buffer_missing", (label + "refused as before").c_str());
+        }
+    }
+    // Every captured vertex module: where the rewrite finds the bones in a block, the Core's facts name the same block.
+    std::set<std::vector<uint32_t>> seen;
+    uint32_t vertex = 0, in_block = 0, agree = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator("F:/efmi vulkan/captures", ignored)) {
+        if (!entry.is_regular_file(ignored) || entry.path().extension() != ".spv") continue;
+        const auto words = module_words(entry.path());
+        if (words.empty() || words[0] != 0x07230203 || !seen.insert(words).second) continue;
+        const bool accepted = repoint_vertex(words, 8, out);
+        if (!accepted && out.reason == "spirv_not_vertex") continue;
+        ++vertex;
+        if (!accepted || !out.constant_slot) continue;
+        ++in_block;
+        registers.clear();
+        const auto core = efmi::gpu::source_registers(words, registers, why) ? efmi::gpu::core_source_facts(registers) : efmi::gpu::CoreSourceFacts{};
+        if (core.constant_slot == out.constant_slot && core.constant_bones && core.constant_bones->set == out.bone_set &&
+            core.constant_bones->binding == out.bone_binding) ++agree;
+        else printf("constant bones: %s disagrees with the Core's facts\n", entry.path().string().c_str());
+    }
+    printf("constant bones: %u captured vertex modules, %u with the bones in a block, %u as the Core's facts\n", vertex, in_block, agree);
+    check(in_block >= 3 && agree == in_block, "every captured vertex module with its bones in a block names the block the Core's facts name");
+}
+
 int main(int argc, char** argv)
 {
     // Cross-check the production rewriter on previously exported, local SPIR-V modules.
@@ -367,6 +457,7 @@ int main(int argc, char** argv)
     util_init(GetModuleHandleW(nullptr));
     rewrite_tests(); ownership_tests(); ignored_pointer_tests(); tracked_lifetime_tests(); draw_sequence_tests();
     dither_tests();
+    constant_bones_tests();
     printf("recipe_test: %d/%d checks passed\n", passed, passed + failed);
     return failed ? 1 : 0;
 }

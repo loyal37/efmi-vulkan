@@ -59,10 +59,15 @@ bool source_srv_declaration(const std::vector<SourceRegister>& registers, uint32
 // MergedSkeleton_DetectBoneDataSource the rolling bone buffer when vs-t0 is a buffer of 16-byte
 // elements and such a window exists. A size the Core reads from the bound view is the declared
 // block here; the caller checks the block against what it binds.
+// Without the rolling buffer, MergedSkeleton_DetectBoneDataSource takes a constant buffer whose declared size is
+// 4096 vectors at vs-cb4, then at vs-cb3 (`vs->cb_size(4) == 4096`, "Sometimes used for FX shaders. Both bone data
+// offsets and bone data entries are supplied via vs-cb4"): `constant_bones` and its slot (D-186).
 struct CoreSourceFacts {
     int32_t vs_config_slot = -1;  // 1, 2 or 3; -1 none
     const SourceRegister* config = nullptr, *bones = nullptr;
     bool rolling_bones = false;
+    const SourceRegister* constant_bones = nullptr;
+    uint32_t constant_slot = 0;   // 3 or 4; 0 none
 };
 CoreSourceFacts core_source_facts(const std::vector<SourceRegister>& vertex_registers);
 
