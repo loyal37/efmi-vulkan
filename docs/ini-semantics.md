@@ -469,8 +469,8 @@ around it is held to the original's code:
 Every enabled INI of the folder is an input (D-155), as the original's `include_recursive`: a Mod
 that is no character Mod runs its [Present] and keys as owned work, keeps its persistent variables in
 mods-folder.ini, and its TextureOverride sections by texture hash act in replaced draws' pixel slot
-checks; it is no package. Its mesh sections are matched at draws where its INI lies in a character Mod's
-folder ("Which sections a draw is looked up in", below); elsewhere not yet. The native libraries'
+checks. Its mesh sections are matched at draws ("Which sections a draw is looked up in", below): in a
+character Mod's folder as that Mod's, elsewhere as a package's without a skeleton. The native libraries'
 files (RabbitFX) still join by their key and ShaderRegex sections only. A copy between declared
 resources the plan does not make (`ResourceA = copy ResourceB`, `= copy_desc`, in a [Constants] list or
 a draw's) no longer refuses the generation or the draw: the destination stays null, as the original
@@ -704,14 +704,24 @@ The layer:
 - A section without a component runs its lists whatever the package's state. The plan says what the
   draw becomes: left to the game (the lists set a variable), drawn again with the Mod's textures
   (D-083), or hidden. Only the last two need the package on the device and bring it up.
-- Not yet: the sections of an INI outside every character Mod's folder (it has no package to carry
-  them), a Mods folder without any character Mod, a section without a component that draws a mesh of
-  its own (refused: "INI hide override unexpectedly emits geometry"), and a texture of another package's
-  folder bound in a draw ("INI image not in prepared resource catalogue").
+- The sections of an INI outside every character Mod's folder (D-174, 2026-11-12) are those of a
+  package without a skeleton, one per folder: no bones, no components, the folder's mesh files and
+  images. A Mods folder without any character Mod loads, presents and reloads as any other (the
+  generation is the folder's own program). A character INI disabled by its file's name leaves its
+  folder's other INIs enabled, as under the original: their sections then have such a package.
+- Not yet: a section without a component that draws a mesh of its own (refused: "INI hide override
+  unexpectedly emits geometry"), and a texture of another package's folder bound in a draw ("INI image
+  not in prepared resource catalogue").
 - Checked: the live INI scene's Mods folder has `fixture\parts\part.ini` with a section for the scene's
   draw that no section of the character INI matches (three indices at 30); its variable is 1 after the
   scene, and the package has that section. Offline, the installed Mods in every key state: 277 sections
   plan as before, 11 are new (nine panels' marks, last rite's two hair sections), none changed.
+- Checked for D-174: the scene with the fixture and `props\prop.ini` (a package without a skeleton whose
+  section runs at the scene's unmatched draw, not brought to the GPU by a section that sets a variable);
+  the sandbox program with a Mods folder of two INIs and no character Mod (the folder loads and
+  presents, the section runs at the program's fifth mesh, both entries); the Mods folder scene's
+  `meshonly` INI as a package. On the build before: no second package, and the folder without a
+  character Mod loads nothing.
 
 ## What the offline state check leaves out (docs/architecture-review-2.1.md V-05, P3-4)
 

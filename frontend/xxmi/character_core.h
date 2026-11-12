@@ -54,7 +54,13 @@ std::shared_ptr<RuntimeExtension> character_discovery(const std::string& mod_nam
 // one generation, by its namespace as the parser names it (lower case), each discovered into its output as above, in the order the draws name them
 // (RuntimeDraw::mod). A native Core call answers the Mod whose list runs; another Mod's list on a draw
 // finds the instance not its own, as the original Core's identification tells it.
-std::shared_ptr<RuntimeExtension> character_folder(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods);
+// `rest` receives the mesh sections of the INIs outside every character Mod's folder (D-174): the registry's
+// TextureOverrides with a constant `match_index_count` that no Mod of `mods` carries, each with the folder of
+// its INI as the parser names it from the root (lower case, with its separator; UTF-8). The host makes a
+// package without a skeleton per folder. `mods` may be empty: a Mods folder without any character Mod.
+struct BesideSection { std::string folder; efvk::CharacterSection section; };
+std::shared_ptr<RuntimeExtension> character_folder(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods,
+                                                   std::shared_ptr<std::vector<BesideSection>> rest = {});
 // Offline, without a GPU (the dry run): `inner` with the Mod's CustomShader sections declared, so a Mod
 // that has them loads and its sections plan; the lists that run them refuse outside the owned domain.
 std::shared_ptr<RuntimeExtension> declarations_only(std::shared_ptr<RuntimeExtension> inner);

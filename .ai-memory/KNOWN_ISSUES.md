@@ -10,6 +10,14 @@
 - A host-held gate would have made the scene exact, and is not valid Vulkan: setting an event a pending command buffer waits for (VUID-vkSetEvent-event-09543), and a binary semaphore wait that depends on an unsignalled timeline wait (VUID-vkQueueSubmit-pWaitSemaphores-03238, VUID-vkQueuePresentKHR-pWaitSemaphores-03268). Hence the frame that is slow in earnest.
 - Not checked in the game: the fix is in the layer's DLL, which is replaced only while the game is closed.
 
+## BUG-093: A Mod whose LOD components share bone spans, or with a LOD 0 remap, is left out whole (the user's Yvonne, 2026-11-12; OPEN)
+
+- Seen offline 2026-11-12 08:30 on the installed folder, on the 2.1.4 binaries and on the work tree's alike: `Yvonne Ensnared Heart 1.8\yvonne.ini` (changed 2026-11-12 00:11; the folder holds `backup-20261112-before-shared-lod-spans`, and perlica's a `backup-20261111-before-shared-lod-spans` with tools named share_lod_spans.py, patch_ini.py, validate_shared.py) is not loaded: "Skeleton components overlap". Perlica, changed the same way the evening before, loads. Not seen in the game: the 2.1.3 session was before the change.
+- The Mod now: six components, 225 bones. Components 0 to 3 at 0+120, 125+38, 163+49, 212+13; component 4 at 0+116 and component 5 at 117+8, inside component 0's span (the LOD 1 parts share the LOD 0 part's bones); component 0 has a LOD 0 remap file and no LOD 1 entry, the others a LOD 1 remap.
+- The layer refuses each of these at load: `read_skeleton_plan` ("Skeleton components overlap", frontend/xxmi/skeleton_plan.cpp:53), `discover_contract` ("Original components overlap", "Original component has a LOD0 remap or no LOD1 assignment"), and the package format (components disjoint and in order). The review's R-04 lists them.
+- The original: the Core's pools give each component an offset and a count into the merged skeleton and a remap per LOD; nothing requires the spans apart, and a remap at LOD 0 is one more entry of the pool. To read first: the Core's MergedSkeleton.ini (how AttachComponent copies a component's bones, what a null and a file remap mean per LOD), then what the layer's skeleton needs of disjoint ranges (the import jobs, coverage per component, the bone masks of streams).
+- While it is open: the vk01 replay "captured frame with a library's texture slots" and "installed Mods offline plans in every key state" are red on this folder.
+
 ## BUG-091: With two Mods of one character and one namespace installed, a part of one kept the game's look (seen in the game 2026-11-11, 2.1.3; OPEN, not analysed, not reproduced)
 
 - Seen: the user added `last rite Ethereal Prayer 2.3` (`namespace = last rite`) beside the installed `lastrite` (its `last rite.ini`; the folder is gone now, its namespace was not read) and pressed F10 at 19:37:10. The exchange completed for 20 packages; 0.1 s later the package `lastrite` logged "INI plan: INI image not in prepared resource catalogue" and the notice said that part keeps the game's look. The user removed the old folder and pressed F10 at 19:37:39; the notice did not come again.
@@ -91,7 +99,7 @@
 
 ## LIMIT-047: What makes a Mod a Mod, and the all-or-nothing plan (2026-11-10, docs/architecture-review-2.1.md)
 
-- A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections matched no draw (since D-173, 2026-11-11, those of the INIs of a character Mod's folder are matched; those of an INI outside every such folder still are not, with a notice). A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
+- A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections matched no draw (since D-173, 2026-11-11, those of the INIs of a character Mod's folder are matched; those of an INI outside every such folder since D-174, 2026-11-12, in a package without a skeleton). A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
 
 ## BUG-077: A broken buffer file dropped the whole Mod (fixed in the 2.1.2 tree)
 

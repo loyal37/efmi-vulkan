@@ -96,9 +96,11 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
 
 ## What makes a Mod a Mod (the gates)
 
-1. An enabled INI with a section `[CommandListInitializeMergedSkeleton]` is a character Mod
-   (`CharacterProgram::mods_characters`) and has a package. Any other INI is an input: its lists and keys
-   run, and its mesh sections are matched as the next gate says.
+1. Every enabled INI is an input: its lists and keys run. A package (what carries sections, mesh files
+   and the texture catalogue on the device) is made per INI with a section
+   `[CommandListInitializeMergedSkeleton]` (`CharacterProgram::mods_characters`), with a skeleton, and per
+   folder outside those INIs' folders whose INIs have mesh sections, without one (D-174). A Mods folder
+   without a character Mod loads as any other; the folder's generation is a program of its own.
 2. The folder loads (above).
 3. Discovery (`CharacterCore::discover_sections`, `discover_contract`): the host's sections are the
    registry's TextureOverrides with a constant `match_index_count`, as the original's draw maps hold them
@@ -106,8 +108,8 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
    character; one that assigns none, and one of another INI of the Mod's folder, is a section without a
    component (its lists run at the draws it matches, and the plan says whether the draw is hidden, drawn
    with the Mod's textures, or left). The skeleton comes from the Mod's initializer and its pools. A LOD
-   no line assigned has no remap. Not matched yet: the mesh sections of an INI outside every character
-   Mod's folder.
+   no line assigned has no remap. The mesh sections of an INI outside every character Mod's folder are
+   the sections of that folder's package without a skeleton (D-174).
 4. Registration: `RegisterMod` compares the Mod's required version with the installed Core's `$version`
    (read from the Core's main.ini), as the original's.
 5. Each draw: `record()`.

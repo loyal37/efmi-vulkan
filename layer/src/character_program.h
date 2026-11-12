@@ -49,6 +49,9 @@ public:
         // When given: the inputs that are no character Mod's and that the folder was loaded without,
         // each with why (the folder did not load with it).
         std::vector<std::pair<std::filesystem::path, std::string>>* left_inputs = nullptr;
+        // When given: the generation itself, a program without a package (D-174). What a presentation, the
+        // settings and an F10 need is the generation's, whether or not the folder has a package.
+        std::shared_ptr<CharacterProgram>* generation = nullptr;
     };
     struct FolderMod {
         std::filesystem::path ini;
@@ -56,6 +59,9 @@ public:
         std::unique_ptr<CharacterProgram> program; // null when the Mod has no package
         CharacterPackage package;
         std::string reason;
+        // A package without a skeleton (D-174): the mesh sections of the INIs of one folder outside every
+        // character Mod's folder. `ini` is that folder's first INI in the original's order.
+        bool plain = false;
     };
     static bool discover_folder(const FolderSource&, std::vector<FolderMod>&, std::string& reason, const GpuFactory& gpu = {});
     // The Mod's index in its folder generation (RuntimeDraw::mod); UINT32_MAX in a generation of one Mod.
@@ -69,9 +75,8 @@ public:
     // DISABLED, as the original skips them) that declares the EFMIv1 merged-skeleton initializer.
     static std::vector<std::filesystem::path> mods_characters(const std::filesystem::path& mods, std::string& reason);
     static std::vector<std::filesystem::path> native_library_files(const std::filesystem::path& mods);
-    // Enabled INIs outside every character Mod's folder whose TextureOverride sections match by an index
-    // count: mesh sections the layer matches no draw with (they are no character Mod's).
-    static std::vector<std::filesystem::path> unmatched_mesh_inis(const std::filesystem::path& mods);
+    // Whether the Mods folder holds an enabled INI at all: without one there is nothing to load.
+    static bool folder_has_inputs(const std::filesystem::path& mods);
     // The version the installed Core declares in its main.ini (`global $version`), 0 when not found.
     static float core_version(const std::filesystem::path& core);
     // The libraries a generation of `inputs` calls (D-112): every enabled INI of the Mods folder outside
@@ -147,6 +152,9 @@ private:
     bool owns(const std::filesystem::path& file) const;
     uint32_t folder_index_ = UINT32_MAX;
     std::vector<std::wstring> folders_; // a folder Mod's: its folder, the Core's, the libraries it calls (lower case, with a separator)
+    // Folders under `folders_` that are another package's (D-174): a package without a skeleton whose folder
+    // holds other Mods' folders does not take their files.
+    std::vector<std::wstring> foreign_;
     bool load(const std::filesystem::path& ini, const std::filesystem::path& core, const std::filesystem::path& settings,
               const std::string& settings_name, std::shared_ptr<efmi::frontend::RuntimeExtension>, const GpuFactory&, std::string& reason,
               const std::filesystem::path& mods = {}, bool declarations_only = false);

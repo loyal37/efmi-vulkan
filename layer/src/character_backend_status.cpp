@@ -58,7 +58,6 @@ void character_status(CharacterBackend& b, JsonWriter& w)
         w.key("left_inputs"); w.begin_array();
         for (const auto& m : b.folder->left_inputs) { w.begin_object(); w.kv("ini", m.first); w.kv("reason", m.second); w.end_object(); }
         w.end_array();
-        w.key("unmatched"); w.begin_array(); for (const auto& ini : b.folder->unmatched) w.str(ini); w.end_array();
         if (b.folder->presenter) b.folder->presenter->status(w);
         if (b.folder->program) {
             const auto ini = b.folder->program->status();
@@ -145,6 +144,8 @@ void generation_status(CharacterGeneration& backend, JsonWriter& w)
     w.end_object();
     w.kn("frame", backend.frame.load()); w.kn("presents", backend.presents.load());
     w.kn("sections", backend.package.sections.size());
+    // The parts of a character the package's skeleton has; none: a package without one (D-174).
+    w.kn("components", backend.package.components.size());
     w.kn("package_bytes", backend.package.payload_bytes);
     w.kn("payload_held_bytes", backend.package.payload.size()); // in host memory (ISSUE-011: none once loaded)
     w.kn("mesh_upload_microseconds", backend.mesh_upload_us.load());

@@ -159,6 +159,27 @@ template<class T> void put(std::vector<uint8_t>& out, T value)
 // validator. It checks bone indices, weights, remaps, bounds and partitions.
 bool validate_refreshed(CharacterPackage& package, std::string& reason)
 {
+    if (package.components.empty()) {
+        // A package without a skeleton (D-174), which the package format does not hold: the checks decode
+        // makes of streams and sections, and nothing that refers to bones.
+        const uint64_t bytes = package.payload.size();
+        if (package.bones || !package.lists.empty() || !package.draws.empty() || package.sections.empty() ||
+            package.sections.size() > kCharacterSections || package.streams.size() > kCharacterStreams) {
+            reason = "package without a skeleton outside its limits"; return false;
+        }
+        for (const auto& s : package.streams) {
+            const bool stride_ok = s.kind == CharacterStream::Vertex ? (s.stride >= 1 && s.stride <= 256) :
+                                   s.kind == CharacterStream::Index ? (s.stride == 2 || s.stride == 4) : false;
+            if (!s.size || s.offset > bytes || s.size > bytes - s.offset || !stride_ok || s.size % s.stride ||
+                (s.kind == CharacterStream::Index && s.offset % 4) || s.bone_index_offset != kCharacterNone || s.bone_weight_offset != kCharacterNone) {
+                reason = "stream outside the payload, or of an unsupported stride"; return false;
+            }
+        }
+        for (const auto& s : package.sections)
+            if (!s.match_count || s.component != kCharacterNone || s.lod != kCharacterNone) { reason = "section out of range"; return false; }
+        package.payload_bytes = bytes;
+        return true;
+    }
     std::vector<uint8_t> bytes{'E','F','M','I','C','H','0','1'};
     for (auto value : {package.bones, uint32_t(package.components.size()), uint32_t(package.streams.size()), uint32_t(package.sections.size()),
                       uint32_t(package.lists.size()), uint32_t(package.draws.size()), uint32_t(package.edits.size()), 0u}) put(bytes, value);
@@ -287,7 +308,10 @@ bool CharacterProgram::owns(const std::filesystem::path& file) const
 {
     if (folders_.empty()) return true;
     const auto name = key(file);
-    return std::any_of(folders_.begin(), folders_.end(), [&](const std::wstring& folder) { return !name.compare(0, folder.size(), folder); });
+    const auto under = [&](const std::vector<std::wstring>& folders) {
+        return std::any_of(folders.begin(), folders.end(), [&](const std::wstring& folder) { return !name.compare(0, folder.size(), folder); });
+    };
+    return under(folders_) && !under(foreign_);
 }
 bool CharacterProgram::image_checked(const std::filesystem::path& path, uint32_t loader_flags)
 {
@@ -647,8 +671,10 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
             throw std::runtime_error("Folder generation paths must be absolute");
         // The original's root: d3dx.ini's folder, the Mods folder's parent; every INI is named by its path from it.
         const auto root = source.mods.parent_path();
+        // None is a folder as any other (D-174): its INIs load, and those with mesh sections have packages.
+        reason.clear();
         const auto inis = mods_characters(source.mods, reason);
-        if (inis.empty()) return false;
+        if (!reason.empty()) return false;
         // Per character Mod: its namespace (declared, else the original's implicit one, the INI's path from
         // the root), its INIs and the libraries it calls.
         std::vector<std::vector<std::filesystem::path>> mod_inputs(inis.size());
@@ -702,6 +728,9 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
             std::vector<std::pair<std::wstring, std::shared_ptr<efmi::frontend::CharacterDiscovery>>> mods;
             std::vector<size_t> members;
             std::vector<std::filesystem::path> plain; // the inputs outside every kept character Mod's folder
+            std::vector<std::filesystem::path> inputs; // every Mods folder input, in the original's order
+            // The mesh sections of INIs outside every character Mod's folder (D-174).
+            std::shared_ptr<std::vector<efmi::frontend::BesideSection>> rest = std::make_shared<std::vector<efmi::frontend::BesideSection>>();
             std::string reason;
             bool loaded = false;
         };
@@ -728,7 +757,6 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
                 a.mods.push_back({names[i], std::make_shared<efmi::frontend::CharacterDiscovery>()});
                 character_folders.push_back(folder);
             }
-            if (a.members.empty()) { a.reason = "every character Mod of the folder refused"; return a; }
             efmi::frontend::RuntimeConfig options{root, {source.core / "API.ini", source.core / "MergedSkeleton.ini", source.core / "SpatialIdentification.ini",
                                                          source.core / "Helpers.ini"}, source.settings, source.settings_name};
             options.native_library_files = native_library_files(source.mods);
@@ -741,11 +769,12 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
                 const auto name = key(ini);
                 if (excluded.count(name) || without_plain.count(name) || under(name, excluded_folders)) continue;
                 options.inputs.push_back(ini);
+                a.inputs.push_back(ini);
                 if (!under(name, character_folders)) a.plain.push_back(ini);
             }
             a.loader = std::make_unique<CharacterProgram>();
             if (gpu) a.loader->gpu_ = factory(source.core.parent_path().parent_path(), a.loader->gpu_reason_);
-            auto extension = efmi::frontend::character_folder(a.mods);
+            auto extension = efmi::frontend::character_folder(a.mods, a.rest);
             efmi::frontend::character_core_version(*extension, version);
             a.loaded = a.loader->start(options, std::move(extension), source.declarations_only, a.reason);
             return a;
@@ -771,14 +800,45 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
                     out[i].reason.clear();
                     if (program->adopt(*a.mods[k].second, out[i].package, out[i].reason)) out[i].program = std::move(program);
                 }
+                // The packages without a skeleton (D-174): the mesh sections outside every character Mod's
+                // folder, by the folder of their INI, in the order of the folders' first INIs. A package's
+                // files are those under its folder that are no other package's.
+                std::map<std::wstring, std::vector<CharacterSection>> sections;
+                for (const auto& s : *a.rest) sections[folder_key(root / std::filesystem::u8path(s.folder))].push_back(s.section);
+                std::vector<std::wstring> every;
+                for (size_t i : a.members) every.push_back(folder_key(inis[i].parent_path()));
+                for (const auto& unit : sections) every.push_back(unit.first);
+                std::set<std::wstring> made;
+                for (const auto& ini : a.inputs) {
+                    const auto folder = folder_key(ini.parent_path());
+                    const auto unit = sections.find(folder);
+                    if (unit == sections.end() || !made.insert(folder).second) continue;
+                    FolderMod m; m.plain = true; m.ini = ini;
+                    m.mod_namespace = ini.parent_path().lexically_relative(root).u8string();
+                    auto program = std::make_unique<CharacterProgram>();
+                    program->runtime_ = a.loader->runtime_; program->gpu_ = a.loader->gpu_; program->gpu_reason_ = a.loader->gpu_reason_;
+                    std::vector<std::filesystem::path> unit_inputs;
+                    for (const auto& other : a.inputs) if (folder_key(other.parent_path()) == folder) unit_inputs.push_back(other);
+                    for (const auto& library : libraries(source.mods, unit_inputs, efmi::frontend::character_core_libraries(), program->library_notes_, true))
+                        program->libraries_[declared_namespace(library)] = library;
+                    program->folders_ = {folder, folder_key(source.core)};
+                    for (const auto& library : program->libraries_) program->folders_.push_back(folder_key(library.second.parent_path()));
+                    for (const auto& other : every)
+                        if (other.size() > folder.size() && !other.compare(0, folder.size(), folder)) program->foreign_.push_back(other);
+                    efmi::frontend::CharacterDiscovery found;
+                    found.contract.sections = unit->second;
+                    if (program->adopt(found, m.package, m.reason)) m.program = std::move(program);
+                    out.push_back(std::move(m));
+                }
                 if (source.left_inputs)
                     for (const auto& item : left_plain) source.left_inputs->push_back(item.second);
+                if (source.generation) *source.generation = std::move(a.loader);
                 return true;
             }
             if (folder_reason.empty()) folder_reason = a.reason;
-            // Every character Mod left out, or the Core itself lacks what the layer binds by name: no Mod of
-            // the folder can load, and loading each alone would say nothing more.
-            if (a.members.empty() || a.reason.find("EFMI Core interface") != std::string::npos) { reason = a.reason; return false; }
+            // The Core itself lacks what the layer binds by name: no Mod of the folder can load, and loading
+            // each alone would say nothing more.
+            if (a.reason.find("EFMI Core interface") != std::string::npos) { reason = a.reason; return false; }
             bool any = false;
             for (size_t k = 0; k < a.members.size(); ++k) {
                 const auto& found = *a.mods[k].second;
@@ -824,6 +884,7 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
                 for (const auto& p : suspects) left_plain[key(p)] = {p, with};
                 continue;
             }
+            if (a.members.empty()) { reason = folder_reason; return false; }
             auto suspects = a.members; bool narrowed = false;
             while (suspects.size() > 1 && loads < limit) {
                 std::vector<size_t> first, second; halves(suspects, first, second);
@@ -836,28 +897,10 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
         }
     } catch (const std::exception& e) { reason = e.what(); return false; }
 }
-// Enabled INIs that are no character Mod and lie outside every character Mod's folder, yet declare
-// TextureOverride sections matched by an index count: under the original they replace or hide meshes
-// wherever their hash is drawn; the layer matches only the sections of character Mods, so they act on no
-// draw (docs/architecture-review-2.1.md, R-03). Listed so the host can say it.
-std::vector<std::filesystem::path> CharacterProgram::unmatched_mesh_inis(const std::filesystem::path& mods)
+bool CharacterProgram::folder_has_inputs(const std::filesystem::path& mods)
 {
-    std::vector<std::filesystem::path> found;
-    std::vector<std::wstring> character_folders;
-    std::vector<std::pair<std::filesystem::path, std::string>> others;
-    std::set<std::wstring> native;
-    for (const auto& file : native_library_files(mods)) native.insert(key(file));
-    for (const auto& ini : enabled_inis(mods)) {
-        auto text = ini_text(ini);
-        if (has_section(text, "commandlistinitializemergedskeleton")) character_folders.push_back(folder_key(ini.parent_path()));
-        else if (!native.count(key(ini))) others.push_back({ini, std::move(text)});
-    }
-    for (const auto& other : others) {
-        const auto name = key(other.first);
-        if (std::any_of(character_folders.begin(), character_folders.end(), [&](const std::wstring& folder) { return !name.compare(0, folder.size(), folder); })) continue;
-        if (has_section(other.second, "textureoverride", true) && other.second.find("match_index_count") != std::string::npos) found.push_back(other.first);
-    }
-    return found;
+    std::error_code error;
+    return std::filesystem::is_directory(mods, error) && !enabled_inis(mods).empty();
 }
 uint32_t CharacterProgram::stream_index(const std::shared_ptr<const efmi::assets::FileResource>& resource)
 {

@@ -513,6 +513,9 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
     source.declarations_only = !getenv("EFMI_VK_CHECK_NO_OWNED");
     std::vector<std::pair<std::filesystem::path, std::string>> left_inputs;
     source.left_inputs = &left_inputs;
+    // The folder's generation presents, whether or not the folder has a package (D-174).
+    std::shared_ptr<CharacterProgram> generation;
+    source.generation = &generation;
     std::vector<CharacterProgram::FolderMod> found;
     std::string reason;
     if (!CharacterProgram::discover_folder(source, found, reason)) {
@@ -521,9 +524,8 @@ static int plan_folder_states(const std::filesystem::path& mods, const std::file
             if (!m.reason.empty()) fprintf(stderr, "  %s: %s\n", m.ini.lexically_relative(mods).u8string().c_str(), m.reason.c_str());
         return 1;
     }
-    CharacterProgram* presenter = nullptr;
-    for (auto& m : found) if (m.program) { presenter = m.program.get(); break; }
-    if (!presenter) { fprintf(stderr, "no character Mod\n"); return 1; }
+    CharacterProgram* presenter = generation.get();
+    if (!presenter) { fprintf(stderr, "the folder's generation was not made\n"); return 1; }
     struct Refusal { std::string state, reason; uint32_t hash = 0, component = kCharacterNone, lod = 0; };
     std::vector<std::vector<Refusal>> refusals(found.size());
     std::vector<std::set<std::string>> seen_refusals(found.size());
@@ -1000,16 +1002,19 @@ int main(int argc, char** argv)
         const auto vertex = common_vertex_registers();
         CharacterProgram::FolderSource source{std::filesystem::absolute(mods), std::filesystem::absolute(core), std::filesystem::absolute(settings)};
         source.declarations_only = true;
+        std::shared_ptr<CharacterProgram> generation;
+        source.generation = &generation;
         std::vector<CharacterProgram::FolderMod> found;
         std::string reason;
-        const bool loaded = CharacterProgram::discover_folder(source, found, reason);
+        const bool loaded = CharacterProgram::discover_folder(source, found, reason) && generation;
         if (!loaded) fprintf(stderr, "folder generation refused: %s\n", reason.c_str());
-        CharacterProgram* presenter = nullptr;
-        for (auto& m : found) if (m.program) { presenter = m.program.get(); break; }
+        CharacterProgram* presenter = generation.get();
         uint64_t frame = 0;
         for (auto& m : found) {
             JsonWriter w; w.begin_object();
             w.kv("ini", m.ini.lexically_relative(mods).u8string());
+            // A package without a skeleton (D-174): the mesh sections of the INIs of this INI's folder.
+            if (m.plain) w.kb("plain", true);
             w.kb("loaded", loaded && m.program != nullptr);
             if (!loaded || !m.program) {
                 w.kv("reason", loaded ? m.reason : reason);

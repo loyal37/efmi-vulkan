@@ -71,10 +71,11 @@ original's include order (each folder's `.ini` files sorted without regard to ca
 DISABLED* and desktop.ini left out), except the native libraries' files (their key and ShaderRegex
 sections join through the native interface) and the folders of character Mods the isolation left out.
 A Mod that is no character Mod runs its Present and keys, keeps its settings and acts through its
-texture-hash sections in replaced draws; it is no package. Its mesh sections (a constant
-`match_index_count`) are matched at draws when its INI lies in a character Mod's folder: they are
-sections without a component of that Mod's package (D-173, 2026-11-11). Those of an INI outside every
-character Mod's folder act on no draw yet.
+texture-hash sections in replaced draws. Its mesh sections (a constant `match_index_count`) are
+matched at draws: where its INI lies in a character Mod's folder they are sections without a component
+of that Mod's package (D-173, 2026-11-11), elsewhere those of a package without a skeleton, one per
+folder (D-174, 2026-11-12). A Mods folder without any character Mod loads as any other; the folder's
+generation is a program of its own, not a package's view.
 
 ## Status (2026-10-27, 2.0.0)
 

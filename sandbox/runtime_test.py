@@ -175,6 +175,8 @@ def main():
     shader_sections(checks)
     several_packages(checks, validation)
     directory_generation(checks, validation)
+    plain_mods(checks, validation)
+    folder_without_character(checks)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -357,6 +359,96 @@ endif\n
 """
 
 
+def plain_mods(checks, validation):
+    """D-174 (review R-03, P2-1): an INI outside every character Mod's folder acts at the draws its mesh
+    sections match, as under the original, which looks every indexed draw up in the whole registry. The
+    scene's Mods folder holds the fixture and `props\\prop.ini`, whose section matches the scene's draw that no
+    section of the fixture matches (three indices at 30) and sets a variable: the draw stays the game's and
+    the scene's pictures are those of the fixture alone."""
+    root = Path(test_dir("runtime-plain-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    (mods / "props").mkdir()
+    (mods / "props" / "prop.ini").write_text(
+        "namespace = runtime_prop\n[Constants]\nglobal persist $prop_seen = 0\n[TextureOverrideProp]\nhash = %08x\nmatch_index_count = 3\n"
+        "match_first_index = 30\n$prop_seen = 1\n" % crc32c(struct.pack("<3H", 0, 1, 2)), encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", VK_LAYER_PATH=os.pathsep.join([DIST, validation]), VK_LAYER_VALIDATE_SYNC="1",
+                 VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "Mods folder with an INI outside every character Mod's folder"
+    checks.equal(result.returncode, 0, label + ": the scene's pictures as with the fixture alone")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-6000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    packages = status.get("packages", [])
+    checks.equal([(Path(p.get("path", "")).parent.name, p.get("components", -1) > 0, p.get("sections")) for p in packages],
+                 [("fixture", True, 4), ("props", False, 1)], label + ": the character Mod's package and one without a skeleton for the other INI's folder")
+    variables = packages[0].get("ini", {}).get("variables", {}) if packages else {}
+    checks.equal(variables.get("$\\runtime_prop\\prop_seen"), 1,
+                 label + ": its section ran at the draw it matches, which no section of the character Mod matches")
+    if len(packages) == 2:
+        prop = packages[1]
+        checks.check(not prop.get("activated") and prop["counters"].get("replaced", 0) == 0 and not prop.get("last_reason"),
+                     label + ": a section that only sets a variable brings nothing to the GPU and refuses nothing " +
+                     str((prop.get("activated"), prop.get("last_reason"))))
+
+
+def folder_without_character(checks):
+    """D-174: a Mods folder without any character Mod is a folder as any other. Its INIs load, their Present
+    runs, and a mesh section acts at the draw it matches (the sandbox program's fifth mesh: three 32-bit
+    indices in a mapped index buffer). Before, such a folder loaded nothing."""
+    root = Path(test_dir("runtime-nochar-"))
+    mods = root / "Mods"
+    (mods / "props").mkdir(parents=True)
+    (mods / "props" / "prop.ini").write_text(
+        "namespace = runtime_prop\n[Constants]\nglobal persist $prop_seen = 0\nglobal persist $presents = 0\n[Present]\n$presents = 1\n"
+        "[TextureOverrideProp]\nhash = %08x\nmatch_index_count = 3\n$prop_seen = 1\n" % crc32c(struct.pack("<3I", 14, 15, 16)), encoding="ascii")
+    (mods / "panel").mkdir()
+    (mods / "panel" / "panel.ini").write_text("namespace = runtime_panel\n[Constants]\nglobal persist $presents = 0\n[Present]\n$presents = 1\n", encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1")
+    for entry in ("layer", "inject"):
+        status, notices = {}, {}
+        with Sandbox(seconds=6, env_extra=extra, entry=entry) as sb:
+            time.sleep(3)
+            with ProbeClient(sb.pid) as probe:
+                whole = probe.status()
+                status, notices = whole.get("replacement", {}), whole.get("notices", {})
+            sb.proc.wait(timeout=60)
+            code = sb.proc.returncode
+        label = f"{entry}, Mods folder without a character Mod"
+        checks.equal(code, 0, label + ": the application runs and exits normally")
+        fg = status.get("folder_generation", {})
+        checks.check(fg.get("packages") == 1 and fg.get("left_out") == [] and fg.get("ini", {}).get("presents", 0) > 0,
+                     label + ": the folder loads and presents " + str({k: fg.get(k) for k in ("packages", "left_out", "ini")}))
+        # One package: the status is that package's.
+        checks.equal((status.get("components"), status.get("sections"), status.get("activated"), status.get("last_reason") or ""), (0, 1, False, ""),
+                     label + ": the INI with a mesh section has a package without a skeleton, which a section that only sets a variable "
+                     "does not bring to the GPU; the panel INI needs none")
+        variables = status.get("ini", {}).get("variables", {})
+        checks.equal((variables.get("$\\runtime_prop\\prop_seen"), variables.get("$\\runtime_prop\\presents"), variables.get("$\\runtime_panel\\presents")),
+                     (1, 1, 1), label + ": the mesh section ran at the draw it matches, and both INIs' Present ran")
+        checks.check(not any("no Mod is loaded" in text for text in notices.get("recent", [])),
+                     label + ": no notice says that no Mod is loaded " + str(notices.get("recent", [])[:3]))
+
+
 def directory_generation(checks, validation):
     """D-078: a Mods folder instead of packages. The fixture Mod and another character's Mod (whose
     sections match no draw of the scene) sit in it as an EFMI Mods folder holds them; the layer reads
@@ -446,9 +538,10 @@ def directory_generation(checks, validation):
         "namespace = runtime_bad\n[Constants]\nglobal persist $presents = 0\npost ResourceCopied = copy_desc ResourceSource\n"
         "[ResourceSource]\ntype = Buffer\nstride = 16\nfilename = source.buf\n[ResourceCopied]\n[Present]\n$presents = 1\n", encoding="ascii")
     (mods / "bad" / "source.buf").write_bytes(bytes(64))
-    # docs/architecture-review-2.1.md R-03, R-11: an INI outside every character Mod whose TextureOverride
-    # matches by an index count (a mesh Mod that is no EFMI character Mod). The layer matches no draw with
-    # it; it is listed and said, where nothing told the player before.
+    # docs/architecture-review-2.1.md R-03, P2-1 (D-174): an INI outside every character Mod's folder whose
+    # TextureOverride matches by an index count (a mesh Mod that is no EFMI character Mod). It has a package
+    # of its own, without a skeleton; its section here matches no draw of the scene. Before, the layer
+    # matched no draw with such an INI and said so in a notice.
     (mods / "meshonly").mkdir()
     (mods / "meshonly" / "mesh.ini").write_text(
         "namespace = runtime_meshonly\n[TextureOverrideMesh]\nhash = 0badf00d\nmatch_index_count = 3\nhandling = skip\n", encoding="ascii")
@@ -498,10 +591,11 @@ def directory_generation(checks, validation):
                  label + ": an F10 that reloaded queues the original's notice " + str(recent))
     packages = status.get("packages", [])
     names = [Path(p.get("path", "")).parent.name for p in packages]
-    checks.equal(names, ["fixture", "other", "Zeta", "\uff1aMod"],
-                 label + ": the character INIs in the original's include order, the one named in another script among them; the DISABLED folder and the .INI file skipped")
-    held = [(p.get("package_bytes", 0) > 0, p.get("payload_held_bytes", -1)) for p in packages]
-    checks.equal(held, [(True, 0)] * len(packages), label + ": no package holds its mesh bytes in host memory (ISSUE-011)")
+    checks.equal(names, ["fixture", "other", "Zeta", "\uff1aMod", "meshonly"],
+                 label + ": the character INIs in the original's include order, the one named in another script among them, then the "
+                 "folder whose INI has a mesh section and no character; the DISABLED folder and the .INI file skipped")
+    held = [(p.get("package_bytes", 0) > 0, p.get("payload_held_bytes", -1)) for p in packages if p.get("components")]
+    checks.equal(held, [(True, 0)] * 4, label + ": no package holds its mesh bytes in host memory (ISSUE-011)")
     gates = status.get("folder_generation", {}).get("discard_gates", [])
     checks.equal([(g.get("index"), g.get("component"), g.get("value")) for g in gates], [(172, 3, 1.0)],
                  label + ": the library's discard gate, IniParams[172].w, holds $censor (1) after its section's assignment")
@@ -522,16 +616,19 @@ def directory_generation(checks, validation):
     log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines() if log_path.is_file() else []
     checks.check(any("notice: EFMI Vulkan: broken: not loaded" in line for line in log_lines),
                  label + ": the Mod left out is named in a notice with its reason")
-    checks.equal([Path(p).parent.name for p in status.get("folder_generation", {}).get("unmatched", [])], ["meshonly"],
-                 label + ": the INI whose mesh sections match no draw is listed")
-    checks.check(any("notice: EFMI Vulkan: meshonly: its mesh sections replace nothing" in line for line in log_lines),
-                 label + ": and said in a notice")
+    plain = [p for p in packages if Path(p.get("path", "")).parent.name == "meshonly"]
+    checks.check(len(plain) == 1 and plain[0].get("components") == 0 and plain[0].get("sections") == 1 and plain[0].get("lazy") and
+                 not plain[0].get("activated"),
+                 label + ": the INI outside every character Mod's folder has a package without a skeleton for its mesh section, "
+                 "which no draw of the scene matches (D-174) " + str([(p.get("components"), p.get("sections"), p.get("activated")) for p in plain]))
+    checks.check(not any("its mesh sections replace nothing" in line for line in log_lines),
+                 label + ": and no notice says its sections replace nothing")
     # L-02 and L-01: the scene's last steps ran to their end (F10 with no generation loaded reloads; a
     # package whose activation fails once leaves its draws to the game and is brought up again).
     checks.check((folder / "runtime-reactivated.json").is_file(),
                  label + ": F10 without a loaded generation and the retried activation ran to their end")
-    if len(packages) == 4:
-        own, other, zeta, colon_package = packages
+    if len(packages) == 5:
+        own, other, zeta, colon_package = packages[:4]
         checks.check(colon_package.get("lazy") and not colon_package.get("activated"), label + ": the Mod named in another script is a package of the folder, never matched")
         checks.equal((other["lazy"], other["activated"], other.get("images_ready", 0), other["counters"].get("replaced", 0)),
                      (True, False, 0, 0), label + ": the other character's Mod never matched and never went to the GPU")
@@ -570,19 +667,22 @@ def directory_generation(checks, validation):
     # once (its controller and the generation it left); the second join's error ended the game.
     removed = folder / "runtime-removed.json"
     after_removal = json.loads(removed.read_text(encoding="utf-8"))["result"]["replacement"] if removed.is_file() else {}
-    checks.equal(after_removal.get("folder_generation", {}).get("packages"), 3,
+    # The disabled character INI's folder still holds `parts\\part.ini`, enabled: with no character Mod above it,
+    # its mesh section has a package of its own (D-174), as the original goes on loading that INI.
+    checks.equal(after_removal.get("folder_generation", {}).get("packages"), 5,
                  label + ": F10 after the drawn character's Mod was disabled goes on with the other Mods, the removed package stopped once")
     def report_of(name):
         path = folder / name
         return json.loads(path.read_text(encoding="utf-8"))["result"]["replacement"] if path.is_file() else {}
     removed_packages = [(Path(p.get("path", "")).parent.name, p.get("stopped")) for p in after_removal.get("packages", [])]
-    checks.equal(removed_packages, [("fixture", True), ("other", False), ("Zeta", False), ("\uff1aMod", False)],
+    checks.equal(removed_packages, [("fixture", True), ("other", False), ("Zeta", False), ("\uff1aMod", False), ("meshonly", False), ("parts", False)],
                  label + ": the disabled Mod's package shows stopped, in its slot")
     # BUG-068: enabled again, the Mod takes its slot back (2.0.7 added a third entry, and so on to 64).
     reenabled = report_of("runtime-reenabled.json")
     back = [(Path(p.get("path", "")).parent.name, p.get("stopped"), p.get("activated")) for p in reenabled.get("packages", [])]
-    checks.equal(back, [("fixture", False, True), ("other", False, False), ("Zeta", False, False), ("\uff1aMod", False, False)],
-                 label + ": a Mod enabled again by F10 is drawn from the slot it had")
+    checks.equal(back, [("fixture", False, True), ("other", False, False), ("Zeta", False, False), ("\uff1aMod", False, False),
+                        ("meshonly", False, False), ("parts", True, None)],
+                 label + ": a Mod enabled again by F10 is drawn from the slot it had; its folder's other INI is its own again, the package it had meanwhile stopped")
     # D-133, BUG-070: the gate follows the live generation when RabbitFX goes and comes back.
     gates_of = lambda r: [(g.get("index"), g.get("component"), g.get("value")) for g in r.get("folder_generation", {}).get("discard_gates", [])]
     no_rabbit, rabbit_back = report_of("runtime-no-rabbitfx.json"), report_of("runtime-rabbitfx-back.json")

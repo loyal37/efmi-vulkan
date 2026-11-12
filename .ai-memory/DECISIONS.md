@@ -1077,6 +1077,19 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-174: A package without a skeleton, and a Mods folder without a character Mod (review Phase 2, P2-1, second part)
+
+- Date: 2026-11-12 (the user, 2026-11-11: loading should not tell characters from other Mods at all).
+- The original has no notion of a character Mod: every enabled INI is parsed into one registry (ParseIniFilesRecursive), and a draw is looked up in it (D-173). A character Mod is an INI whose lists call the Core's merged-skeleton lists.
+- The layer before: a package, the unit that carries a Mod's sections, mesh files and texture catalogue on the device, was made per INI with `[CommandListInitializeMergedSkeleton]`. An INI outside every such INI's folder had its mesh sections matched at no draw (a notice said so since P0-1), and a Mods folder without a character Mod loaded nothing: no Present, no key, no panel.
+- Decision:
+  - The frontend reports the registry's mesh sections that no character Mod carries, each with the folder of its INI (`BesideSection`, `character_folder(mods, rest)`); `mods` may be empty.
+  - `CharacterProgram::discover_folder` makes a package per such folder (`FolderMod::plain`): no bones, no components, sections without a component, the mesh files and images under the folder that are no other package's (`foreign_`), the libraries its INIs call. The package format holds no such package, so it is validated on its own (`validate_refreshed`: its streams and sections as `decode` checks them).
+  - The folder's generation is a program of its own (`FolderSource::generation`, `FolderGeneration::generation`), no longer one package's view of it: a folder whose INIs have no mesh section presents, saves and reloads. A folder is empty only without any enabled INI.
+  - The notice "its mesh sections replace nothing", the status's `unmatched` and `CharacterProgram::unmatched_mesh_inis` are gone: there is no such INI any more. A package's status has `components` (0: without a skeleton).
+  - A character INI disabled by its file's name leaves its folder's other INIs enabled, as under the original; their mesh sections then have a package of their own until the character INI is back.
+- What stays a character's: the skeleton service (identity, bone import, the merged skeleton's private set) goes to sections with a component, and which INIs have a skeleton is still read at load from the exporter's shape (R-04, P2-3). A section without a component that draws a mesh of its own is still refused (P2-2).
+
 ## D-173: The host's sections come from the registry, whichever INI declares them (review Phase 2, P2-1, first part)
 
 - Date: 2026-11-11 (the user: the review's Phase 2 is the point, not the small bugs; and: why does only a character's INI match, should not every INI?). Found in the installed Mods: `last rite Ethereal Prayer 2.3\Texture\hair.ini` gives the hair's two draws (hashes ce03a49a and 2ba325f7, no section of `last rite.ini`) the Mod's diffuse texture; under the layer neither section ever ran. 80 further sections of 21 panel INIs (`k\1.ini`, `$active = 1`) share their hash with a character section and ran only with that section's draw.

@@ -101,6 +101,8 @@ class CharacterCore : public RuntimeExtension {
     std::vector<Mod> mods_;
     // A folder generation (D-131): several Mods, a draw names the one its identity resolved to.
     bool folder_ = false;
+    // A folder generation's mesh sections outside every character Mod's folder (D-174), for the host.
+    std::shared_ptr<std::vector<BesideSection>> rest_;
     std::unordered_map<const CommandList*, Mod*> root_mods_; // a TextureOverride's list to its Mod
     Mod* preparing_ = nullptr; // the Mod whose initializer prepare() runs
     // The Mod a section belongs to, by its name's namespace (the longest that matches); null for none.
@@ -408,9 +410,11 @@ public:
     CharacterCore(const std::string& name, const efvk::CharacterPackage& package, bool rabbit) : rabbit_textures(rabbit) { add(name, package); }
     // A folder generation (D-131): every character Mod of the Mods folder with its discovery output, in
     // the order the draws name them (RuntimeDraw::mod).
-    explicit CharacterCore(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods) : folder_(true)
+    // None of them: a Mods folder without a character Mod, whose other INIs load and act all the same (D-174).
+    CharacterCore(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods,
+                  std::shared_ptr<std::vector<BesideSection>> rest) : folder_(true), rest_(std::move(rest))
     {
-        if (mods.empty() || mods.size() > 4096) throw std::runtime_error("A folder generation holds one to 4096 character Mods");
+        if (mods.size() > 4096) throw std::runtime_error("A folder generation holds 4096 character Mods at most");
         for (const auto& m : mods) {
             if (!m.second) throw std::runtime_error("Character discovery needs its output");
             add(m.first, {}); mods_.back().discovery = m.second;
@@ -708,7 +712,7 @@ global $mod_id = -1
     bool validate_overrides(std::wstring& why) override
     {
         if (!described_sections(why)) return false;
-        if (std::any_of(mods_.begin(), mods_.end(), [](const Mod& m) { return m.discovery != nullptr; })) return discover_sections(why);
+        if (folder_ || std::any_of(mods_.begin(), mods_.end(), [](const Mod& m) { return m.discovery != nullptr; })) return discover_sections(why);
         auto matches = [](const FuzzyMatch& f, uint32_t value, bool) {
             // None: any value (an optional first index, a hash-only section's index count).
             if (value == efvk::kCharacterNone) return f.op == FuzzyMatchOp::ALWAYS;
@@ -760,14 +764,16 @@ global $mod_id = -1
     // The Mod whose folder holds the INI a section was parsed from (D-173): in a folder generation the Mod with
     // the deepest such folder, in a generation of one Mod that Mod (its inputs are its folder's INIs and the
     // libraries it calls); null for none.
-    Mod* holder_of(const std::wstring& section)
+    // `folder`: the folder of the section's INI in lower case, when the parser holds the section.
+    Mod* holder_of(const std::wstring& section, std::wstring& folder, bool& known)
     {
+        known = HostSectionFolder(section.c_str(), folder);
+        std::transform(folder.begin(), folder.end(), folder.begin(), ::towlower);
         if (!folder_) return &mods_[0];
-        std::wstring path;
-        if (!HostSectionFolder(section.c_str(), path)) return nullptr;
+        if (!known) return nullptr;
         Mod* best = nullptr;
         for (auto& m : mods_)
-            if (m.folder_known && path.size() >= m.folder.size() && !_wcsnicmp(path.c_str(), m.folder.c_str(), m.folder.size()) &&
+            if (m.folder_known && folder.size() >= m.folder.size() && !_wcsnicmp(folder.c_str(), m.folder.c_str(), m.folder.size()) &&
                 (!best || m.folder.size() > best->folder.size())) best = &m;
         return best;
     }
@@ -821,17 +827,27 @@ global $mod_id = -1
                     // INI declares it. It joins the Mod whose folder holds its INI, without a component: its
                     // lists run at the draws it matches, and their plan says what the draw becomes.
                     FoundSection beside;
-                    beside.section.hash = hashed.first; beside.beside = true;
+                    beside.section.hash = hashed.first; beside.section.component = efvk::kCharacterNone; beside.beside = true;
                     const bool first_known = entry.match_first_index.op == FuzzyMatchOp::ALWAYS || constant(entry.match_first_index, beside.section.match_first);
-                    Mod* holder = constant(entry.match_index_count, beside.section.match_count) && beside.section.match_count && first_known
-                                      ? holder_of(entry.ini_section) : nullptr;
+                    const bool keyed = constant(entry.match_index_count, beside.section.match_count) && beside.section.match_count && first_known;
+                    std::wstring folder;
+                    bool known = false;
+                    Mod* holder = keyed ? holder_of(entry.ini_section, folder, known) : nullptr;
                     if (holder && holder->discovery) { holder->found.push_back(beside); continue; }
+                    // One of an INI outside every character Mod's folder (D-174): the host's, by the folder of its INI.
+                    if (keyed && known && !holder && rest_) { rest_->push_back({narrow(folder), beside.section}); continue; }
                     if (m) ++m->outside_package;
                     continue;
                 }
                 if (!textures) return fail(why, L"Generation contains an unprofiled override; source-image identity is unavailable");
                 ++texture_sections;
             }
+        }
+        if (rest_) {
+            // In one order and each once, whatever order the registry's table has them in.
+            const auto key = [](const BesideSection& s) { return std::tie(s.folder, s.section.hash, s.section.match_count, s.section.match_first); };
+            std::sort(rest_->begin(), rest_->end(), [&](const BesideSection& a, const BesideSection& b) { return key(a) < key(b); });
+            rest_->erase(std::unique(rest_->begin(), rest_->end(), [&](const BesideSection& a, const BesideSection& b) { return key(a) == key(b); }), rest_->end());
         }
         for (auto& m : mods_) {
             if (!m.discovery) continue;
@@ -1043,9 +1059,10 @@ std::shared_ptr<RuntimeExtension> character_discovery(const std::string& mod_nam
     if (!output) throw std::runtime_error("Character discovery needs its output");
     return std::make_shared<CharacterCore>(mod_namespace, std::move(output));
 }
-std::shared_ptr<RuntimeExtension> character_folder(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods)
+std::shared_ptr<RuntimeExtension> character_folder(const std::vector<std::pair<std::wstring, std::shared_ptr<CharacterDiscovery>>>& mods,
+                                                   std::shared_ptr<std::vector<BesideSection>> rest)
 {
-    return std::make_shared<CharacterCore>(mods);
+    return std::make_shared<CharacterCore>(mods, std::move(rest));
 }
 void character_core_version(RuntimeExtension& core, float version)
 {

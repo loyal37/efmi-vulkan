@@ -4,8 +4,8 @@
 
 namespace efvk {
 // What does not show, on the screen as in the log (docs/architecture-review-2.1.md, R-11): a folder
-// that did not load, the Mods and inputs left out with their reasons, and INIs whose mesh sections
-// match no draw because they are no EFMI character Mod. At the first load and after every exchange.
+// that did not load, and the Mods and inputs left out with their reasons. At the first load and after
+// every exchange.
 void FolderGeneration::announce() const
 {
     const auto mod = [](const std::string& ini) { return std::filesystem::u8path(ini).parent_path().filename().u8string(); };
@@ -17,9 +17,6 @@ void FolderGeneration::announce() const
         if (shown++ < 6) notice(NoticeLevel::Warning, "", ("EFMI Vulkan: " + mod(m.first) + ": " + std::filesystem::u8path(m.first).filename().u8string() +
                                                           " left out: " + m.second).c_str());
     if (shown > 6) notice(NoticeLevel::Warning, "", ("EFMI Vulkan: " + std::to_string(shown - 6) + " more Mods or files not loaded, named in efmi_vk_layer.log").c_str());
-    for (const auto& ini : unmatched)
-        notice(NoticeLevel::Notice, ("unmatched " + ini).c_str(),
-               ("EFMI Vulkan: " + mod(ini) + ": its mesh sections replace nothing (no [CommandListInitializeMergedSkeleton]: not an EFMI character Mod)").c_str());
     if (program && (!left_out.empty() || !left_inputs.empty()))
         notice(NoticeLevel::Info, "", ("EFMI Vulkan: " + std::to_string(packages.size()) + " Mods loaded, " +
                                        std::to_string(left_out.size() + left_inputs.size()) + " left out").c_str());
@@ -36,10 +33,10 @@ void FolderGeneration::save()
 {
     if (saving.valid() && saving.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
     if (saving.valid()) saving.get();
-    auto keep = owner;
+    auto keep = generation;
     saving = std::async(std::launch::async, [keep] {
         std::string error;
-        if (keep && keep->program && !keep->program->save(error)) logf("folder generation settings: %s", error.c_str());
+        if (keep && !keep->save(error)) logf("folder generation settings: %s", error.c_str());
     });
 }
 
@@ -139,39 +136,35 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
     std::vector<CharacterProgram::FolderMod> mods;
     std::vector<std::pair<std::filesystem::path, std::string>> left_inputs;
     source.left_inputs = &left_inputs;
-    try { for (const auto& ini : CharacterProgram::unmatched_mesh_inis(source.mods)) folder->unmatched.push_back(ini.u8string()); }
-    catch (const std::exception& e) { logf("folder generation: INIs with mesh sections not listed: %s", e.what()); }
+    source.generation = &folder->generation;
     const auto began = host_time_us();
-    {
-        // Every character Mod gone (removed, disabled): the original's reload gives a configuration
-        // without them, and so does this one.
-        std::string none;
-        if (CharacterProgram::mods_characters(source.mods, none).empty()) {
-            folder->empty = true; folder->reason = none.empty() ? "the Mods folder holds no character Mod" : none;
-            logf("folder generation: %s", folder->reason.c_str());
-            return folder;
-        }
-    }
-    if (!CharacterProgram::discover_folder(source, mods, folder->reason, gpu)) {
-        logf("folder generation refused: %s", folder->reason.c_str());
-        for (auto& m : mods) if (!m.reason.empty()) folder->left_out.push_back({m.ini.u8string(), m.reason});
+    // Every INI gone (removed, disabled): the original's reload gives a configuration without them, and
+    // so does this one. A folder without a character Mod is a folder as any other (D-174).
+    if (!CharacterProgram::folder_has_inputs(source.mods)) {
+        folder->empty = true; folder->reason = "the Mods folder holds no enabled INI";
+        logf("folder generation: %s", folder->reason.c_str());
         return folder;
     }
-    for (auto& m : mods)
-        if (m.program && m.program->gpu()) { folder->presenter = std::make_shared<OwnedPresenter>(device, m.program->gpu()); break; }
+    if (!CharacterProgram::discover_folder(source, mods, folder->reason, gpu) || !folder->generation) {
+        if (folder->reason.empty()) folder->reason = "the folder's generation was not made";
+        logf("folder generation refused: %s", folder->reason.c_str());
+        for (auto& m : mods) if (!m.reason.empty()) folder->left_out.push_back({m.ini.u8string(), m.reason});
+        folder->generation.reset();
+        return folder;
+    }
+    folder->program = folder->generation.get();
+    if (folder->program->gpu()) folder->presenter = std::make_shared<OwnedPresenter>(device, folder->program->gpu());
+    else if (!folder->program->gpu_reason().empty()) logf("owned GPU work unavailable: %s", folder->program->gpu_reason().c_str());
     // The discard gates as the load left them (D-133); the live generation's reach the draws (BUG-070:
     // 2.0.7 set them from a reload candidate while it loaded).
-    for (auto& m : mods)
-        if (m.program) { folder->gates = m.program->discard_gates(); break; }
-    for (auto& m : mods)
-        if (m.program) {
-            if (!folder->presenter && !m.program->gpu_reason().empty()) logf("owned GPU work unavailable: %s", m.program->gpu_reason().c_str());
-            // What the original overlay would show after a load; the generation carries on (D-067).
-            const auto loaded = m.program->status();
-            if (loaded.diagnostics) logf("INI loaded with %zu original warning(s)", loaded.diagnostics);
-            for (const auto& text : loaded.diagnostic_messages) logf("INI warning: %s", text.c_str());
-            break;
-        }
+    folder->gates = folder->program->discard_gates();
+    {
+        // What the original overlay would show after a load; the generation carries on (D-067).
+        const auto loaded = folder->program->status();
+        if (loaded.diagnostics) logf("INI loaded with %zu original warning(s)", loaded.diagnostics);
+        for (const auto& text : loaded.diagnostic_messages) logf("INI warning: %s", text.c_str());
+    }
+    size_t plain = 0;
     for (auto& m : mods) {
         const auto path = m.ini.u8string();
         if (!m.program) {
@@ -180,23 +173,22 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
             continue;
         }
         auto package = std::make_shared<CharacterGeneration>(device, properties, memory, path, true, textures, variants, translucency, bones);
-        CharacterProgram* view = m.program.get();
+        const bool without_skeleton = m.plain;
         if (!package->init_adopted(std::move(m.program), std::move(m.package), folder->presenter, folder->plan_mx)) {
             folder->left_out.push_back({path, package->last_reason});
             logf("character package refused: %s: %s", path.c_str(), package->last_reason.c_str());
             package->abandon();
             continue;
         }
-        if (!folder->program) { folder->program = view; folder->owner = package; }
+        plain += without_skeleton;
         folder->packages.push_back(std::move(package));
     }
     for (const auto& item : left_inputs) {
         folder->left_inputs.push_back({item.first.u8string(), item.second});
         logf("folder generation: input left out: %s: %s", item.first.u8string().c_str(), item.second.c_str());
     }
-    for (const auto& ini : folder->unmatched) logf("folder generation: mesh sections that match no draw (no character Mod): %s", ini.c_str());
-    logf("folder generation: %zu character Mods, %zu left out, loaded in %llu ms", folder->packages.size(), folder->left_out.size(),
-         static_cast<unsigned long long>((host_time_us() - began) / 1000));
+    logf("folder generation: %zu packages (%zu of them without a skeleton), %zu left out, loaded in %llu ms", folder->packages.size(), plain,
+         folder->left_out.size(), static_cast<unsigned long long>((host_time_us() - began) / 1000));
     return folder;
 }
 
@@ -399,7 +391,7 @@ void folder_frame_and_exchange(CharacterBackend& b, bool had_draws, PresentWork*
         b.folder_loading = std::async(std::launch::async, [d, p, m, textures, variants, translucency, bones, current] {
             // The settings the successor reads are those of now.
             std::string reason;
-            if (current->owner && current->program && !current->program->save(reason)) logf("folder generation settings before reload: %s", reason.c_str());
+            if (current->program && !current->program->save(reason)) logf("folder generation settings before reload: %s", reason.c_str());
             return folder_create(d, p, m, textures, variants, translucency, bones);
         });
     }

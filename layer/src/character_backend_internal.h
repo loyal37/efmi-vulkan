@@ -578,16 +578,17 @@ struct FolderGeneration {
     std::vector<std::pair<std::string, std::string>> left_out;   // a Mod's INI and why it has no package
     std::shared_ptr<OwnedPresenter> presenter;
     std::shared_ptr<std::mutex> plan_mx = std::make_shared<std::mutex>();
-    CharacterProgram* program = nullptr;        // the shared generation, through one package's view of it
-    std::shared_ptr<CharacterGeneration> owner; // that package
+    // The folder's generation itself (D-174), a program without a package: a folder whose INIs have no mesh
+    // section presents, saves and reloads all the same. `program` is it once the folder loaded.
+    std::shared_ptr<CharacterProgram> generation;
+    CharacterProgram* program = nullptr;
     std::atomic<uint64_t> frame{1}, presents{0};
     std::atomic<float> frame_seconds{1.0f / 60};
     uint64_t last_frame_us = 0, save_checked_us = host_time_us();
     std::vector<efmi::frontend::IniRuntime::DiscardGate> gates; // D-133, under plan_mx
     std::future<void> saving;
-    bool empty = false; // the folder holds no character Mod: a valid generation of no package
+    bool empty = false; // the folder holds no enabled INI: a valid generation of nothing
     std::vector<std::pair<std::string, std::string>> left_inputs; // inputs of no character Mod the folder was loaded without, and why
-    std::vector<std::string> unmatched;                            // enabled INIs with mesh sections that are no character Mod's
     uint32_t gaps_seen = 0; size_t gaps_shown = 0;                 // LayerGap texts logged and shown, on the presenting thread
     void announce() const;
     std::string reason, last_note;
