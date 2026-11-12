@@ -34,10 +34,13 @@ void held_keys(InputButton* button, std::vector<int>& out, bool& usable)
     usable = false; // a controller button: no key to hold
 }
 }
-std::vector<std::vector<int>> RuntimeInputKeys()
+// The key actions from `skip_first` to `skip_last` are left out (the host's hunting keys, docs/vulkan-native-mods.md).
+std::vector<std::vector<int>> RuntimeInputKeys(size_t skip_first, size_t skip_last)
 {
     std::vector<std::vector<int>> out;
-    for (auto* action : actions) {
+    for (size_t n = 0; n < actions.size(); ++n) {
+        if (n >= skip_first && n < skip_last) continue;
+        auto* action = actions[n];
         std::vector<int> keys; bool usable = true;
         if (action && action->button) held_keys(action->button, keys, usable);
         if (usable && !keys.empty()) out.push_back(std::move(keys));

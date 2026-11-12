@@ -137,6 +137,13 @@ void CharacterGeneration::render_targets(const PipeInfo& pipe, efmi::frontend::R
         request.vertex_slots = 0;
         for (const auto& b : pipe.bindings) if (b.binding < 32) request.vertex_slots |= 1u << b.binding;
     }
+    // The modules by hash, for the ShaderOverride entries among the draw's lists (docs/vulkan-native-mods.md).
+    for (const auto& stage : pipe.shaders) {
+        const int i = stage.stage == VK_SHADER_STAGE_VERTEX_BIT ? 0 : stage.stage == VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT ? 1 :
+                      stage.stage == VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT ? 2 : stage.stage == VK_SHADER_STAGE_GEOMETRY_BIT ? 3 :
+                      stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT ? 4 : -1;
+        if (i >= 0 && stage.shader) { request.stage_hashes[i] = stage.shader->hash; request.stage_hash_mask |= 1u << i; }
+    }
     if (!pipe.recipe) return;
     request.shader_stages = 0;
     for (const auto& stage : pipe.recipe->stages) request.shader_stages |= uint32_t(stage.stage);

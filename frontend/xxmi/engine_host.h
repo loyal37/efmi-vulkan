@@ -13,6 +13,8 @@ struct EngineHostState {
     // 64 kept, and how many there were; the host shows each once.
     size_t gap_count = 0;
     std::deque<std::pair<size_t, std::string>> gaps;
+    // The hunting keys the input dispatcher met (HuntingAction values), until the generation hands them on.
+    std::deque<uint32_t> hunting;
 };
 // The generation the calling thread entered, or null outside every generation.
 EngineHostState* EngineHost();

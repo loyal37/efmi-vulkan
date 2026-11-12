@@ -25,6 +25,7 @@ void m2_create(Device*,const VkPhysicalDeviceProperties&,const VkPhysicalDeviceM
 void m2_stop(Device*);
 void m2_retire(Device*,VkPipeline);
 bool m2_record(Device*,CmdBuf*,const DrawRec&);
+bool m2_shader_draw(Device*,CmdBuf*,const DrawRec&);
 // At the application's graphics pipeline bind: the pipeline to bind in its place (D-133), else `pipeline`.
 VkPipeline m2_bind(Device*,CmdBuf*,VkPipeline pipeline);
 // After the application created a graphics pipeline, its record made (D-133).

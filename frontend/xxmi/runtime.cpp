@@ -32,6 +32,8 @@ void HostParseResources();
 void HostParseTextureOverrides();
 void HostParseResourceMatching();
 void HostParseShaderOverrides();
+void RuntimeParseSpirvShaderOverrides();
+void RuntimeParseHunting(int&, int&, unsigned&, bool&, InputCallback);
 void HostParseShaderRegex();
 void HostCompileRoots(const std::vector<CommandList*>&, const std::vector<std::wstring>&);
 void HostResourceRoot(const std::wstring&);
@@ -50,7 +52,7 @@ void RuntimeShaderRegexGates(std::vector<std::pair<uint32_t, uint32_t>>& gates, 
 float RuntimeVertexShaderFilter();
 size_t RuntimeInputCount();
 bool RuntimeDispatchInput(HackerDevice*, const efmi::frontend::RuntimeInput&);
-std::vector<std::vector<int>> RuntimeInputKeys();
+std::vector<std::vector<int>> RuntimeInputKeys(size_t skip_first, size_t skip_last);
 void RuntimeWindowSample(const efmi::frontend::RuntimeInput*);
 HWND RuntimeWindowHandle();
 extern std::vector<CommandList*> pending_post_command_lists;
@@ -207,6 +209,8 @@ struct Scope {
     }
 };
 void f10(HackerDevice*, void*) { G->gReloadConfigPending = true; }
+// A hunting key of the installation's [Hunting] (docs/vulkan-native-mods.md): kept for the host, who hunts.
+void hunting_key(HackerDevice*, void* action) { if (auto* host = EngineHost()) host->hunting.push_back(uint32_t(reinterpret_cast<uintptr_t>(action))); }
 // LayerGap's sink: the entered generation keeps what the layer did not do, for the host to show.
 void keep_gap(const wchar_t* text)
 {
@@ -274,9 +278,17 @@ struct IniRuntime::Impl {
     // The plans of the last draw, kept for their capacity (D-108).
     DrawHooks draw_hooks; // a library's shader group lists of the draw (D-171)
     std::vector<CommandList*> draw_pre, draw_post;
+    DrawStages draw_stages; // the stages of the draw's lists when a ShaderOverride acts (docs/vulkan-native-mods.md)
     DrawPlan draw_plan;
     assets::FilePlan draw_result;
     TextureOverrideMatches draw_matches;
+    // Route 2 (docs/vulkan-native-mods.md): the SPIR-V hashes the ShaderOverride sections name, the [Hunting] settings,
+    // and the hunting keys the presentations dispatched, until the host takes them.
+    std::vector<uint32_t> shader_hashes;
+    HuntingSettings hunting;
+    size_t hunting_keys_first = 0, hunting_keys_last = 0; // the hunting keys among the original's key actions
+    std::mutex hunting_mx;
+    std::vector<HuntingAction> hunting_actions;
     void snapshot_variables()
     {
         if (variable_list.size() != command_list_globals.size()) {
@@ -492,11 +504,24 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
             for(const auto& entry:G->mShaderOverrideMap)
                 if(entry.second.depth_filter!=DepthBufferFilter::NONE || entry.second.model[0])
                     throw std::runtime_error("Legacy shader depth/model substitution requires a source replacement adapter");
+        } else {
+            // Route 2 (docs/vulkan-native-mods.md): the sections that name a SPIR-V module act at its draws; the
+            // DX11-hash ones stay out, as the compatibility route keeps them.
+            RuntimeParseSpirvShaderOverrides();
+            for (const auto& entry : G->mShaderOverrideMap) p.shader_hashes.push_back(uint32_t(entry.first));
+            std::sort(p.shader_hashes.begin(), p.shader_hashes.end());
         }
         HostParseTextureOverrides();HostParseResourceMatching(); RuntimeCompilePresent(); RuntimeParseKeys();
         std::wstring validation;
         if (p.extension && !p.extension->validate_overrides(validation)) throw std::runtime_error("Native override registry refused: " + utf8(validation));
         RegisterKeyBinding(L"reload_config", L"no_modifiers VK_F10", std::make_shared<InputCallbacks>(f10, nullptr, nullptr), 0, 0, 0, InputDisableScope::ALL);
+        if (!config.shader_hooks) {
+            int mode = 0, marking = 0; unsigned actions = 0; bool keys = false;
+            p.hunting_keys_first = RuntimeInputCount();
+            RuntimeParseHunting(mode, marking, actions, keys, hunting_key);
+            p.hunting_keys_last = RuntimeInputCount();
+            p.hunting.hunting = mode; p.hunting.marking_mode = marking; p.hunting.marking_actions = actions; p.hunting.keys = keys;
+        }
         CommandList constants,post_constants; RuntimeCompileConstants(constants,post_constants);
         auto roots = registered_command_lists;
         phase = "command parsing";
@@ -597,7 +622,12 @@ EngineLockStats engine_lock_stats()
     return {engine_entries.load(std::memory_order_relaxed), engine_waits.load(std::memory_order_relaxed), engine_wait_us.load(std::memory_order_relaxed)};
 }
 
-bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::string& reason)
+bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::string& reason) { return run_draw(input, output, reason, true); }
+bool IniRuntime::shader_draw(const RuntimeDraw& input, assets::FilePlan& output, std::string& reason) { return run_draw(input, output, reason, false); }
+// A draw as the original's BeforeDraw, the application's call and AfterDraw see it. `texture_overrides`: the sections of
+// the draw's index region run (the Core's ShaderRegex link in the vertex stage, D-097), else only the ShaderOverride
+// entries of its modules (docs/vulkan-native-mods.md).
+bool IniRuntime::run_draw(const RuntimeDraw& input, assets::FilePlan& output, std::string& reason, bool texture_overrides)
 {
     struct Completion {RuntimeExtension* extension;~Completion(){if(extension)extension->after_draw();}} completion{impl_->extension.get()};
     try {
@@ -618,9 +648,24 @@ bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::s
         G->frame_no = unsigned(input.frame); G->gTime = input.seconds; G->gFrameTime = input.frame_seconds;
         // DRAW_NUMBER: the Core's identification tells a second identifier call within one draw by it.
         ++p.context.draw_number;
-        DrawCallInfo call(DrawCall::DrawIndexedInstanced, 0, input.count, input.instances, uint32_t(input.base), input.first, input.first_instance, nullptr, 0);
+        // The call as the original's DRAW_TYPE has it (an indirect call's counts are in its buffer).
+        const DrawCall type = input.indirect ? (input.indexed ? DrawCall::DrawIndexedInstancedIndirect : DrawCall::DrawInstancedIndirect)
+                                             : (input.indexed ? DrawCall::DrawIndexedInstanced : DrawCall::DrawInstanced);
+        DrawCallInfo call = input.indexed ? DrawCallInfo(type, 0, input.count, input.instances, uint32_t(input.base), input.first, input.first_instance, nullptr, 0)
+                                          : DrawCallInfo(type, input.count, 0, input.instances, input.first, 0, input.first_instance, nullptr, 0);
+        if (input.indirect) call.VertexCount = call.IndexCount = call.InstanceCount = 0;
         TextureOverrideMatches& matches = p.draw_matches; matches.clear();
-        find_texture_override_for_hash(input.hash, &matches, &call); phase("phase find");
+        if (texture_overrides) find_texture_override_for_hash(input.hash, &matches, &call);
+        // The ShaderOverride entries of the draw's modules (docs/vulkan-native-mods.md), by stage: vs, hs, ds, gs, ps.
+        ShaderOverride* shaders[5] = {};
+        bool shader_lists = false;
+        if (!p.shader_hashes.empty())
+            for (unsigned i = 0; i < 5; ++i) {
+                if (!(input.stage_hash_mask >> i & 1u)) continue;
+                const auto found = G->mShaderOverrideMap.find(uint64_t(input.stage_hashes[i]));
+                if (found != G->mShaderOverrideMap.end()) { shaders[i] = &found->second; shader_lists = true; }
+            }
+        phase("phase find");
         assets::FilePlan& result = p.draw_result;
         result.items.clear(); result.skip_original = false; result.pre_items = SIZE_MAX;
         auto s = p.command_state(); s.call_info = &call; std::wstring why;
@@ -629,19 +674,34 @@ bool IniRuntime::draw(const RuntimeDraw& input, assets::FilePlan& output, std::s
         s.this_target = &index_target;
         if (p.extension && !p.extension->before_draw(input, s, why)) throw std::runtime_error(utf8(why));
         phase("phase before_draw");
-        if(!matches.empty()){
+        if(!matches.empty() || shader_lists){
             // A library's shader groups (D-171), in the original's order around the matched lists: the vertex
             // stage's lists ahead of them (the Core's check of `ib` is a later group of the same stage), the
             // pixel stage's after them, all before the application's draw.
             DrawHooks& hooks = p.draw_hooks; hooks.before.clear(); hooks.between.clear(); hooks.after.clear();
-            if (p.extension) p.extension->draw_hooks(input, hooks);
+            if (p.extension && !matches.empty()) p.extension->draw_hooks(input, hooks);
             std::vector<CommandList*>& pre = p.draw_pre; std::vector<CommandList*>& post = p.draw_post; pre.clear(); post.clear();
+            DrawStages& stages = p.draw_stages; stages.pre_starts.assign(1, 0); stages.post_starts.assign(1, 0);
+            // The vertex stage: its entry's own commands, then what ShaderRegex links into it (the library's vertex
+            // groups, the Core's `CheckTextureOverride = ib` and with it the matched sections).
+            if (shaders[0]) { pre.push_back(&shaders[0]->command_list); post.push_back(&shaders[0]->post_command_list); }
             pre.insert(pre.end(), hooks.before.begin(), hooks.before.end());
+            stages.checked_first = post.size();
             for(auto* match:matches){pre.push_back(&match->command_list);post.push_back(&match->post_command_list);}
+            stages.checked_last = post.size();
+            // The hull, domain, geometry and pixel stages, each a list of its own; the library's pixel groups are linked
+            // into the pixel stage's.
+            for (unsigned i = 1; i < 5; ++i) {
+                if (!shaders[i]) continue;
+                stages.pre_starts.push_back(pre.size()); stages.post_starts.push_back(post.size());
+                pre.push_back(&shaders[i]->command_list); post.push_back(&shaders[i]->post_command_list);
+            }
+            if (!hooks.between.empty() && !shaders[4] && shader_lists) stages.pre_starts.push_back(pre.size());
             pre.insert(pre.end(), hooks.between.begin(), hooks.between.end());
             DrawPlan& plan = p.draw_plan;
             const auto began = std::chrono::steady_clock::now();
-            const bool executed = p.adapter.execute_matches(pre,post,s,plan,why);
+            // Without an acting ShaderOverride the matched sections run exactly as before route 2.
+            const bool executed = shader_lists ? p.adapter.execute_stages(pre,post,stages,s,plan,why) : p.adapter.execute_matches(pre,post,s,plan,why);
             const auto ran = std::chrono::steady_clock::now();
             const bool compiled = executed && p.files->compile(plan,result,why);
             p.stats.draw_execute_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(ran - began).count());
@@ -718,6 +778,15 @@ void RuntimePublishTransitionParameters()
     if(!input_adapter->flush_parameters(state,true,why))throw std::runtime_error("Parameter transition refused: "+utf8(why));
 }
 bool IniRuntime::replayable() const { return impl_->replayable; }
+std::vector<uint32_t> IniRuntime::shader_hashes() const { return impl_->shader_hashes; }
+HuntingSettings IniRuntime::hunting() const { return impl_->hunting; }
+std::vector<HuntingAction> IniRuntime::take_hunting_actions()
+{
+    std::lock_guard<std::mutex> lock(impl_->hunting_mx);
+    std::vector<HuntingAction> taken;
+    taken.swap(impl_->hunting_actions);
+    return taken;
+}
 bool IniRuntime::settings_dirty() const { return impl_->state.dirty.load(std::memory_order_relaxed); }
 
 bool IniRuntime::present(const RuntimeInput& input, uint64_t frame, float seconds, std::string& reason, bool keep_replay_state)
@@ -755,6 +824,13 @@ bool IniRuntime::present(const RuntimeInput& input, uint64_t frame, float second
         // original's (D-155): one a key's list cannot act on ended the whole Present for every Mod before.
         struct Tolerant { DrawPlanAdapter& a; Tolerant(DrawPlanAdapter& adapter) : a(adapter) { a.tolerate_refusals(true); } ~Tolerant() { a.tolerate_refusals(false); } } tolerant(p.adapter);
         if (RuntimeDispatchInput(&p.device, sampled)) ++p.stats.key_events;
+        if (!p.state.host.hunting.empty()) {
+            std::lock_guard<std::mutex> hunting(p.hunting_mx);
+            // A host that never takes them (an offline check) keeps the latest few.
+            for (const auto action : p.state.host.hunting) p.hunting_actions.push_back(HuntingAction(action));
+            if (p.hunting_actions.size() > 64) p.hunting_actions.erase(p.hunting_actions.begin(), p.hunting_actions.end() - 64);
+            p.state.host.hunting.clear();
+        }
         CurrentTransition.UpdatePresets(&p.device);RuntimeUpdateTransitions(&p.device);
         phase("present keys+presets");
         // What replay() starts from: the state after the keys, with what the frame's draws set.
@@ -900,7 +976,8 @@ std::vector<std::shared_ptr<const assets::FileResource>> IniRuntime::resources()
 }
 std::vector<std::vector<int>> IniRuntime::key_combos() const
 {
-    Scope scope(impl_->state); return ::RuntimeInputKeys();
+    // The Mods' keys: the installation's hunting keys are the host's (docs/vulkan-native-mods.md).
+    Scope scope(impl_->state); return ::RuntimeInputKeys(impl_->hunting_keys_first, impl_->hunting_keys_last);
 }
 std::vector<uint32_t> IniRuntime::texture_hashes() const
 {

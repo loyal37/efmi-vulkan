@@ -391,15 +391,26 @@ int wmain(int argc, wchar_t** argv)
         }
         // A candidate this host cannot execute is refused instead, and the live one stays.
         // (A CustomShader without shader execution. A ShaderOverride that acts on the application's
-        // draws names a DX11 shader the host cannot see: it loads inert and is reported, D-089.)
-        write(ini, "namespace = runtime_test\n[ShaderOverrideActing]\nhash = 1234\nhandling = skip\n");
+        // draws by a DX11 shader's hash names a shader the host cannot see: it loads inert and is reported, D-089.
+        // One by a SPIR-V module's hash, below 2^32, acts: docs/vulkan-native-mods.md, D-187.)
+        write(ini, "namespace = runtime_test\n[ShaderOverrideActing]\nhash = 5d7710a77fb65f25\nhandling = skip\n");
         {
             auto inert = IniRuntime::load(config, {}, reason);
             const auto loaded = inert ? inert->status() : RuntimeStatus{};
             const bool reported = std::any_of(loaded.diagnostic_messages.begin(), loaded.diagnostic_messages.end(),
                                               [](const std::string& text) { return text.find("inert") != std::string::npos; });
             if (!inert) fprintf(stderr, "acting ShaderOverride candidate: %s\n", reason.c_str());
-            check(inert && reported, "A ShaderOverride acting on game shaders loads inert and is reported");
+            check(inert && reported && inert->shader_hashes().empty(), "A ShaderOverride acting on game shaders by a DX11 hash loads inert and is reported");
+        }
+        write(ini, "namespace = runtime_test\n[ShaderOverrideActing]\nhash = 1234abcd\nhandling = skip\n");
+        {
+            auto acting = IniRuntime::load(config, {}, reason);
+            const auto loaded = acting ? acting->status() : RuntimeStatus{};
+            const bool reported = std::any_of(loaded.diagnostic_messages.begin(), loaded.diagnostic_messages.end(),
+                                              [](const std::string& text) { return text.find("inert") != std::string::npos; });
+            if (!acting) fprintf(stderr, "SPIR-V ShaderOverride candidate: %s\n", reason.c_str());
+            check(acting && !reported && acting->shader_hashes() == std::vector<uint32_t>{0x1234abcdu},
+                  "A ShaderOverride by a SPIR-V module's hash loads acting and is not called inert");
         }
         write(ini, "namespace = runtime_test\n[CustomShaderUnadapted]\ncs = absent.hlsl\n");
         {

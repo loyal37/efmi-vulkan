@@ -55,6 +55,16 @@ struct PlanItem {
     bool shadow = false;
 };
 
+// The original's stages at a draw (HackerContext::BeforeDraw and AfterDraw, docs/vulkan-native-mods.md): each stage's
+// ShaderOverride entry is a RunCommandList of its own, the vertex stage's with the matched sections linked into it.
+// `pre_starts` and `post_starts`: where each stage's lists begin (ascending); an abort ends its own stage's lists
+// only. `checked_first` to `checked_last`: the post lists that are the matched sections' own, which run only where the
+// original's second check would meet them (execute_matches); every other post list runs.
+struct DrawStages {
+    std::vector<size_t> pre_starts, post_starts;
+    size_t checked_first = 0, checked_last = 0;
+};
+
 struct DrawPlan {
     bool skip_original = false;
     std::vector<PlanItem> items;
@@ -121,6 +131,8 @@ public:
     // The post lists run where the original's second check would meet the sections
     // again: not after the pre lists bound an index buffer of their own.
     bool execute_matches(const std::vector<CommandList*>& pre,const std::vector<CommandList*>& post,CommandListState&,DrawPlan&,std::wstring&);
+    // The same with the draw's stages (a ShaderOverride acting at the draw, docs/vulkan-native-mods.md).
+    bool execute_stages(const std::vector<CommandList*>& pre,const std::vector<CommandList*>& post,const DrawStages&,CommandListState&,DrawPlan&,std::wstring&);
     // Each shader stage is an independent root. One transaction retains budgets
     // and GPU state across every pre root, the original call and every post root.
     // Deferred file plans are refused; the host must actually record their work.
@@ -258,7 +270,7 @@ public:
     unsigned referenced_roles(CustomResource*) const;
 private:
     bool execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState&,DrawPlan&,std::wstring&,OriginalCall between={},
-                      bool matched=false);
+                      bool matched=false,const DrawStages* stages=nullptr);
     void adapt_tree(CommandList& root, size_t depth);
     std::shared_ptr<Runtime> runtime_;
 };

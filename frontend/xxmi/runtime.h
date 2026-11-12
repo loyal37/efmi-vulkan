@@ -156,6 +156,14 @@ struct RuntimeDraw {
     // The shader stages of the draw's pipeline, as Vulkan stage bits (vertex 1, geometry 8,
     // fragment 16) (D-089); 0 when not known.
     uint32_t shader_stages = 0;
+    // The SPIR-V module of each stage of the draw's pipeline by its hash (the CRC-32C of its bytes, as the probe shows
+    // it), in the original's stage order: vertex (vs), tessellation control (hs), tessellation evaluation (ds),
+    // geometry (gs), fragment (ps); bit i of `stage_hash_mask` when stage i has one. The ShaderOverride sections that
+    // name a module act at the draw (docs/vulkan-native-mods.md).
+    uint32_t stage_hashes[5] = {};
+    uint32_t stage_hash_mask = 0;
+    // The application's call, as the original's DRAW_TYPE takes it: indexed or not, direct or indirect.
+    bool indexed = true, indirect = false;
     // Bit N: the pipeline's vertex input reads binding N, DX11's input slot N (D-161: a buffer the lists
     // bind at a slot the pipeline does not read is nothing to the draw, as under D3D11). Every bit when
     // the host does not know the pipeline's vertex input.
@@ -179,6 +187,17 @@ struct RuntimeDraw {
 // The events of the game's frame a library's shader hooks see under DX11 and the host reports
 // (D-113): the game's copy shader drew with a single colour target.
 enum class LibraryHook : uint32_t { CopyShader = 1 };
+// The original's hunting keys (Hunting.cpp ParseHuntingSection) of the installation's [Hunting] section, as the
+// generation's input dispatcher met them (docs/vulkan-native-mods.md section 6). The host hunts.
+enum class HuntingAction : uint32_t {
+    Toggle = 1, NextMarkingMode, NextPixel, PreviousPixel, MarkPixel, NextVertex, PreviousVertex, MarkVertex, Done
+};
+struct HuntingSettings {
+    bool keys = false;             // the section registered a hunting key (its `hunting` is 1 or 2)
+    int hunting = 0;               // its `hunting`: 0 off, 1 enabled, 2 soft disabled (the original's modes)
+    int marking_mode = 0;          // the original's MarkingMode: 0 skip, 1 original, 2 pink, 3 mono
+    uint32_t marking_actions = 3;  // the original's MarkingAction bits: 1 clipboard, 2 hlsl, 4 asm, 8 regex, ...
+};
 struct RuntimeStatus {
     uint64_t draws = 0, presents = 0, replays = 0, key_events = 0, saves = 0, shader_calls=0;
     // Microseconds the matched command lists took to run and their plans to compile, over all draws,
@@ -211,6 +230,17 @@ public:
     IniRuntime(const IniRuntime&) = delete;
     IniRuntime& operator=(const IniRuntime&) = delete;
     bool draw(const RuntimeDraw&, assets::FilePlan&, std::string& reason);
+    // A draw no TextureOverride section is run for (docs/vulkan-native-mods.md): the ShaderOverride entries of its
+    // stage modules (RuntimeDraw::stage_hashes) in the original's stage order around the application's draw.
+    // `skip_original` in the output: a list set `handling = skip`.
+    bool shader_draw(const RuntimeDraw&, assets::FilePlan&, std::string& reason);
+    // The SPIR-V module hashes the generation's ShaderOverride sections name (below 2^32; the others are DX11
+    // shaders' and stay as the compatibility route keeps them), ascending.
+    std::vector<uint32_t> shader_hashes() const;
+    // The installation's [Hunting] settings as the generation read them, and the hunting keys its presentations
+    // dispatched since the last call, in order.
+    HuntingSettings hunting() const;
+    std::vector<HuntingAction> take_hunting_actions();
     bool bind_source_shaders(const SourceShaderState&,std::string& reason);
     bool intercept(const RuntimeShaderCall&,std::string& reason);
     // Input is supplied by the host. Tests never send input to other processes.
@@ -258,5 +288,6 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     IniRuntime();
+    bool run_draw(const RuntimeDraw&, assets::FilePlan&, std::string& reason, bool texture_overrides);
 };
 }

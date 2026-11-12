@@ -687,11 +687,67 @@ public:
     void frame(bool had_draws, PresentWork* present, const efmi::frontend::RuntimeInput& input);
 };
 
+// Route 2 (docs/vulkan-native-mods.md, character_backend_shaders.cpp): a pipeline's SPIR-V modules by hash in the
+// original's stage order (vs, hs, ds, gs, ps), bit i of `mask` when stage i has one; its stages as Vulkan bits; its
+// subpass's targets as a replaced draw's (bit i colour i, bit 8 depth).
+struct PipelineModules {
+    uint32_t hashes[5] = {};
+    uint32_t mask = 0, stages = 0, targets = 0;
+    bool targets_known = false;
+    uint64_t render_pass = 0;
+};
+bool pipeline_modules(Device* device, VkPipeline pipeline, PipelineModules& out);
+
+// 3DMigoto's hunting (Hunting.cpp) over the modules of the frame's draws, for the process: the installation's
+// [Hunting] keys reach it through the folder generation's input dispatcher.
+class Hunting {
+public:
+    // At a folder generation's load and after every F10 exchange, as the original's reload reads [Hunting] again.
+    void configure(const efmi::frontend::HuntingSettings& settings);
+    // A hunting key, on the presenting thread.
+    void act(efmi::frontend::HuntingAction action);
+    bool enabled() const { return mode_.load(std::memory_order_relaxed) == 1; }
+    // While enabled, at a draw: its modules visited; true when it is to be kept from the GPU (the selection, skip).
+    bool visit(const PipelineModules& modules);
+    // Once per presentation: the original's TimeoutHuntingBuffers.
+    void frame();
+    void status(JsonWriter& w);
+private:
+    std::string line_locked(int kind) const;
+    void select_locked(int kind, bool next);
+    std::mutex mx_;
+    std::atomic<int> mode_{0}; // the original's hunting mode: 0 no keys, 1 enabled, 2 soft disabled
+    bool keys_ = false, told_mode_ = false;
+    int marking_mode_ = 0;
+    uint32_t actions_ = 3;
+    std::set<uint32_t> visited_[2]; // vertex, pixel (fragment) modules, in ascending order as the original's sets
+    std::set<uint32_t> peers_[2];   // the other kind's modules drawn with the selected one, for the mark's log
+    uint32_t selected_[2] = {};
+    bool has_selected_[2] = {};
+    uint64_t last_key_us_ = 0;
+    std::atomic<uint64_t> skipped_{0};
+    uint64_t marks_ = 0;
+};
+
 // The module's backend: one controller per configured package. A directory names every live
 // package in it (a package with its .runtime.json sidecar); they share the device and the frame,
 // each matches only its own sections, and each goes to the GPU on its first match.
 class CharacterBackend {
 public:
+    // Route 2 (docs/vulkan-native-mods.md): the SPIR-V hashes the folder generation's ShaderOverride sections name,
+    // with the generation they belong to (under index_mx, replaced on the presenting thread); hunting; what the
+    // ShaderOverride lists did at draws no Mod section matched.
+    struct ShaderHooks {
+        std::shared_ptr<FolderGeneration> folder;
+        CharacterProgram* program = nullptr;
+        std::vector<uint32_t> hashes; // ascending
+    };
+    std::shared_ptr<const ShaderHooks> shader_hooks;
+    Hunting hunting;
+    std::atomic<uint64_t> shader_draws_run{0}, shader_draws_skipped{0}, shader_draws_kept{0}, shader_draws_refused{0};
+    std::mutex shader_note_mx;
+    std::string shader_note;
+    bool shader_bindings_told = false;
     // The device's texture residency (D-094), shared by every package; stopped after the controllers.
     std::unique_ptr<TextureResidency> textures;
     // EFMITTL's layers, captures and composite (D-113), shared by every package that loaded it.
@@ -779,6 +835,10 @@ void folder_frame_and_exchange(CharacterBackend& b, bool had_draws, PresentWork*
 void character_rescan(CharacterBackend& b);
 // character_backend_index.cpp
 bool index_region_hash(Device* device, const DrawRec& r, uint64_t now, const CharacterBackend::Index& index, uint32_t& hash);
+// character_backend_shaders.cpp (docs/vulkan-native-mods.md)
+void shader_hooks_frame(CharacterBackend& b);
+bool shader_draw_unmatched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, const PipelineModules& modules, bool run_lists, bool marked);
+void shader_hooks_status(CharacterBackend& b, JsonWriter& w);
 // character_backend_twins.cpp
 void prepare_twins(CharacterBackend& b);
 VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline);
