@@ -1,6 +1,10 @@
 # EFMI Vulkan - Tasks
 
-## Next: 2.1.5 in the game (in the main checkout's dist since 2026-11-12 10:44)
+## Next: 2.1.6 in the game (in the main checkout's dist since 2026-11-12 15:41; 2.1.5 with D-177)
+
+- As for 2.1.5 below, and: every installed Mod loaded as before (D-177 reads the contract from what the lists hand to the Core; offline the plans of all 22 Mods are as 2.1.5's).
+
+## 2.1.5 in the game (in the main checkout's dist 2026-11-12 10:44 to 15:41)
 
 - The user's next start loads it (the log's first line names 2.1.5). To see, and to read from the status:
   - Yvonne as the user's tool left it (LOD parts on the LOD 0 part's bones): replaced at LOD 0 and at LOD 1 (close and far), no notice that it is not loaded; its package's `incomplete` and `bones_unavailable` not rising.

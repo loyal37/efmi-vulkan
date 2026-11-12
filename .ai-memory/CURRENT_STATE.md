@@ -9,6 +9,7 @@
 ## 2.1.6: 2.1.5 and D-177 (2026-11-12)
 
 - The user, 2026-11-12: build it, then finish everything that needs no game. 2.1.6 is 2.1.5 with D-177 (below); the version commit changes EFVK_VERSION only, on a tree whose touched steps passed (below).
+- Deployed for the development setup, 2026-11-12 15:41: the main checkout's `dist` built from 6900090 with the game not running (checked before and after); `efmi_vk.cfg` and the saved settings as they were; the 2.1.5 binaries kept in `build/dist-2.1.5-20261112`. Loaded there in the sandbox with dist's own configuration and the installed Mods at Vulkan 1.3: version 2.1.6, 22 packages, none left out, validation clean, the notices only Xaihi's two inert ShaderOverride lines. Not loaded into the game yet.
 
 ## P2-3: a character is what its lists hand to the Core (D-177, 2026-11-12; sandbox only, not in dist)
 
