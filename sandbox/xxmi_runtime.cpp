@@ -209,6 +209,8 @@ static int judge_scene(const std::filesystem::path& file, int frames, uint32_t f
     const auto path = std::filesystem::absolute(file);
     RuntimeConfig config{path.parent_path(), {path}, path.parent_path() / "settings", "judge"};
     config.texture_identity = true;
+    // The installation's d3dx.ini above the Mods folder, as the layer takes it in the game (its own sections).
+    if (std::filesystem::exists(path.parent_path().parent_path() / "d3dx.ini")) config.installation = path.parent_path().parent_path();
     std::string reason;
     auto runtime = IniRuntime::load(config, {}, reason);
     if (!runtime) { fprintf(stderr, "judge scene: %s\n", reason.c_str()); return 1; }

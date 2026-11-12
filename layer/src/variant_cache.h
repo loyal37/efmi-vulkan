@@ -45,6 +45,8 @@ public:
     VariantResult await(uint64_t identity, std::shared_ptr<const GraphicsRecipe>, std::shared_ptr<const PipelineLayoutInfo>,
                         const VertexInputRecipe&, const FragmentPatch&, std::chrono::milliseconds timeout);
     uint64_t waits() const { return waits_.load(); }
+    // Finished variants the cache let go of when it was full (L-08): the least recently asked for first.
+    uint64_t evictions() const { return evictions_.load(); }
     uint64_t wait_microseconds() const { return wait_us_.load(); }
     // Removes every vertex variant of an original. Existing command-buffer references keep a
     // ready variant alive; an in-progress build may finish but cannot reinsert its retired entry.
@@ -73,6 +75,7 @@ private:
         FragmentPatch fragment;
         VariantResult result;
         bool prepared = false; // queued in later_
+        uint64_t used = 0;     // the cache's clock when it was last asked for
     };
     static Key key_for(uint64_t, const VertexInputRecipe&, const FragmentPatch&);
     VariantResult submit(uint64_t identity, std::shared_ptr<const GraphicsRecipe>, std::shared_ptr<const PipelineLayoutInfo>,
@@ -86,7 +89,11 @@ private:
     size_t capacity_;
     std::mutex mutex_, stop_mutex_;
     std::condition_variable wake_, done_;
-    std::atomic<uint64_t> waits_{0}, wait_us_{0};
+    std::atomic<uint64_t> waits_{0}, wait_us_{0}, evictions_{0};
+    uint64_t clock_ = 0; // under mutex_
+    // When full: the finished jobs least recently asked for go (an eighth of the capacity at a time), into
+    // `released`, which the caller lets go of outside the lock. Caller holds mutex_.
+    void evict(std::vector<std::shared_ptr<Job>>& released);
     bool stopped_ = false;
     std::map<Key, std::shared_ptr<Job>> jobs_;
     std::deque<std::shared_ptr<Job>> queue_, later_;

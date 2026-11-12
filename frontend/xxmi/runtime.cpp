@@ -47,6 +47,7 @@ void RuntimeParseParameterRegister();
 void RuntimeUpdateTransitions(HackerDevice*);
 void RuntimeValidateSections(const std::vector<std::wstring>&,bool custom_shaders,bool shader_hooks);
 void RuntimeShaderRegexGates(std::vector<std::pair<uint32_t, uint32_t>>& gates, CommandList& assignments);
+float RuntimeVertexShaderFilter();
 size_t RuntimeInputCount();
 bool RuntimeDispatchInput(HackerDevice*, const efmi::frontend::RuntimeInput&);
 std::vector<std::vector<int>> RuntimeInputKeys();
@@ -395,6 +396,11 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
         G->user_config = p.settings.wstring();
         RuntimeValidateSections(p.extension ? p.extension->native_shaders() : std::vector<std::wstring>{},
                                 p.extension && p.extension->custom_shader_execution(),config.shader_hooks);
+        {
+            // BUG-090: the generation's own patternless ShaderRegex over vertex shaders, else the installed Core's.
+            const float filter = RuntimeVertexShaderFilter();
+            p.adapter.vertex_shader_filter(std::isnan(filter) ? config.vertex_shader_filter : filter);
+        }
         if (p.extension) {
             const auto declarations = p.extension->declarations();
             if (!declarations.empty()) HostParseExcerpt(declarations.c_str(), L"efvk-native.ini");

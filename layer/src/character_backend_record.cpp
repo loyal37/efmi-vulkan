@@ -150,10 +150,12 @@ void CharacterGeneration::render_targets(const PipeInfo& pipe, efmi::frontend::R
     request.render_pass = uint64_t(pipe.recipe->render_pass->id) << 8 | pipe.recipe->subpass;
 }
 
-bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_index)
+bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_index, uint32_t instance_index)
 {
     if (!enabled.load(std::memory_order_relaxed) || !cache) return false;
     bool gpu_draw = false; // this draw binds the device's merged skeleton (D-117) rather than the CPU master
+    // The lists draw without hiding the game's draw (D-179): the Mod's draws are recorded and the game's goes after.
+    bool beside = false;
     CharacterCommand* bone_owner = nullptr; // the recording's owner, which carries the device imports (D-127)
     uint64_t borrowed_sources = 0; // components whose import this recording takes from one not yet submitted (D-127)
 
@@ -235,9 +237,17 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 // With the pipeline's vertex input, which a list that draws a mesh of its own is planned by (D-176).
                 const VertexInputRecipe* const vertex = found != device->pipes.end() && found->second.recipe ? &found->second.recipe->vertex : nullptr;
                 if (!plan_draw(request, runtime_list, skip, added, reason, vertex, &textures)) return refuse(C_STATE, "INI hide: " + reason);
-                if (!skip && !textures) return false;
+                if (!skip && !textures && !runtime_list.count) return false;
                 // A draw the plan added gets its material plans now: a later plan of the same state adds nothing.
                 if (added && !refresh_materials()) return false;
+                if (!skip && !textures) {
+                    // Draws beside the game's (D-179): the game's draw stays whatever happens to the Mod's, also while
+                    // the package comes up.
+                    if (!on_device) { bring_up(); return false; }
+                    if (found == device->pipes.end() || !found->second.recipe || !found->second.layout) return false;
+                    record_own_mesh(cb, r, found->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                    return false;
+                }
                 if (!on_device) return bring_up();
                 if (!skip) {
                     const auto pipe = device->pipes.find(r.pipeline);
@@ -264,7 +274,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         const CharacterComponent& component = package.components[section->component];
         if (cb->secondary || !cb->in_rp || cb->dyn_rp_count || cb->m2_extended_bind)
             return refuse(C_STATE, "character draw outside a primary classic render pass or after extended binds");
-        if (r.instances != 1 || r.first_instance != 0) return refuse(C_INSTANCES, "character draw is instanced");
+        if (instance_index == UINT32_MAX && (r.instances != 1 || r.first_instance != 0)) return refuse(C_INSTANCES, "character draw is instanced");
         auto pipe = device->pipes.find(r.pipeline);
         if (pipe == device->pipes.end() || !pipe->second.recipe || !pipe->second.layout)
             return refuse(C_PIPELINE, "character draw pipeline metadata missing");
@@ -284,7 +294,10 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         if (bound_range(window, 2, 0, window.dyn_count ? cb->dyn.data() + window.dyn_first : nullptr, window.dyn_count, entry_range) &&
             (entry_range.type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || entry_range.type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC))
             instance = &entry_range;
-        if (!read_range(instance, 0, entry.size(), entry.data())) return refuse(C_ENTRY, "character instance entry is not mapped");
+        // An instance of an instanced draw reads its own entry, the instance's index times an entry after the first
+        // (the Core's `$draw_call_instance_id * $cfg_instance_config_byte_size`).
+        const uint64_t entry_at = instance_index == UINT32_MAX ? 0 : uint64_t(instance_index) * entry.size();
+        if (!read_range(instance, entry_at, entry.size(), entry.data())) return refuse(C_ENTRY, "character instance entry is not mapped");
         identity = identify(entry, now, present);
         if (!identity) return refuse(C_IDENTITIES, "character position invalid or all identities in use");
         identity->seen |= 1ull << section->component;
@@ -458,6 +471,8 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             bool skip = false, added = false, textures = false; std::string reason;
             if (!plan_draw(request, runtime_list, skip, added, reason, &pipe->second.recipe->vertex, &textures))
                 return refuse(C_STATE, "INI plan: " + reason);
+            // Draws beside the game's (D-179): drawn as a hiding plan's are, and the game's draw goes after them.
+            if (!skip && !textures && runtime_list.count) { skip = true; beside = true; }
             if (!skip) {
                 // The Mod's lists keep the game's draw (its own identification rejected the object, D-086).
                 if (!textures) {
@@ -792,7 +807,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         ++counters[C_SET3_RESTORED];
     }
     lap(S_EMIT);
-    ++counters[C_REPLACED];
+    ++counters[beside ? C_BESIDE : C_REPLACED];
     if (identity) identity->shown = true;
     if (material_origin) ++counters[material_origin == 1 ? C_DERIVED : C_INHERITED];
     counters[C_ITEMS] += list->count;
@@ -800,7 +815,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         if (!plan->patch.images.empty() || !plan->patch.nulls.empty()) ++counters[C_MATERIAL_ITEMS];
         if (plan->compatibility) ++counters[C_COMPAT_ITEMS];
     }
-    return true;
+    return !beside;
 }
 
 bool CharacterGeneration::record_textures(CmdBuf* cb, const DrawRec& r, const PipeInfo& pipe, uint32_t section, uint64_t present,
@@ -1030,9 +1045,40 @@ VkResult generation_submit(CharacterGeneration& backend, VkQueue queue)
     return VK_SUCCESS;
 }
 
+// The original Core decomposes an instanced draw (API.ini `CommandListComponent_DrawInstances`, Helpers.ini
+// `CommandListIterateInstances`): per instance it identifies the object at that instance's entry, draws the Mod's
+// mesh for one of the Mod's objects with the instance's config moved into place, and draws any other instance alone
+// as the game's (`drawindexedinstanced = INDEX_COUNT, 1, FIRST_INDEX, FIRST_VERTEX, FIRST_INSTANCE + id`). The
+// layer does the same: each instance through record() with its own entry, and the game's draw of one instance for
+// the others, with the game's state, which record() puts back after its own draws.
+bool CharacterGeneration::record_instances(CmdBuf* cb, const DrawRec& r, uint32_t section_index)
+{
+    constexpr uint32_t kInstancesMax = 64;
+    // A first instance other than 0 leaves the place of the instances' entries open (the game's never has one in
+    // the captures): the application's draw stays, as before.
+    if (r.first_instance != 0 || r.instances > kInstancesMax || !draw.CmdDrawIndexed)
+        return refuse(C_INSTANCES, "character draw is instanced with a first instance or more than 64 instances");
+    for (uint32_t k = 0; k < r.instances; ++k) {
+        DrawRec one = r;
+        one.instances = 1; one.first_instance = k;
+        bool taken = false;
+        try { taken = record(cb, one, section_index, k); }
+        catch (const std::exception& e) { ++counters[C_STATE]; note(e.what()); taken = false; }
+        if (!taken) draw.CmdDrawIndexed(cb->handle, r.count, 1, r.first, r.vertex_offset, k);
+    }
+    ++counters[C_INSTANCED];
+    return true;
+}
+
 bool generation_record(CharacterGeneration& backend, CmdBuf* cb, const DrawRec& r, uint32_t section)
 {
-    try { return backend.record(cb, r, section); }
+    try {
+        // Sections with a component are the Core's; its instances are decomposed as the Core does (P2-4). A section
+        // without one runs its lists once for the whole draw, as the original's do.
+        if (r.instances > 1 && section < backend.package.sections.size() && backend.package.sections[section].component != kCharacterNone)
+            return backend.record_instances(cb, r, section);
+        return backend.record(cb, r, section);
+    }
     catch (const std::exception& e) { ++backend.counters[C_STATE]; backend.note(e.what()); return false; }
 }
 

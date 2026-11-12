@@ -320,6 +320,7 @@ bool CharacterProgram::load(const std::filesystem::path& ini, const std::filesys
         for (const auto& library : options.libraries) libraries_[declared_namespace(library)] = library;
     }
     efmi::frontend::character_core_version(*extension, core_version(core));
+    options.vertex_shader_filter = core_vertex_filter(core);
     return start(options, std::move(extension), declarations_only, reason);
 }
 bool CharacterProgram::start(efmi::frontend::RuntimeConfig& options, std::shared_ptr<efmi::frontend::RuntimeExtension> extension,
@@ -466,6 +467,49 @@ std::string CharacterProgram::declared_namespace(const std::filesystem::path& in
         return value;
     }
     return {};
+}
+// What `vs` reads for a bound vertex shader under the installed Core (BUG-090): its main.ini, which the generation
+// does not load, has a ShaderRegex section without a pattern section over the vertex shader models (EFMI:
+// [ShaderRegexEnableTextureOverrides], vs_4_0 to vs_5_1), which matches every vertex shader; the original then
+// answers that section's filter_index, or 1. NaN without one.
+float CharacterProgram::core_vertex_filter(const std::filesystem::path& core)
+{
+    const std::string text = ini_text(core / "main.ini");
+    struct Group { bool vertex = false; float filter = 1.0f; };
+    std::map<std::string, Group> groups;
+    std::set<std::string> patterned;
+    std::string current;
+    for (size_t at = 0; at < text.size();) {
+        const auto end = text.find('\n', at);
+        std::string line = text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+        at = end == std::string::npos ? text.size() : end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        if (!line.empty() && line[0] == '[') {
+            current = line.substr(1, line.find(']') == std::string::npos ? std::string::npos : line.find(']') - 1);
+            const auto dot = current.find('.');
+            if (!current.compare(0, 11, "shaderregex")) {
+                if (dot == std::string::npos) groups[current];
+                else patterned.insert(current.substr(0, dot));
+            }
+            continue;
+        }
+        const auto group = groups.find(current);
+        if (group == groups.end()) continue;
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        std::string key = line.substr(0, equals);
+        key.erase(key.find_last_not_of(" \t") + 1);
+        const std::string value = line.substr(equals + 1);
+        if (key == "shader_model") group->second.vertex = value.find("vs_") != std::string::npos;
+        else if (key == "filter_index") {
+            char* stop = nullptr;
+            const float parsed = strtof(value.c_str(), &stop);
+            if (stop != value.c_str() && std::isfinite(parsed)) group->second.filter = parsed;
+        }
+    }
+    for (const auto& group : groups)
+        if (group.second.vertex && !patterned.count(group.first)) return group.second.filter;
+    return std::numeric_limits<float>::quiet_NaN();
 }
 // The version the installed Core declares: `global $version = N` of its main.ini, which the generation
 // does not load (its GUI); 0 when the file or the line is not there.
@@ -779,6 +823,7 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
             bool loaded = false;
         };
         const float version = core_version(source.core);
+        const float vertex_filter = core_vertex_filter(source.core);
         // One load of the folder without the Mods marked in `without` and the plain inputs in `without_plain`.
         // Every enabled INI of the Mods folder is an input, in the original's include order, as its
         // include_recursive takes them (D-155); not the files of the native libraries (their key and
@@ -806,6 +851,7 @@ bool CharacterProgram::discover_folder(const FolderSource& source, std::vector<F
             options.native_library_files = native_library_files(source.mods);
             for (const auto& native : options.native_library_files) excluded.insert(key(native));
             options.installation = root;
+            options.vertex_shader_filter = vertex_filter;
             const auto under = [](const std::wstring& name, const std::vector<std::wstring>& folders) {
                 return std::any_of(folders.begin(), folders.end(), [&](const std::wstring& folder) { return !name.compare(0, folder.size(), folder); });
             };
@@ -1047,7 +1093,12 @@ bool CharacterProgram::plan(const efmi::frontend::RuntimeDraw& request, Characte
         listing.p = this; listing.began = std::chrono::steady_clock::now();
 #endif
         skip = plan.skip_original;
-        if (!skip) {
+        // A list that draws without `handling = skip` (review R-09, D-179): the original draws the Mod's draws on the
+        // context and the game's draw after them. With the caller's pointer such a plan is read as a hiding one is,
+        // and the caller draws the Mod's and lets the game's through (skip false, *textures false, draws in `output`).
+        const bool has_draws = std::any_of(plan.items.begin(), plan.items.end(), [](const efmi::assets::FilePlanItem& item) {
+            return item.operation == efmi::assets::FileOperation::DrawIndexed || item.operation == efmi::assets::FileOperation::Translucent; });
+        if (!skip && !(has_draws && textures)) {
             output = {};
             if (!textures) return true;
             // The application's draw stays, with the textures the pre phase bound for it: under DX11

@@ -21,7 +21,7 @@
   - Done 2026-11-12 (D-176, sandbox): P2-2, a section without a component that draws a mesh of its own, under the game's vertex stage and bones (`record_own_mesh`). No installed Mod has such a section today; to see in the game it needs one (a part's mesh replaced without the Core). (refused today: "INI hide override unexpectedly emits geometry"). The game's pipeline with its vertex stage kept (as the texture-only draw, `keep_vertex`), the Mod's buffers by `CharacterPackage::vertex_input`, no merged skeleton: the blend stream's bones are the game's own and are not validated against a merged one. Check: the scene's unmatched draw replaced by a Mod's triangle elsewhere (the scene needs a switch for what it expects at that place).
   - Done 2026-11-12 (D-178, sandbox): a texture of another package's folder bound in a draw (BUG-091). Left: a mesh file of another package's folder.
   - Done 2026-11-12 (D-177, sandbox, not in dist): P2-3's main part, the character contract from what the Mod's lists hand to the Core instead of the exporter's names. Left of it: a section the static reading finds nothing in is not read again at its first draw (a component chosen by a value computed at draw time).
-  - P2-4: instanced character draws (R-05).
+  - Done 2026-11-12 (D-180, sandbox): P2-4, an instanced draw of a section with a component decomposed per instance as the Core's IterateInstances. Left: a first instance other than 0, more than 64 instances (the application's draw stays). No instanced character draw seen in the game.
 - To see in the game (nothing of it has run there): last rite's hair with the Mod's diffuse texture; no new notice for any installed Mod; the panels' `$active` marks as before.
 
 ## Next: 2.1.4 in the game (BUG-092; in the main checkout's dist since 2026-11-11 20:16)
@@ -40,7 +40,7 @@
 - Open of P1-5, each with what it needs:
   - The game's texture of another pixel slot (`ps-t1 = ref ps-t0`): degraded now (the game's texture of the slot stays, a notice). To honour it the patched fragment module would read slot N from the application's binding of slot M (`frontend/gpu` material profile, `spirv_repoint`), no new image. The sweep line `moved_pixel` records the difference.
   - Input-layout edits in general (R-08): the conversion takes the blend-index widening and the offset edits a Mod's lists name; any other edit still leaves the draw to the game. Needed: the game's DX11 semantic per Vulkan location for the character pipelines (a fact of this game, from the paired catalogue; belongs with L-07), then `ApplyInputLayoutOverrides` on that layout.
-  - A list that draws without `handling = skip` (R-09): only its textures for the game's draw are taken. `record()` restores the game's pipeline, buffers and set 3 after its draws, so the Mod's draws could be emitted and the game's draw let through; needs a live scene case first (a section without skip that draws beside the game's mesh).
+  - Done 2026-11-12 (D-179, sandbox): a list that draws without `handling = skip` (R-09) draws the Mod's draws and then the game's. Left: the pre phase's pixel bindings for the game's own draw after them (the game's draw keeps its textures).
   - A constant buffer or a texture of another stage bound by the lists is degraded (the game's stays). Honouring it needs the DX11 slot's Vulkan binding per pipeline and a private set, as the pixel textures have.
 - To see in the game when the user next plays on Vulkan (Phase 1 ends in a deployment and a user-started session; nothing of this has run there):
   - Every installed Mod as before: no character that drew now missing, wrong or the game's (the offline digests of the 19 installed Mods say which plans changed and why, CURRENT_STATE).
@@ -48,7 +48,7 @@
   - `replacement.last_reason` and the per-Mod refusal counters: a refusal that names a line of a Mod's list ("Unsupported ...") should no longer exist; the remaining reasons are the host's (native contract, budgets, a buffer the layer cannot bind, the conversion).
   - Frame time against the session before: the lists do the same work per command (one try block and one state lookup more); `tracker_work.draw_record` per call and the plan stage's share should not move.
   - A Mod written outside the exporter's shape, if the user has one: it should now draw, with notices for what is degraded.
-- Not judged by the scene: `vs` as a value (BUG-090).
+- `vs` as a value (BUG-090): fixed 2026-11-12, the sweep judges it now.
 
 ## Active: the architecture review's plan (2026-11-10, docs/architecture-review-2.1.md section 8)
 
@@ -57,10 +57,10 @@
   - Done 2026-11-11 (sandbox): BUG-088, the EFMITTL of 2026-11-10 (D-170 to D-172). To see in the game (below).
   - D-170's property query reads the target through the draw state (`named()`, `context`, `held()`), ahead of `from_state`: at a slot a Mod's file reads its own format, which `of_declaration` would answer with the declaration's (the judge's `properties` case).
   - Done 2026-11-11 (Phase 1, above): the sweep's 12 recorded differences. No line refuses a draw; what is left differs for one draw or one slot, each recorded with what may differ (`only`).
-  - The sweep's line the scene does not judge: `vs` as a value (BUG-090). `vbN->stride` and a query on `ib` are answered from the draw state now.
+  - Done 2026-11-12: `vs` as a value (BUG-090) reads the Core's ShaderRegex value; the sweep judges every line. `vbN->stride` and a query on `ib` are answered from the draw state.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
   - P3-4: hashed textures in the state check, so texture-hash sections run offline (the exclusions are listed in docs/ini-semantics.md).
-  - P4-3 and P4-4.
+  - P4-3: the variant cache's eviction done 2026-11-12 (D-181, sandbox). Left: the residency's image table never shrinks, one deferred-destruction queue, L-04's first-use waits under the tracker's lock, L-06's failed image. P4-4.
   - Done 2026-11-12 (sandbox): BUG-089, reproduced (one snapshot batch per recording with the gate set) and fixed. To see in the game: with RabbitFX's `\` key on, a package's `batches_made` stays a handful.
   - L-07: a notice when the game's facts (shader contract, slot table) are not known for the running game version.
 - Needs game sessions and the user's choice: Phase 1's game session (its offline part is done, above), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).

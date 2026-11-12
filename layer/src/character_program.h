@@ -79,6 +79,8 @@ public:
     static bool folder_has_inputs(const std::filesystem::path& mods);
     // The version the installed Core declares in its main.ini (`global $version`), 0 when not found.
     static float core_version(const std::filesystem::path& core);
+    // What `vs` reads for a bound vertex shader under the installed Core (BUG-090), NaN for nothing.
+    static float core_vertex_filter(const std::filesystem::path& core);
     // The libraries a generation of `inputs` calls (D-112): every enabled INI of the Mods folder outside
     // every character Mod's folder that declares a namespace the inputs reference (`CommandList\NS\...`,
     // `$\NS\...`) and that neither an input nor `known` (the extension's own libraries) declares; then

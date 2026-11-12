@@ -581,7 +581,8 @@ notice: a constant buffer or a texture of another stage keeps the game's binding
 `dispatch` do nothing in the scene's CPU generation), and `differs`, which names the one measure that may
 differ and never a refusal (2 of the layer: `o0 = null` leaves that draw out, so the picture is the
 original's and the input assembler's count is not; the game's texture of another pixel slot keeps the
-slot's own; 1 the scene does not judge: `vs` as a value, BUG-090). `EFMI_VK_JUDGE_RUNTIME` runs the layer's
+slot's own; `vs` as a value, BUG-090, is `same` since 2026-11-12: it reads the filter_index of the Core's
+patternless ShaderRegex over vertex shaders, or 1). `EFMI_VK_JUDGE_RUNTIME` runs the layer's
 side on another build's runtime_test.exe: on the build before, with these records, 4 cases and 23 lines
 fail (20 of them refuse the draw or draw another picture).
 
@@ -667,8 +668,9 @@ pipeline's own BLENDINDICES element, of the width the game declares (`CharacterD
 Not done of Phase 1 (2026-11-11): the game's texture of another pixel slot bound from the draw's own set
 (degraded: the game's texture of the slot stays); input-layout edits beyond the blend-index widening and
 the offset edits a Mod's lists name (the layer has the pipeline's Vulkan locations, not the game's DX11
-semantics; such a draw still stays the game's); draws of a list without `handling = skip` (the Mod's
-draws beside the game's: only its textures for the game's draw are taken). A changed constant buffer or
+semantics; such a draw still stays the game's). Draws of a list without `handling = skip` are drawn
+beside the game's since 2026-11-12 (D-179: the Mod's draws, then the game's draw with its own state; the
+pre phase's pixel bindings for the game's own draw are not applied). A changed constant buffer or
 texture of another stage is degraded, not bound.
 
 Checks: plan_test (67 checks; the lists `copyslot`, `unlessnull`, `slottoslot`, `savedvertex`,

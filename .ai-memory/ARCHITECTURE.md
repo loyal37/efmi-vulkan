@@ -158,7 +158,7 @@ Open: the first-use waits for textures and variants (up to 4 s each) are taken u
 No single mechanism: command owners released at the game's reset or free of a command buffer (arenas,
 variants, meshes, twins), per-queue timeline semaphores for bone work, the texture timeline, presenter
 tickets, fences for notices and meshes. A package stops once (`stop_once`); a folder generation retires
-off the presenting thread. The variant cache has no eviction (review L-08).
+off the presenting thread. The variant cache lets go of the finished variants least recently asked for when it is full (D-181, review L-08).
 
 ## What the layer assumes of this game
 

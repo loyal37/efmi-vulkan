@@ -5,7 +5,10 @@
 
 static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_late=false,bool lazy_packages=false)
 {
-    auto recipe=m2_fixture::recipe();
+    // P2-4: EFMI_VK_TEST_INSTANCED=1, component B drawn with two instances whose entries lie side by side: the
+    // character's (B's own) and another object's, which the application draws at (-.3,-.35).
+    const bool instanced=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_INSTANCED",value,sizeof(value)) && value[0]=='1';}();
+    auto recipe=m2_fixture::recipe(instanced);
     RecipeFixture layout_fixture(material);auto layout=layout_fixture.layout;
     // D-133: the application's fragment shader with the character dither, for the scene that runs RabbitFX's
     // anti-dither (EFMI_VK_TEST_DITHER=1 in this process's environment): its pictures must be the same.
@@ -13,7 +16,10 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     // D-176: with EFMI_VK_TEST_OWN_MESH=1 a section of the scene's Mods folder hides the draw no section of
     // the character matches and draws a triangle of its own, moved by (0,.85), under the application's
     // vertex stage: on that draw's own bone it stands at (.6,.75) with the application's shading.
-    const bool own_mesh=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_OWN_MESH",value,sizeof(value)) && value[0]=='1';}();
+    // D-179: EFMI_VK_TEST_OWN_MESH=2, the same section without `handling = skip`: the Mod's triangle beside the
+    // application's, which stays where it is, also while the package comes up.
+    const int own_mesh_mode=[]{char value[4]={};return GetEnvironmentVariableA("EFMI_VK_TEST_OWN_MESH",value,sizeof(value)) ? atoi(value) : 0;}();
+    const bool own_mesh=own_mesh_mode!=0, beside=own_mesh_mode==2;
     // D-178: with EFMI_VK_TEST_UNMATCHED_SHADE=N a section of the scene's Mods folder gives the draw no section of
     // the character matches a texture of its own (the application's draw again with it, D-083): that draw shows
     // shade N once its package is on the device.
@@ -111,7 +117,8 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     if(material)memcpy(static_cast<uint8_t*>(bones.mapped)+258*16,tint,16);
     // Palettes: a component's bone k is the matrix at offset + 3 + 3 * k; only its first row is used.
     enum{A_CUR=2000,A_PREV=2100,B_CUR=2200,B_PREV=2300,C_CUR=2400,C_PREV=2500,L_CUR=2600,L_PREV=2700,U_CUR=2800,U_PREV=2900,
-         N_CUR=3000,N_PREV=3100,X_CUR=3200,X_PREV=3300,Y_CUR=3400,Y_PREV=3500};
+         N_CUR=3000,N_PREV=3100,X_CUR=3200,X_PREV=3300,Y_CUR=3400,Y_PREV=3500,I_CUR=3600,I_PREV=3700};
+    row(I_CUR+3,-.3f,-.35f);
     row(A_CUR+3,-.6f,-.6f);row(A_CUR+6,-.6f,.6f);
     row(B_CUR+3,0,-.6f);row(B_CUR+6,0,0);
     row(C_CUR+3,.6f,-.6f);
@@ -128,11 +135,13 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         float place[]={x,20,30,1};memcpy(e+48,place,16);
         uint32_t offsets[]={current,previous,258,0x3f800000};memcpy(e+80,offsets,16);
     };
-    enum{E_A,E_B,E_C,E_L,E_U,E_N,E_X,E_Y};
+    enum{E_A,E_B,E_C,E_L,E_U,E_N,E_X,E_Y,E_I0,E_I1};
     entry(E_A,A_CUR,A_PREV,1);entry(E_B,B_CUR,B_PREV,.5f);entry(E_C,C_CUR,C_PREV,1);entry(E_L,L_CUR,L_PREV,1);entry(E_U,U_CUR,U_PREV,1);
     // Another object, a quarter of a unit away, that happens to use component B's mesh.
     entry(E_N,N_CUR,N_PREV,1,10.25f);
     entry(E_X,X_CUR,X_PREV,1,50);entry(E_Y,Y_CUR,Y_PREV,1,50);
+    // The instanced draw's entries, adjacent: B's own object (the character) and another one far from it.
+    entry(E_I0,B_CUR,B_PREV,.5f);entry(E_I1,I_CUR,I_PREV,.5f,60);
     // The block of the fourth set, read at a nonzero dynamic offset: its color is a quarter green.
     auto extra=g.buffer(dynamic+65536,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     {float shade[]={1,.25f,0,.5f};memcpy(static_cast<uint8_t*>(extra.mapped)+dynamic+16,shade,16);}
@@ -237,7 +246,8 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
             vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,g.pipeline);
         }
         else{bind(E_A);vkCmdDrawIndexed(cmd,3,1,0,0,0);}
-        bind(E_B);vkCmdDrawIndexed(cmd,6,1,3,0,0);
+        if(instanced && dynamic==256){bind(E_I0);vkCmdDrawIndexed(cmd,6,2,3,0,0);}
+        else{bind(E_B);vkCmdDrawIndexed(cmd,6,1,3,0,0);}
         bind(E_C);vkCmdDrawIndexed(cmd,9,1,9,0,0);
         // Not a section of the package; drawn right after replaced draws without rebinding pipeline or buffers.
         bind(E_U);vkCmdDrawIndexed(cmd,3,1,30,0,0);
@@ -264,7 +274,7 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     };
     // The draw no section of the character matches: the application's triangle at (.6,-.1), or, in D-176's
     // scene, the Mod's own in its place at (.6,.75) once its package is on the device (`live`).
-    auto unmatched=[&](bool live=true){return own_mesh ? shade_at(.6f,-.1f)==0 && shade_at(.6f,.75f)==(live?1:0) :
+    auto unmatched=[&](bool live=true){return own_mesh ? shade_at(.6f,-.1f)==(beside?1:0) && shade_at(.6f,.75f)==(live?1:0) :
                                                   shade_at(.6f,-.1f)==(live || unmatched_shade==1 ? unmatched_shade : 0);};
     // What the game draws by itself: every component at bone zero of its own palette.
     auto original=[&]{return shade_at(-.6f,-.6f)==1 && shade_at(0,-.6f)==2 && shade_at(.6f,-.6f)==1 && shade_at(.6f,-.1f)==1 && shade_at(0,.6f)==1 &&
@@ -319,6 +329,17 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
     }
     row(A_CUR+3,-.6f,-.6f);
     check(follows,"20 pose changes of one component move the other component's geometry in the same frame");
+    if(instanced){
+        // The Core's IterateInstances: the character's instance is the Mod's, the other one the application's,
+        // drawn alone with its own entry (`drawindexedinstanced = INDEX_COUNT, 1, ..., FIRST_INSTANCE + id`).
+        check(dynamic==256,"the scene's entries lie 256 bytes apart, as one instanced draw reads them");
+        bool both=false;
+        for(uint32_t attempt=0;attempt<200 && !both;++attempt){frame(false);both=replaced(-.6f) && shade_at(-.3f,-.35f)==2;if(!both)Sleep(5);}
+        if(!both)shades("instanced draw");
+        check(both,"an instanced draw: the character's instance replaced, the other instance drawn as the application's");
+        self_probe("{\"cmd\":\"status\"}","character-final.json");
+        return;
+    }
     if(unmatched_shade!=1){
         // The texture follows the draw: the application's mesh, moved by its own bone, with the Mod's image.
         bool moves=true;
@@ -338,7 +359,7 @@ static void run_character(Gpu& g,bool use_rp2,bool material=false,bool reject_la
         for(uint32_t i=0;i<6;++i){
             const float ux=i%2?.5f:.6f;
             row(U_CUR+3,ux,-.1f);frame(false);
-            moves&=shade_at(ux,.75f)==1 && shade_at(ux,-.1f)==0 && shade_at(-.6f,.3f)==a_shade && shade_at(0,0)==b_shade;
+            moves&=shade_at(ux,.75f)==1 && shade_at(ux,-.1f)==(beside?1:0) && shade_at(-.6f,.3f)==a_shade && shade_at(0,0)==b_shade;
         }
         row(U_CUR+3,.6f,-.1f);frame(false);
         check(moves && replaced(-.6f),"a Mod's own mesh under the application's vertex stage follows the application's bone of its draw");

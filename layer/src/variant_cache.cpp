@@ -60,12 +60,15 @@ VariantResult VariantCache::submit(uint64_t identity, std::shared_ptr<const Grap
         fragment.images.size()>32 || fragment.nulls.size()>32 || fragment.images.size()+fragment.nulls.size()>32)
         return {VariantState::Failed, {}, "invalid variant request"};
     auto key = key_for(identity, vertex,fragment);
+    // Variants let go of when the cache is full (L-08) are destroyed after the lock, where their last owner lets go.
+    std::vector<std::shared_ptr<Job>> released;
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopped_) return {VariantState::Stopped, {}, "variant cache stopped"};
     auto found = jobs_.find(key);
     if (found != jobs_.end()) {
         // A prepared variant a draw now asks for goes ahead with the requested ones.
         const auto& job = found->second;
+        if (!prepared) job->used = ++clock_;
         if (!prepared && job->prepared) {
             job->prepared = false;
             later_.erase(std::remove(later_.begin(), later_.end(), job), later_.end());
@@ -73,10 +76,11 @@ VariantResult VariantCache::submit(uint64_t identity, std::shared_ptr<const Grap
         }
         return job->result;
     }
+    if (jobs_.size() >= capacity_) evict(released);
     if (jobs_.size() >= capacity_) return {VariantState::Saturated, {}, "variant cache capacity reached"};
     auto job = std::make_shared<Job>();
     job->key = std::move(key); job->recipe = std::move(recipe); job->layout = std::move(layout); job->vertex = vertex;
-    job->fragment=fragment; job->prepared = prepared;
+    job->fragment=fragment; job->prepared = prepared; job->used = ++clock_;
     jobs_.emplace(job->key, job); (prepared ? later_ : queue_).push_back(job); wake_.notify_one();
     return job->result;
 }
@@ -103,6 +107,29 @@ VariantResult VariantCache::await(uint64_t identity, std::shared_ptr<const Graph
     lock.unlock();
     wait_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
     return result;
+}
+
+// L-08: the cache had no eviction; at its capacity every new variant was refused and new draws stayed the game's
+// for the rest of the session. The original has no such bound: D3D11 creates what a draw needs. A finished variant
+// the cache lets go of lives on in every command buffer and draw lookup that holds it, and is made again when asked
+// for again; one queued or building stays.
+void VariantCache::evict(std::vector<std::shared_ptr<Job>>& released)
+{
+    std::vector<std::pair<uint64_t, Key>> finished;
+    for (const auto& item : jobs_) {
+        const auto state = item.second->result.state;
+        if (state != VariantState::Queued && state != VariantState::Building) finished.emplace_back(item.second->used, item.first);
+    }
+    const size_t count = std::min(finished.size(), std::max<size_t>(1, capacity_ / 8));
+    std::partial_sort(finished.begin(), finished.begin() + count, finished.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < count; ++i) {
+        const auto found = jobs_.find(finished[i].second);
+        if (found == jobs_.end()) continue;
+        released.push_back(found->second);
+        jobs_.erase(found);
+        ++evictions_;
+    }
 }
 
 void VariantCache::retire(uint64_t identity)

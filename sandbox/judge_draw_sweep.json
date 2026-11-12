@@ -381,9 +381,7 @@
     "    ps-t0 = ResourceBlue",
     "endif"
    ],
-   "expect": "differs",
-   "class": "scene",
-   "finding": "`vs` as a value: the judge's d3dx.ini matches every vertex shader with a patternless ShaderRegex, as the EFMI Core's does, so the original reads 1 (a matched section without filter_index); this scene's generation has no shader facts and reads the table's 0 with a notice. A character generation's Core extension answers 0 as well (BUG-090)"
+   "expect": "same"
   },
   {
    "name": "copy_of_slot",

@@ -3,6 +3,8 @@
 #include "runtime_host.h"
 #include "layer_gap.h"
 #include <regex>
+#include <cmath>
+#include <limits>
 
 std::wstring HostResourceDirectory();
 
@@ -70,6 +72,36 @@ void RuntimeShaderRegexGates(std::vector<std::pair<uint32_t, uint32_t>>& gates, 
             ParseCommandListIniParamOverride(section.first.c_str(), line.first.c_str(), &value, &assignments, &line.ini_namespace);
         }
     }
+}
+// What `vs` reads for a bound vertex shader under the original (BUG-090): process_shader_filter answers a shader a
+// ShaderOverride or ShaderRegex section matches with that section's filter_index, 1 without one, and 0 for a shader
+// none matches. A ShaderRegex section without a pattern section matches every shader of its shader models (the EFMI
+// Core's [ShaderRegexEnableTextureOverrides] does, for vs_4_0 to vs_5_1). NaN where no section of the generation does.
+float RuntimeVertexShaderFilter()
+{
+    for (const auto& section : ini_sections) {
+        const std::wstring& name = section.first;
+        if (_wcsnicmp(name.c_str(), L"ShaderRegex", 11) || name.find(L'.') != std::wstring::npos) continue;
+        bool vertex = false;
+        float filter = 1.0f;
+        for (const auto& line : section.second.kv_vec) {
+            if (!_wcsicmp(line.first.c_str(), L"shader_model")) {
+                std::wstring models = line.second;
+                std::transform(models.begin(), models.end(), models.begin(), ::towlower);
+                vertex = models.find(L"vs_") != std::wstring::npos;
+            } else if (!_wcsicmp(line.first.c_str(), L"filter_index")) {
+                wchar_t* end = nullptr;
+                const float value = wcstof(line.second.c_str(), &end);
+                if (end != line.second.c_str() && std::isfinite(value)) filter = value;
+            }
+        }
+        if (!vertex) continue;
+        const std::wstring pattern = name + L".Pattern";
+        const auto next = ini_sections.lower_bound(pattern);
+        if (next != ini_sections.end() && !_wcsnicmp(next->first.c_str(), pattern.c_str(), pattern.size())) continue;
+        return filter;
+    }
+    return std::numeric_limits<float>::quiet_NaN();
 }
 void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,bool custom_shaders,bool shader_hooks)
 {

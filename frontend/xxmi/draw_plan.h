@@ -154,6 +154,10 @@ public:
     // Shader operands (`vs`, `ps`) the host answers on the CPU where no owned shader facts apply (a
     // replaced draw's plan, D-089). A false answer refuses. Install before adaptation.
     void plan_shader_queries(ShaderQuery);
+    // What `vs` reads for a bound vertex shader no host answer covers (BUG-090): the filter_index of a ShaderRegex
+    // over every vertex shader, or 1; NaN for none (the table's 0).
+    void vertex_shader_filter(float value);
+    float vertex_shader_filter() const;
     // A declaration the SPIR-V leaves between two DX11 answers (a buffer of 32-bit words: structured or
     // raw): true when the running evaluation takes the second for this register. The adapter evaluates an
     // `if` with every combination and refuses only when they do not agree; any other command that asks

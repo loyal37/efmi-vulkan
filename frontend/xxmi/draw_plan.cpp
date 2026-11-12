@@ -49,6 +49,7 @@ constexpr size_t max_active_depth = 64;
 // property: `ps-tN->Format` and the like of a pixel slot or a declaration in a replaced draw's plan, from the
 // texture provider's description of what the target holds (D-170).
 struct QueryService {DrawPlanAdapter::ResourceQuery read,texture,plan_read,declared,property;DrawPlanAdapter::ShaderQuery shader,plan_shader;size_t count=0;bool general_matches=false;
+    float vertex_filter=std::numeric_limits<float>::quiet_NaN(); // BUG-090
     // Registers whose declaration is one of two (undecided_words), as the running command asked them, and
     // which of them take the second answer in this evaluation (bit i for the i-th).
     std::vector<std::pair<wchar_t,unsigned>> words;uint32_t words_second=0;bool words_over=false;
@@ -106,7 +107,9 @@ public:
             }else if(service->shader(*source,*state,value,why))return value;
         }catch(const Refused& e){why=e.reason;} // a slot argument outside the shader's registers
         // Nothing answers (process_shader_filter's own values, D-163): a bound shader no ShaderOverride
-        // names, a register that is not declared; a draw has no compute shader.
+        // names, a register that is not declared; a draw has no compute shader. A vertex shader every one of which
+        // a patternless ShaderRegex matches reads that section's value (BUG-090).
+        if(mode==ShaderTargetEvaluationMode::SHADER && target.shader_type==L'v' && !std::isnan(service->vertex_filter))return service->vertex_filter;
         if(mode==ShaderTargetEvaluationMode::SHADER)
             return service->gap(this,OperandGap::ShaderFilter,target.shader_type==L'c'?-0.0f:operand_value(OperandGap::ShaderFilter),why);
         return service->gap(this,mode==ShaderTargetEvaluationMode::DCL_CB_TYPE || mode==ShaderTargetEvaluationMode::DCL_SRV_TYPE?
@@ -1939,6 +1942,8 @@ bool DrawPlanAdapter::undecided_words(wchar_t stage,unsigned slot){
     }
     return (q.words_second>>(at-q.words.begin()))&1u;
 }
+void DrawPlanAdapter::vertex_shader_filter(float value){runtime_->queries->vertex_filter=value;}
+float DrawPlanAdapter::vertex_shader_filter() const{return runtime_->queries->vertex_filter;}
 void DrawPlanAdapter::plan_shader_queries(ShaderQuery query){
     if(runtime_->active || !runtime_->adapted.empty() || !query)refuse(L"Install plan shader queries before adapting command lists");
     runtime_->queries->plan_shader=std::move(query);

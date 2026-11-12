@@ -105,7 +105,7 @@ int main()
         check(again.state==VariantState::Building && !again.variant,"canonical vertex key deduplicates reordered declaration");
         auto changed=vertex; changed.bindings[0].stride+=4;
         check(cache.request(1,recipe,layout,changed).state==VariantState::Queued,"changed stride is a distinct variant");
-        check(cache.request(2,recipe,layout,vertex).state==VariantState::Saturated,"bounded cache retains original path when full");
+        check(cache.request(2,recipe,layout,vertex).state==VariantState::Saturated,"bounded cache retains original path when full of pending builds");
         check(cache.request(0,recipe,layout,vertex).state==VariantState::Failed &&
               cache.request(3,{},layout,vertex).state==VariantState::Failed,"invalid identities and absent recipes rejected");
         driver.resume();
@@ -238,6 +238,23 @@ int main()
         check(p61 && p62 && p63 && p62<p63 && p63<p61 && driver.started==before+4,
               "requested variants build before a prepared one, and a requested prepared one with them");
         cache.stop();
+    }
+    {
+        // L-08: a full cache lets go of the finished variant least recently asked for, and builds the new one.
+        VariantCache cache(handle<VkDevice>(1),dispatch(),4,2);
+        auto changed=vertex; changed.bindings[0].stride+=4;
+        auto a=await(cache,7,recipe,layout,vertex), b=await(cache,7,recipe,layout,changed);
+        check(a.state==VariantState::Ready && b.state==VariantState::Ready,"two finished variants fill the cache");
+        auto kept=a.variant;
+        cache.request(7,recipe,layout,vertex); // asked for again: the other one is now the older
+        const auto third=await(cache,8,recipe,layout,vertex);
+        check(third.state==VariantState::Ready && cache.evictions()==1,"the third is built after the least recently asked for went");
+        const auto started=driver.started;
+        check(cache.request(7,recipe,layout,vertex).state==VariantState::Ready && driver.started==started,"the one asked for again stayed");
+        check(kept && kept->pipeline,"a variant held by a command buffer lives on whatever the cache let go of");
+        a.variant.reset(); b.variant.reset();
+        cache.stop();
+        kept.reset();
     }
     printf("variant cache: %d checks passed, %d failed\n",passed,failed);
     return failed?1:0;

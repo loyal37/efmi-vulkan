@@ -106,7 +106,7 @@ enum Counter : uint32_t {
     C_ENTRY, C_BONES, C_IMPORT, C_EXHAUSTED, C_IDENTITIES, C_SET3_RESTORED,
     C_MATERIAL, C_IMAGE, C_IMAGE_PENDING, C_MATERIAL_ITEMS, C_COMPAT_ITEMS, C_DERIVED, C_INHERITED,
     C_IDENTITY_NEW, C_IDENTITY_EXPIRED, C_TEXTURED, C_KEPT, C_OWNED, C_MEMORY, C_GATED, C_GATED_FRAMES, C_SNAPSHOT_COPIES, C_IDENTITY_ADOPTED,
-    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_COUNT
+    C_PREPARING, C_TRANSLUCENT, C_BONE_JOBS, C_BONE_RING, C_BATCH_MADE, C_HELD, C_ORIGINAL_FIRST, C_BONES_UNAVAILABLE, C_ACTIVATION, C_OWN_MESH, C_BESIDE, C_INSTANCED, C_COUNT
 };
 const char* const kCounterNames[C_COUNT] = {
     "matched", "replaced", "items", "hidden", "identifying", "incomplete", "pending",
@@ -116,7 +116,7 @@ const char* const kCounterNames[C_COUNT] = {
     "material_derived", "material_inherited", "identities_created", "identities_expired", "textured",
     "kept_original", "owned_streams", "waiting_memory", "gated", "gated_frames", "snapshot_copies", "identities_adopted", "preparing",
     "translucent", "bone_jobs", "bone_ring_busy", "batches_made_at_draw", "held_before_shown", "original_before_shown",
-    "bones_unavailable", "activation_failed", "own_mesh"
+    "bones_unavailable", "activation_failed", "own_mesh", "drawn_beside", "instanced_draws"
 };
 // Where a matched draw's time goes (D-099): microseconds per stage of record(), in the status.
 enum Stage : uint32_t { S_LOCK, S_IDENTIFY, S_BONES, S_PLAN, S_MATERIALS, S_VARIANTS, S_OWNER, S_APPEND, S_SNAPSHOT, S_EMIT, S_COUNT };
@@ -562,7 +562,9 @@ public:
     static bool vertex_stride(const PipeInfo& pipe, unsigned slot, uint32_t& stride, std::string& why);
     // The draw matched `section_index` of the package (its hash, count and first index checked by the
     // device's index): recorded as the Mod's, hidden, or left to the game.
-    bool record(CmdBuf* cb, const DrawRec& r, uint32_t section_index);
+    // `instance`: the instance of an instanced draw this call takes (record_instances), whose entry lies that many
+    // entries after the first; UINT32_MAX for a draw of one instance.
+    bool record(CmdBuf* cb, const DrawRec& r, uint32_t section_index, uint32_t instance = UINT32_MAX);
     bool plan_draw(const efmi::frontend::RuntimeDraw& request, CharacterList& output, bool& skip, bool& added, std::string& reason,
                    const VertexInputRecipe* vertex, bool* textures);
     void submit_draw_work(VkQueue queue);
@@ -570,6 +572,10 @@ public:
     // The application's draw made again with the Mod's textures (D-083). Caller holds res_mx and
     // mod_mx; `list` is a texture-only list of the program.
     bool record_textures(CmdBuf* cb, const DrawRec& r, const PipeInfo& pipe, uint32_t section, uint64_t present, const CharacterList& list);
+    // An instanced draw of a section with a component (P2-4), as the Core's IterateInstances: each instance on its
+    // own, with its own instance entry; one the Mod does not take is drawn alone as the application's. False: not
+    // decomposed, the application's instanced draw stays.
+    bool record_instances(CmdBuf* cb, const DrawRec& r, uint32_t section_index);
     // A section without a component whose lists draw a mesh of their own (D-176): the Mod's buffers and
     // textures in the game's pipeline with its vertex stage as it is. Caller holds res_mx and mod_mx, inside
     // record(); `list` is a list of the program with draws.

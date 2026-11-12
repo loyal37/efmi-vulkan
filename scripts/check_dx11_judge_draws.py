@@ -138,6 +138,9 @@ def run_layer(case: Path, frames: int) -> dict:
         raise RuntimeError("build the INI runtime test first (scripts/build_xxmi_runtime.py)")
     work = OUT / "layer" / case.stem
     ini = stage(case, work / "Mods")
+    # The installation's d3dx.ini beside the Mods folder, as the original reads it and the layer takes its own
+    # sections (BUG-090: its patternless ShaderRegex over vertex shaders is what `vs` reads).
+    (work / "d3dx.ini").write_text(D3DX, encoding="utf-8")
     run = subprocess.run([str(exe), "--judge-scene", str(ini), str(frames), "%08x" % HASHES[0], "%08x" % HASHES[1]], cwd=work,
                          capture_output=True, text=True, errors="replace", timeout=300)
     result = next((json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")), None)

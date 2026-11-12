@@ -6,6 +6,15 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## Offline round of 2026-11-12 evening (the same request; sandbox only, not in dist)
+
+- D-179 (R-09): a list that draws without `handling = skip` draws the Mod's draws and then the game's (HackerContext's `if (!c.call_info.skip)` after the pre lists). Failing first: `own_mesh_case(beside=True)`, the Mod's triangle and the game's mesh both.
+- D-180 (P2-4, R-05): an instanced draw of a section with a component decomposed per instance as the Core's IterateInstances. Failing first: the live scene `instanced_draw`, 1 of 3 on the build before, 3 of 3.
+- D-181 (L-08, part of P4-3): the variant cache lets go of the finished variant least recently asked for when full. Failing first: `cache_test` 40 of 41 before, 41 of 41.
+- BUG-090 fixed: `vs` as a value reads the filter_index of the Core's patternless ShaderRegex over vertex shaders (1). Failing first: the live scene's `$vs_value` (0 before), and the sweep's `if_vertex_shader` is `same` now (the judge's layer side has the installation's d3dx.ini beside its Mods folder, as the original's).
+- Verified (work tree, sandbox): the whole build; the touched areas, 35 steps: text, unit 117, the original frontend host, the installed folder's syntax, the original INI runtime 514, INI evaluation 65, the execution matrix, the installed Mods' offline plans (five steps, the digests as accepted), the eleven capture replays, both judges and the sweep, the HLSL steps, recipes and variants (144, 41, 52, 63), M2 hook rendering 49 and 45, character replacement 377 and 115, live INI rendering 172, Vulkan validation 76. All passed.
+- Not verified: nothing of it ran in the game; no installed Mod draws without skip, and no instanced character draw has been seen in the captures.
+
 ## Offline round of 2026-11-12 afternoon (the user: build, then everything that needs no game; sandbox only, not in dist)
 
 - D-178 (BUG-091): every package catalogues every image of the folder generation; a section may bind another Mod's texture. Reproduced first with BUG-091's exact message (`other_folder_image`, 2 of 3), 3 of 3 after.

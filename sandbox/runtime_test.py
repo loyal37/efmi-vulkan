@@ -181,6 +181,7 @@ def main():
     own_mesh(checks, validation)
     other_names(checks, validation)
     other_folder_image(checks, validation)
+    instanced_draw(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -485,6 +486,42 @@ def shared_spans(checks, validation):
                      str({k: counters.get(k) for k in ("replaced", "incomplete", "bones_unavailable", "bone_jobs")}))
 
 
+def instanced_draw(checks, validation):
+    """P2-4 (review R-05): an instanced draw of a character's component. The original Core decomposes it
+    (IterateInstances): per instance the object at that instance's entry is identified, one of the Mod's gets the
+    Mod's mesh, any other is drawn alone as the game's. The scene draws component B with two instances whose
+    entries lie side by side: B's own object and another one. The layer refused an instanced character draw, and
+    the game drew both instances (the character's part as the game's)."""
+    root = Path(test_dir("runtime-instanced-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_INSTANCED="1", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "an instanced draw of a component"
+    checks.equal(result.returncode, 0, label + ": the character's instance replaced, the other drawn alone as the application's")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    counters = status.get("counters", {})
+    checks.check(counters.get("instanced_draws", 0) > 0 and counters.get("refused_instances", 0) == 0,
+                 label + ": decomposed, not refused " + str({k: counters.get(k) for k in ("instanced_draws", "refused_instances", "replaced")}))
+
+
 def other_folder_image(checks, validation):
     """D-178 (BUG-091): a section binds a texture whose file lies in another Mod's folder. The original keeps
     one registry: any section a draw matches may bind any declared texture, wherever its file is. The scene's
@@ -601,6 +638,13 @@ def other_names(checks, validation):
 
 
 def own_mesh(checks, validation):
+    own_mesh_case(checks, validation, beside=False)
+    # D-179 (review R-09): the same section without `handling = skip`. The original draws the Mod's triangle and
+    # then the game's draw; the layer took only a list's textures for the game's draw and dropped its draws.
+    own_mesh_case(checks, validation, beside=True)
+
+
+def own_mesh_case(checks, validation, beside):
     """D-176 (review P2-2): a section without a component that draws a mesh of its own. The original runs
     its lists on the game's draw state: `handling = skip` drops the game's draw, the lists bind the Mod's
     buffers, and their draw goes out with the game's shaders and whatever else the game bound, its bones
@@ -621,17 +665,18 @@ def own_mesh(checks, validation):
     (props / "index.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
     (props / "prop.ini").write_text(
         "namespace = runtime_prop\n[Constants]\nglobal persist $own_seen = 0\n[TextureOverrideProp]\nhash = %08x\nmatch_index_count = 3\n"
-        "match_first_index = 30\nhandling = skip\nvb0 = ResourcePosition\nvb2 = ResourceBlend\nvb3 = ResourcePosition\nib = ResourceIndex\n"
+        "match_first_index = 30\n%svb0 = ResourcePosition\nvb2 = ResourceBlend\nvb3 = ResourcePosition\nib = ResourceIndex\n"
         "drawindexed = 3, 0, 0\n$own_seen = 1\n"
         "[ResourcePosition]\ntype = Buffer\nstride = 16\nfilename = position.buf\n"
         "[ResourceBlend]\ntype = Buffer\nstride = 16\nfilename = blend.buf\n"
-        "[ResourceIndex]\ntype = Buffer\nformat = R32_UINT\nfilename = index.buf\n" % crc32c(struct.pack("<3H", 0, 1, 2)), encoding="ascii")
+        "[ResourceIndex]\ntype = Buffer\nformat = R32_UINT\nfilename = index.buf\n" % (crc32c(struct.pack("<3H", 0, 1, 2)), "" if beside else "handling = skip\n"),
+        encoding="ascii")
     (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
                                    "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
     settings = root / "settings"
     settings.mkdir()
     extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
-                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_OWN_MESH="1", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", EFMI_VK_TEST_OWN_MESH="2" if beside else "1", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
                  VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
     env = layer_env(str(root / "layer.log"), extra=extra)
     env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
@@ -639,7 +684,7 @@ def own_mesh(checks, validation):
     result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
     output = result.stdout + result.stderr
     (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
-    label = "a section without a component that draws a mesh of its own"
+    label = "a section without a component that draws a mesh of its own" + (" beside the game's draw" if beside else "")
     checks.equal(result.returncode, 0, label + ": the Mod's triangle stands where the game's draw stood, on the game's bone, and follows it")
     checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
     if result.returncode:
@@ -903,6 +948,9 @@ def directory_generation(checks, validation):
         checks.equal((own["ini_generation"], own["ini_reloads"]), (4, 4), label + ": its reloads as with a package")
         variables = own.get("ini", {}).get("variables", {})
         checks.equal(variables.get("$\\runtime_fixture\\tint"), 1, label + ": the persistent variable survives F10")
+        # BUG-090: `vs` in a replaced draw reads 1, as under the original with the installed Core's patternless
+        # ShaderRegex over every vertex shader ([ShaderRegexEnableTextureOverrides]); it read 0.
+        checks.equal(variables.get("$\\runtime_fixture\\vs_value"), 1, label + ": `vs` reads 1 in a replaced draw, as under the original with the installed Core")
         checks.equal(variables.get("$\\runtime_fixture\\order"), 1, label + ": the [Present] lines of `fixture` ran before those of `Zeta`, the original's include order")
         unrecognised = [m for m in own.get("ini", {}).get("diagnostic_messages", []) if "Unrecognised entry" in m]
         checks.equal(unrecognised, [], label + ": a command list the installation's d3dx.ini declares is known to the Mods (LIMIT-039)")

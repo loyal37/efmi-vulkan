@@ -652,7 +652,11 @@ global $mod_id = -1
             // No shader bound: -0 whatever is asked.
             if (!(current.shader_stages & bit)) { value = -0.0f; return true; }
             switch (t.evaluation_mode) {
-            case ShaderTargetEvaluationMode::SHADER: case ShaderTargetEvaluationMode::DCL_CB_MASK: case ShaderTargetEvaluationMode::DCL_SRV_MASK:
+            case ShaderTargetEvaluationMode::SHADER:
+                // A vertex shader the installed Core's patternless ShaderRegex matches reads its value (BUG-090).
+                value = t.shader_type == L'v' && !std::isnan(adapter->vertex_shader_filter()) ? adapter->vertex_shader_filter() : 0.0f;
+                return true;
+            case ShaderTargetEvaluationMode::DCL_CB_MASK: case ShaderTargetEvaluationMode::DCL_SRV_MASK:
                 value = 0.0f; return true;
             case ShaderTargetEvaluationMode::DCL_SRV_TYPE: case ShaderTargetEvaluationMode::DCL_SRV_STRIDE: case ShaderTargetEvaluationMode::DCL_SRV_DIMENSION: {
                 // The slot as the original takes it; its guard keeps it within the 128 registers.
