@@ -115,6 +115,8 @@ public:
     // A shader hook event of the game's frame for the generation's libraries (D-113).
     void library_hook(efmi::frontend::LibraryHook hook) { if (runtime_) runtime_->library_hook(hook); }
     const std::shared_ptr<efmi::frontend::OwnedRuntime>& gpu() const { return gpu_; }
+    // The generation itself, for what the folder's program runs outside a package (docs/vulkan-native-mods.md).
+    const std::shared_ptr<efmi::frontend::IniRuntime>& runtime() const { return runtime_; }
     const std::string& gpu_reason() const { return gpu_reason_; }
     // Mesh files the generation's INIs reference that are not in the package's stream profile.
     size_t outside_meshes() const { return outside_meshes_; }

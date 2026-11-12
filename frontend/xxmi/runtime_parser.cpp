@@ -103,6 +103,61 @@ float RuntimeVertexShaderFilter()
     }
     return std::numeric_limits<float>::quiet_NaN();
 }
+// docs/vulkan-native-mods.md: a ShaderOverride's hash read as the original's GetIniHash reads it (`%16llx`, the
+// whole value or nothing), without its warning. True for a SPIR-V module's hash, the CRC-32C the layer and the probe
+// show, which is below 2^32; a 3DMigoto shader hash (64-bit FNV-1a) is not but with a chance of 2^-32, so a larger
+// value is a DX11 shader's and stays as the compatibility route keeps it.
+static bool RuntimeSpirvShaderHash(const IniSection& section, uint64_t* value = nullptr)
+{
+    for (const auto& line : section.kv_vec) {
+        if (_wcsicmp(line.first.c_str(), L"hash")) continue;
+        std::string text(line.second.begin(), line.second.end());
+        unsigned long long hash = 0; int length = 0;
+        if (sscanf_s(text.c_str(), "%16llx%n", &hash, &length) != 1 || size_t(length) != text.length()) return false;
+        if (value) *value = hash;
+        return hash <= 0xFFFFFFFFull;
+    }
+    return false;
+}
+// The ShaderOverride sections with a SPIR-V hash, parsed by the original's ParseShaderOverrideSections with its rules
+// among themselves (merging, allow_duplicate_hash, filter_index, warnings). The DX11-hash sections stay out of it, as
+// in a generation before route 2: their lists are not compiled and say nothing new.
+void RuntimeParseSpirvShaderOverrides()
+{
+    std::vector<IniSections::node_type> aside;
+    for (auto it = ini_sections.begin(); it != ini_sections.end();) {
+        if (!_wcsnicmp(it->first.c_str(), L"ShaderOverride", 14) && !RuntimeSpirvShaderHash(it->second)) aside.push_back(ini_sections.extract(it++));
+        else ++it;
+    }
+    struct Restore {
+        std::vector<IniSections::node_type>& nodes;
+        ~Restore() { for (auto& node : nodes) ini_sections.insert(std::move(node)); }
+    } restore{aside};
+    HostParseShaderOverrides();
+}
+// The installation's [Hunting] section as the original's ParseHuntingSection reads it (Hunting.cpp), its keys
+// registered through the original's RegisterIniKeyBinding with `callback` and the action as private data. `hunting = 0`
+// registers none (XXMI keeps it soft disabled for its ShaderRegex only). reload_config is the generation's own F10.
+void RuntimeParseHunting(int& hunting, int& marking_mode, unsigned& marking_actions, bool& keys, InputCallback callback)
+{
+    keys = false;
+    hunting = GetIniInt(L"Hunting", L"hunting", 0, nullptr);
+    const MarkingMode mode = GetIniEnumClass(L"Hunting", L"marking_mode", MarkingMode::INVALID, nullptr, MarkingModeNames);
+    marking_mode = mode == MarkingMode::INVALID ? int(MarkingMode::SKIP) : int(mode);
+    wchar_t buffer[MAX_PATH];
+    marking_actions = GetIniStringAndLog(L"Hunting", L"marking_actions", 0, buffer, MAX_PATH)
+        ? unsigned(parse_enum_option_string<const wchar_t*, MarkingAction>(MarkingActionNames, buffer, nullptr)) : unsigned(MarkingAction::DEFAULT);
+    if (hunting != 1 && hunting != 2) { hunting = 0; return; }
+    const int repeat = GetIniInt(L"Hunting", L"repeat_rate", 8, nullptr);
+    const struct { const wchar_t* key; unsigned action; bool repeats; } bindings[] = {
+        {L"toggle_hunting", 1, false}, {L"next_marking_mode", 2, false},
+        {L"next_pixelshader", 3, true}, {L"previous_pixelshader", 4, true}, {L"mark_pixelshader", 5, false},
+        {L"next_vertexshader", 6, true}, {L"previous_vertexshader", 7, true}, {L"mark_vertexshader", 8, false},
+        {L"done_hunting", 9, false},
+    };
+    for (const auto& b : bindings)
+        keys |= RegisterIniKeyBinding(L"Hunting", b.key, callback, nullptr, b.repeats ? repeat : 0, reinterpret_cast<void*>(uintptr_t(b.action)));
+}
 void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,bool custom_shaders,bool shader_hooks)
 {
     size_t inert_shaders = 0; std::wstring first_inert;
@@ -115,6 +170,16 @@ void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,boo
         // Vulkan character generation cannot see (D-089). Without shader hooks they stay inert, as for
         // shaders that never run: the original's overlay warning names each one that would act, and
         // the rest of the Mod loads. Shader operands then read the game's shaders as named by none.
+        // A ShaderOverride with a SPIR-V module's hash acts (docs/vulkan-native-mods.md); of its keys only the legacy
+        // ones that swap in the original shader have nothing to act on until a game shader is replaced.
+        if (!shader_hooks && !_wcsnicmp(section.first.c_str(), L"ShaderOverride", 14) && RuntimeSpirvShaderHash(section.second)) {
+            for (const auto& line : section.second.kv_vec)
+                if (!_wcsicmp(line.first.c_str(), L"depth_filter") || !_wcsicmp(line.first.c_str(), L"model")) {
+                    LayerGap(L"[%ls] %ls does nothing: no game shader is replaced yet", section.first.c_str(), line.first.c_str());
+                    break;
+                }
+            continue;
+        }
         if (!shader_hooks && (!_wcsnicmp(section.first.c_str(), L"ShaderOverride", 14) || !_wcsnicmp(section.first.c_str(), L"ShaderRegex", 11))) {
             const bool declaration = std::all_of(section.second.kv_vec.begin(), section.second.kv_vec.end(), [](const IniLine& line) {
                 return !_wcsicmp(line.first.c_str(), L"hash") || !_wcsicmp(line.first.c_str(), L"filter_index") ||

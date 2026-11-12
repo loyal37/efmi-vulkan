@@ -2148,7 +2148,13 @@ bool DrawPlanAdapter::execute_matches(const std::vector<CommandList*>& pre,const
 {
     return execute_impl(pre,&post,state,output,reason,{},true);
 }
-bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState& state,DrawPlan& output,std::wstring& reason,OriginalCall between,bool matched)
+bool DrawPlanAdapter::execute_stages(const std::vector<CommandList*>& pre,const std::vector<CommandList*>& post,const DrawStages& stages,CommandListState& state,
+                                     DrawPlan& output,std::wstring& reason)
+{
+    return execute_impl(pre,&post,state,output,reason,{},true,&stages);
+}
+bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const std::vector<CommandList*>* post,CommandListState& state,DrawPlan& output,std::wstring& reason,OriginalCall between,bool matched,
+                                   const DrawStages* stages)
 {
     reason.clear();
     auto valid=[&](const auto& lists){if(lists.size()>max_items)return false;for(auto* list:lists)
@@ -2184,8 +2190,14 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             if(listing)refuse(L"Nested native callback failed");
             runtime_->whole(L"Nested native callback failed");
         };
-        auto run=[&](const auto& lists,CommandListState& phase){for(auto* root:lists){
-            if(phase.aborted)break;
+        // With the draw's stages: a stage begins with a fresh abort (its own RunCommandList in the original), and the
+        // lists in [skip_first, skip_last) do not run.
+        auto run=[&](const auto& lists,CommandListState& phase,const std::vector<size_t>* starts=nullptr,size_t skip_first=0,size_t skip_last=0){
+            for(size_t n=0;n<lists.size();++n){
+            auto* root=lists[n];
+            if(starts && std::binary_search(starts->begin(),starts->end(),n))phase.aborted=false;
+            if(phase.aborted){if(!starts)break;continue;}
+            if(n>=skip_first && n<skip_last)continue;
             auto* resolved=root->ResolveCommandList();
             // An earlier source command can change a later list's alias.
             if(!runtime_->adapted.count(resolved))refuse(L"Matched root callback target was not adapted");
@@ -2205,7 +2217,7 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             nested();
         }};
         if(post)state.post=false;
-        run(pre,state);
+        run(pre,state,stages?&stages->pre_starts:nullptr);
         phase("exec pre lists");
         nested();
         runtime_->flush(state);
@@ -2222,7 +2234,8 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
         // lists bound is the Mod's own, which the original keeps no hash for and which meets no section; with
         // none bound nothing is checked. The post lists of the sections then do not run (the judge's line
         // `post_draw`: a Mod that replaces `ib` and draws again in `post` draws once under the original).
-        if(post && !(matched && !runtime_->context.in_place(SlotId{SlotKind::Index,0,0}))){
+        const bool checked=!(matched && !runtime_->context.in_place(SlotId{SlotKind::Index,0,0}));
+        if(post && (checked || stages)){
             // RunCommandListComplete creates a fresh state for the independent
             // post root. Applied resource/layout state persists in the backend;
             // pending edits, abort and cached queries do not cross this boundary.
@@ -2230,7 +2243,9 @@ bool DrawPlanAdapter::execute_impl(const std::vector<CommandList*>& pre,const st
             after.mOrigDevice1=state.mOrigDevice1;after.mOrigContext1=state.mOrigContext1;after.call_info=state.call_info;
             after.this_target=state.this_target;after.resource=state.resource;after.view=state.view;after.post=true;
             if(runtime_->fresh)runtime_->fresh(after);
-            run(*post,after);
+            // A stage's post list runs whatever the index buffer; the matched sections' only where they are met again.
+            if(stages)run(*post,after,&stages->post_starts,checked?0:stages->checked_first,checked?0:stages->checked_last);
+            else run(*post,after);
             nested();
             runtime_->flush(after);
             phase("exec post lists+flush");

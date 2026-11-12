@@ -668,10 +668,24 @@ global $mod_id = -1
             // No shader bound: -0 whatever is asked.
             if (!(current.shader_stages & bit)) { value = -0.0f; return true; }
             switch (t.evaluation_mode) {
-            case ShaderTargetEvaluationMode::SHADER:
+            case ShaderTargetEvaluationMode::SHADER: {
+                // A module a ShaderOverride names by its SPIR-V hash (docs/vulkan-native-mods.md): process_shader_filter's
+                // value of its entry, the filter_index or 1 without one; for a vertex module without one the Core's
+                // patternless ShaderRegex sets it, as its link does under the original.
+                const unsigned stage = t.shader_type == L'v' ? 0 : t.shader_type == L'h' ? 1 : t.shader_type == L'd' ? 2 : t.shader_type == L'g' ? 3 : 4;
+                const float vertex_filter = adapter->vertex_shader_filter();
+                if (current.stage_hash_mask >> stage & 1u) {
+                    const auto entry = G->mShaderOverrideMap.find(uint64_t(current.stage_hashes[stage]));
+                    if (entry != G->mShaderOverrideMap.end()) {
+                        value = entry->second.filter_index != FLT_MAX ? entry->second.filter_index
+                              : stage == 0 && !std::isnan(vertex_filter) ? vertex_filter : 1.0f;
+                        return true;
+                    }
+                }
                 // A vertex shader the installed Core's patternless ShaderRegex matches reads its value (BUG-090).
-                value = t.shader_type == L'v' && !std::isnan(adapter->vertex_shader_filter()) ? adapter->vertex_shader_filter() : 0.0f;
+                value = t.shader_type == L'v' && !std::isnan(vertex_filter) ? vertex_filter : 0.0f;
                 return true;
+            }
             case ShaderTargetEvaluationMode::DCL_CB_MASK: case ShaderTargetEvaluationMode::DCL_SRV_MASK:
                 value = 0.0f; return true;
             case ShaderTargetEvaluationMode::DCL_SRV_TYPE: case ShaderTargetEvaluationMode::DCL_SRV_STRIDE: case ShaderTargetEvaluationMode::DCL_SRV_DIMENSION: {

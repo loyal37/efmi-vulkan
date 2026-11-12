@@ -509,6 +509,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDraw(VkCommandBuffer cmd, uint32_t vertices, ui
         r.instances = instances;
         r.first = first_vertex;
         r.first_instance = first_instance;
+        if (m2_shader_draw(dev, cb, r)) return;
     }
     dev->d.CmdDraw(cmd, vertices, instances, first_vertex, first_instance);
 }
@@ -535,7 +536,8 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexed(VkCommandBuffer cmd, uint32_t indic
     dev->d.CmdDrawIndexed(cmd, indices, instances, first_index, vertex_offset, first_instance);
 }
 
-void track_indirect(Device* dev, VkCommandBuffer cmd, uint8_t kind, VkBuffer buf, VkDeviceSize off, uint32_t count)
+// True when the draw is to be dropped (a ShaderOverride or hunting, docs/vulkan-native-mods.md).
+bool track_indirect(Device* dev, VkCommandBuffer cmd, uint8_t kind, VkBuffer buf, VkDeviceSize off, uint32_t count)
 {
     if (CmdBuf* cb = cb_of(dev, cmd)) {
         WorkScope work(dev->work, WK_DRAW);
@@ -544,7 +546,9 @@ void track_indirect(Device* dev, VkCommandBuffer cmd, uint8_t kind, VkBuffer buf
         r.count = count;
         r.indirect = buf;
         r.indirect_off = off;
+        if (kind == DK_INDIRECT || kind == DK_INDEXED_INDIRECT) return m2_shader_draw(dev, cb, r);
     }
+    return false;
 }
 
 VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirect(VkCommandBuffer cmd, VkBuffer buf, VkDeviceSize off, uint32_t count,
@@ -552,7 +556,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirect(VkCommandBuffer cmd, VkBuffer buf,
 {
     count_call(HI_CmdDrawIndirect);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDIRECT, buf, off, count);
+    if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, count)) return;
     dev->d.CmdDrawIndirect(cmd, buf, off, count, stride);
 }
 
@@ -561,7 +565,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirect(VkCommandBuffer cmd, VkBuff
 {
     count_call(HI_CmdDrawIndexedIndirect);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, count);
+    if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, count)) return;
     dev->d.CmdDrawIndexedIndirect(cmd, buf, off, count, stride);
 }
 
@@ -570,7 +574,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirectCount(VkCommandBuffer cmd, VkBuffer
 {
     count_call(HI_CmdDrawIndirectCount);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count);
+    if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndirectCount(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
 
@@ -579,7 +583,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirectCountKHR(VkCommandBuffer cmd, VkBuf
 {
     count_call(HI_CmdDrawIndirectCountKHR);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count);
+    if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndirectCountKHR(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
 
@@ -589,7 +593,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirectCount(VkCommandBuffer cmd, V
 {
     count_call(HI_CmdDrawIndexedIndirectCount);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count);
+    if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndexedIndirectCount(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
 
@@ -599,7 +603,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirectCountKHR(VkCommandBuffer cmd
 {
     count_call(HI_CmdDrawIndexedIndirectCountKHR);
     Device* dev = dev_of(cmd);
-    track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count);
+    if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndexedIndirectCountKHR(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
 

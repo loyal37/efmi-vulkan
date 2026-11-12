@@ -110,6 +110,14 @@
 - character_core.cpp:465-470 against `global $version = 1.49` in Core\EFMI\main.ini. No installed Mod requires more than 1.48. R-06.
 - Fixed (P0-2): the native RegisterMod compares with the installed Core's `$version` (CharacterProgram::core_version reads its main.ini) and sets `$mod_id` 1 or -1 as the original's list; a Mod requiring more than the installed Core stays off and is told. check_mod_containment.py: a Mod requiring 1.49 draws, one requiring 9.99 does not and is told (both failing before).
 
+## LIMIT-048: What route 2's first step does not do yet (2026-11-12, D-187, D-188, docs/vulkan-native-mods.md)
+
+- At a draw no Mod section made the Mod's, a ShaderOverride's lists set variables, run lists and skip the draw; a binding or a draw of those lists is not done (the game's draw stays, said once, the status's `shader_overrides.kept`), and the game's textures there are not answered (`checktextureoverride = ps-tN`, texture queries: they are answered from a package's material state). Needs the slots of route 2's later steps.
+- The legacy `depth_filter` and `model` of a SPIR-V-hash section do nothing (a notice): they swap in the original shader, which needs shader replacement (the next step).
+- Hunting: vertex and fragment modules only (no index or vertex buffers, render targets, compute shaders), marking mode `skip` only (the others select and mark but draw as is), no dump of a marked module, no frame analysis, the `hunting` operand reads 0, the 60-second timeout counts hunting keys only (the original counts any key event). The overlay shows a notice per key, not the original's steady `VS:n/m PS:n/m` line.
+- A module created inline in a pipeline (`VkShaderModuleCreateInfo` chained into a stage) or a shader object has no hash here; none was seen in this game.
+- Nothing of it has run in the game.
+
 ## LIMIT-047: What makes a Mod a Mod, and the all-or-nothing plan (2026-11-10, docs/architecture-review-2.1.md)
 
 - A character Mod is an enabled INI with a section named `[CommandListInitializeMergedSkeleton]` whose lists have the exporter's shape (R-03, R-04); every other INI's mesh sections matched no draw (since D-173, 2026-11-11, those of the INIs of a character Mod's folder are matched; those of an INI outside every such folder since D-174, 2026-11-12, in a package without a skeleton; a mesh such a section draws since D-176). A replaced draw's lists run all or nothing against six plan operations (R-01), and the plan conversion refuses vertex slots from 4 on and draws without the blend-index edit (R-08). A refused folder or a Mod left out at the first load is logged, not shown (R-11). 64 packages (L-03).
@@ -1154,6 +1162,8 @@ Correction 1.3.9: the destructor points `G` at the generation's own globals, whi
 - 2026-10-28: store in a draw reads a frame late instead of refusing (D-147). The application's binding at such a slot saved into a declaration, nulled and put back around owned work leaves the draw as the application bound it (D-152, Snowshine's LOD 1 correction); owned work naming such a declaration, or a slot left changed, still refuses.
 
 ## LIMIT-036: ShaderOverride and ShaderRegex sections are inert under Vulkan
+
+- 2026-11-12 (D-187, route 2): a ShaderOverride with a SPIR-V module's hash (the CRC-32C the probe shows, below 2^32) acts at every draw of the pipelines that have the module. Sections with a DX11 hash (all six installed ones) stay as below.
 
 - 2026-11-11 (D-171): EFMITTL's groups run their own lists, chosen by facts read off SPIR-V and checked on the paired catalogue; the general case (any library's pattern on a DX11 listing) stays as below.
 

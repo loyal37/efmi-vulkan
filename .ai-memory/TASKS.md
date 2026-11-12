@@ -1,10 +1,18 @@
 # EFMI Vulkan - Tasks
 
+## Active: route 2, a Vulkan 3DMigoto for this game (the user, 2026-11-10; docs/vulkan-native-mods.md)
+
+- The order: the review's Phase 1 and Phase 2 (done) -> ShaderOverride by SPIR-V hash and hunting (this step) -> replacing game shaders -> slots of other stages and render targets.
+- Done 2026-11-12 on branch claude/vulkan-loader-d7c127, sandbox only, not merged, not in any dist: D-187 (ShaderOverride by SPIR-V hash), D-188 (hunting of vertex and fragment modules). What is not done of it: LIMIT-048.
+- To see in the game (needs the user's word for a session, and a build with it in dist): with the installed d3dx.ini, numpad 0 turns hunting on; numpad 1/2 and 4/5 walk the frame's fragment and vertex modules (a notice `PS n/m: hash` per key) and the selected module's draws vanish; numpad 3/6 marks (the log's `>>>> pixel shader marked` line, the hash on the clipboard); `+` clears. The status's `hunting` (visited counts in the game, skipped) and the frame time while hunting is on. Then a test Mod: a ShaderOverride with a hash found that way and `handling = skip` hides those draws; one with `filter_index` makes a TextureOverride's `if ps == N` true there. The installed Mods as before (no ShaderOverride of theirs acts: all six are DX11 hashes).
+- Next, each test first: (1) replacing a game module by its hash (pipeline variants as the anti-dither twins; with it `pink`/`original` marking, `depth_filter`, `model`, dumping a marked module); (2) a ShaderOverride's bindings and draws at any draw, and the game's textures there (slots by (set, binding)); (3) hunting of index and vertex buffers, render targets, compute shaders; frame analysis.
+
 ## Active: the 2.1.7 session's findings (2026-11-12 evening)
 
 - Done (D-185, in the main checkout's dist as 2.1.8 since 21:24): translucent shadows by opacity (BUG-094). To see in the game: Zhuangfangyi's skin under the shirt and sarong lit as under DX11; the status's `translucent_shadows` rising. If something broke: 2.1.7's binaries in `build/dist-2.1.7-20261112`.
 - Next: bones from a uniform block (LIMIT-027, the dash): the dash effect vertex shaders read the bones from a uniform block of 4096 vec4 at set 3 binding 0 (captures/dash-2.1.7-20261112); the original Core imports from it and binds a copy of [its four config rows][the merged bones] in its place (MergedSkeleton.ini: BoneDataImporter_ConstantBuffer, InstanceConfigOverrider_ConstantBuffer).
 - Route 2 (the Vulkan loader): started in a session of its own (SPIR-V-hash ShaderOverride and hunting), on its own branch.
+
 
 ## Next: 2.1.7 in the game (in the main checkout's dist since 2026-11-12 19:39; 2.1.6 with D-178 to D-184, BUG-089, BUG-090)
 

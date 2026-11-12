@@ -305,6 +305,13 @@ bool m2_record(Device* device,CmdBuf* cb,const DrawRec& r){
     catch(const std::exception& e){++device->m2->unsupported;device->m2->note(e.what());return false;}
 }
 
+// A non-indexed or indirect draw while the module wants every draw (docs/vulkan-native-mods.md): true drops it.
+bool m2_shader_draw(Device* device,CmdBuf* cb,const DrawRec& r){
+    if(!device->character_mode || !device->shader_draws.load(std::memory_order_relaxed))return false;
+    std::shared_lock<std::shared_mutex> lock(device->character_mx);
+    return device->character && device->character_module->shader_draw && device->character_module->shader_draw(*device->character,cb,r);
+}
+
 VkPipeline m2_bind(Device* device,CmdBuf* cb,VkPipeline pipeline){
     if(!device->character_mode)return pipeline;
     std::shared_lock<std::shared_mutex> lock(device->character_mx);

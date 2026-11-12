@@ -94,6 +94,176 @@ def shader_sections(checks):
                      label + (": the log names it as inert" if named else ": nothing is named as inert"))
 
 
+def sandbox_shader_hashes():
+    """The sandbox program's vertex and fragment modules by the CRC-32C it publishes of their SPIR-V, the hash
+    the layer, the probe and the MCP tools show for a module (docs/vulkan-native-mods.md)."""
+    with Sandbox(seconds=2, with_layer=False) as sb:
+        shaders = {s["stage"]: int(s["hash"], 16) for s in sb.expected["shaders"]}
+        sb.proc.wait(timeout=30)
+    return shaders[1], shaders[16]
+
+
+def band_pixels(path):
+    """Pixels of the presented image's middle band (where the sandbox draws its five meshes) that differ from
+    the clear colour, read off the image's bottom right corner; None without a readback."""
+    meta_path = Path(str(path) + ".json")
+    if not Path(path).is_file() or not meta_path.is_file():
+        return None
+    meta = json.loads(meta_path.read_text())
+    width, height, data = meta["width"], meta["height"], Path(path).read_bytes()
+    def at(x, y):
+        o = 4 * (y * width + x)
+        return data[o:o + 3]
+    clear = at(width - 2, height - 2)
+    return sum(1 for y in range(int(height * .46), int(height * .54)) for x in range(width)
+               if max(abs(a - b) for a, b in zip(at(x, y), clear)) > 12)
+
+
+def spirv_shader_overrides(checks):
+    """Route 2, docs/vulkan-native-mods.md: a ShaderOverride naming a SPIR-V module by its CRC-32C acts at every draw
+    of every pipeline that has the module, as the original's at every draw of a shader. Its pre and post lists run;
+    `handling = skip` keeps the application's draws from the GPU (the sandbox's five meshes, recorded on two threads,
+    indexed through two index buffers); in a TextureOverride's lists `vs` and `ps` read the entries' filter_index; the
+    original's order holds (the vertex shader's entry, the TextureOverride sections, the pixel shader's entry). A
+    section with a DX11 hash beside them is still inert and told as before, and nothing else is told (the
+    compatibility route). Before, every ShaderOverride was inert."""
+    vertex, fragment = sandbox_shader_hashes()
+    mesh4 = crc32c(struct.pack("<3I", 14, 15, 16))
+    for case in ("skip", "beside"):
+        skip = case == "skip"
+        root = Path(test_dir("runtime-spirv-override-"))
+        mods = root / "Mods"
+        (mods / "vulkan").mkdir(parents=True)
+        ini = ("namespace = runtime_spirv\n[Constants]\nglobal persist $pre = 0\nglobal persist $post = 0\nglobal persist $vs_runs = 0\n"
+               "global persist $to_runs = 0\nglobal persist $order = 0\nglobal persist $order_seen = 0\nglobal persist $ps_value = 0\n"
+               "global persist $vs_value = 0\n"
+               "[ShaderOverrideSandboxPixel]\nhash = %08x\nfilter_index = 7\n%s$pre = $pre + 1\n$order = 2\npost $post = $post + 1\n"
+               "[ShaderOverrideSandboxVertex]\nhash = %08x\nfilter_index = 5\n$vs_runs = $vs_runs + 1\n$order = 1\n"
+               "[ShaderOverrideWrittenForDX11]\nhash = 5d7710a77fb65f25\nhandling = skip\n" % (fragment, "handling = skip\n" if skip else "", vertex))
+        if not skip:
+            ini += ("[TextureOverrideMesh4]\nhash = %08x\nmatch_index_count = 3\n$to_runs = $to_runs + 1\n$ps_value = ps\n$vs_value = vs\n"
+                    "$order_seen = $order\n" % mesh4)
+        (mods / "vulkan" / "vulkan.ini").write_text(ini, encoding="ascii")
+        (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                       "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+        settings = root / "settings"
+        settings.mkdir()
+        for entry in (("layer", "inject") if skip else ("layer",)):
+            readback = root / ("readback-%s.raw" % entry)
+            extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1",
+                         EFMI_VK_TEST_NOTICE="> test notice", EFMI_VK_TEST_NOTICES_READBACK=str(readback))
+            whole = {}
+            with Sandbox(seconds=5, env_extra=extra, entry=entry, extra_args=["--readable-swapchain"]) as sb:
+                time.sleep(2.5)
+                with ProbeClient(sb.pid) as probe:
+                    whole = probe.status()
+                sb.proc.wait(timeout=60)
+                code = sb.proc.returncode
+            status, notices = whole.get("replacement", {}), whole.get("notices", {})
+            label = f"{entry}, SPIR-V ShaderOverride " + ("with handling = skip" if skip else "beside a TextureOverride")
+            checks.equal(code, 0, label + ": the application runs and exits normally")
+            variables = status.get("folder_generation", {}).get("ini", {}).get("variables", {}) if skip else status.get("ini", {}).get("variables", {})
+            value = lambda name: variables.get("$\\runtime_spirv\\" + name, 0)
+            checks.check(value("pre") > 5 and value("post") > 5 and abs(value("pre") - value("post")) <= 5,
+                         label + ": the pixel shader's pre and post lists ran at its draws " + str((value("pre"), value("post"))))
+            overrides = status.get("shader_overrides", {})
+            told = [t for t in notices.get("recent", []) if "acts on game shaders" in t]
+            checks.check(len(told) == 1 and "WrittenForDX11" in told[0],
+                         label + ": the DX11-hash section is told inert as before, the SPIR-V ones are not " + str(told))
+            pixels = band_pixels(readback)
+            if skip:
+                checks.equal(pixels, 0, label + ": the application's five meshes are not drawn")
+                checks.check(overrides.get("skipped", 0) > 5, label + ": the layer counts the draws it did not forward " + str(overrides))
+            else:
+                checks.check(pixels is not None and pixels > 200, label + ": the application's meshes are drawn (%s pixels)" % pixels)
+                checks.equal((value("ps_value"), value("vs_value"), value("order_seen")), (7, 5, 1),
+                             label + ": in the TextureOverride's lists `ps` and `vs` read the entries' filter_index, and the vertex "
+                             "shader's entry ran before them and the pixel shader's after them")
+                checks.check(value("to_runs") > 0 and abs(value("vs_runs") - 5 * value("to_runs")) <= 5,
+                             label + ": the lists ran once per draw, also at the draw the TextureOverride matched " +
+                             str((value("vs_runs"), value("to_runs"))))
+            if code or (skip and pixels != 0):
+                print("artifacts:", root)
+
+
+def hunting_keys(checks):
+    """Route 2, docs/vulkan-native-mods.md: hunting as the original's (Hunting.cpp). The installation's d3dx.ini
+    [Hunting] keys, dispatched by the original's input code: soft disabled (2) does nothing until toggle_hunting; then
+    the frame's vertex and fragment modules are visited, next_pixelshader selects the sandbox's fragment module and
+    marking_mode = skip keeps every draw of a pipeline with it from the GPU, mark_pixelshader logs its hash as the
+    original's mark does, done_hunting ends the selection. Before, the keys did nothing."""
+    vertex, fragment = sandbox_shader_hashes()
+    root = Path(test_dir("runtime-hunting-"))
+    mods = root / "Mods"
+    (mods / "panel").mkdir(parents=True)
+    (mods / "panel" / "panel.ini").write_text("namespace = runtime_panel\n[Constants]\nglobal $presents = 0\n[Present]\n$presents = $presents + 1\n",
+                                              encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n"
+                                   "[Hunting]\nhunting = 2\nmarking_mode = skip\nmarking_actions = hlsl\n"
+                                   "toggle_hunting = no_modifiers VK_NUMPAD0\nprevious_pixelshader = no_modifiers VK_NUMPAD1\n"
+                                   "next_pixelshader = no_modifiers VK_NUMPAD2\nmark_pixelshader = no_modifiers VK_NUMPAD3\n"
+                                   "next_vertexshader = no_modifiers VK_NUMPAD5\ndone_hunting = no_modifiers VK_ADD\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    keys = root / "keys.txt"
+    keys.write_text("1\n", encoding="ascii")
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1",
+                 EFMI_VK_TEST_KEYS=str(keys))
+    label = "hunting keys of the installation's d3dx.ini"
+    with Sandbox(seconds=90, env_extra=extra, entry="layer") as sb:
+        with ProbeClient(sb.pid) as probe:
+            def hunting():
+                try:
+                    return probe.status().get("replacement", {}).get("hunting", {})
+                except Exception:  # the program ended (a build without hunting waits every step out)
+                    return {}
+            def wait(what, seconds=8.0):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    h = hunting()
+                    if what(h):
+                        return h
+                    time.sleep(0.1)
+                return hunting()
+            def press(key, until):
+                keys.write_text("1 %d\n" % key, encoding="ascii")
+                h = wait(until)
+                keys.write_text("1\n", encoding="ascii")
+                time.sleep(0.3)
+                return h
+            h = wait(lambda h: h.get("keys"), 5)
+            checks.check(h.get("keys") and h.get("mode") == 2 and h.get("visited", {}).get("pixel", 0) == 0,
+                         label + ": registered and soft disabled, nothing visited " + str(h))
+            h = press(0x62, lambda h: h.get("selected", {}).get("pixel"))
+            checks.check(not h.get("selected", {}).get("pixel"), label + ": next_pixelshader does nothing while soft disabled " + str(h))
+            h = press(0x60, lambda h: h.get("mode") == 1)
+            h = wait(lambda h: h.get("visited", {}).get("pixel", 0) >= 1 and h.get("visited", {}).get("vertex", 0) >= 1)
+            checks.check(h.get("mode") == 1 and h.get("visited", {}) == {"vertex": 1, "pixel": 1},
+                         label + ": toggle_hunting enables it, and the frame's two modules are visited " + str(h))
+            h = press(0x62, lambda h: h.get("selected", {}).get("pixel"))
+            checks.equal((h.get("selected", {}).get("pixel"), h.get("position", {}).get("pixel")), ("%08x" % fragment, "1/1"),
+                         label + ": next_pixelshader selects the sandbox's fragment module, the first of one")
+            before = wait(lambda h: h.get("skipped", 0) > 0).get("skipped", 0)
+            time.sleep(0.5)
+            after = hunting().get("skipped", 0)
+            checks.check(0 < before < after, label + ": marking_mode = skip keeps its draws from the GPU, every frame " + str((before, after)))
+            h = press(0x63, lambda h: h.get("marks", 0) >= 1)
+            checks.equal(h.get("marks"), 1, label + ": mark_pixelshader marks it")
+            h = press(0x6B, lambda h: not h.get("selected", {}).get("pixel"))
+            first = h.get("skipped", 0)
+            time.sleep(0.5)
+            checks.check(not h.get("selected", {}).get("pixel") and hunting().get("skipped", 0) == first,
+                         label + ": done_hunting ends the selection and the draws are drawn again " + str(h))
+            h = press(0x60, lambda h: h.get("mode") == 2)
+            checks.equal(h.get("mode"), 2, label + ": toggle_hunting soft disables it again")
+        sb.proc.terminate()
+        sb.proc.wait(timeout=60)
+    log = sb.log()
+    checks.check(">>>> pixel shader marked: pixel shader hash = %08x" % fragment in log,
+                 label + ": the mark is logged as the original logs it, with the module's hash")
+
+
 def save_cadence(checks):
     """A persistent variable changed every frame (a key panel's animation) is saved as the original
     saves it: every settings_auto_save_interval seconds (60) and when the program ends, not at each
@@ -123,6 +293,14 @@ def save_cadence(checks):
 def main():
     checks = Checks("live INI rendering")
     validation = os.environ.get("EFMI_VK_VALIDATION_DIR", "F:/vulkan/validation-1.4.321.0/bin")
+    # `runtime_test.py NAME ...`: only those scenes (a failing check first, before the whole step).
+    import sys
+    named = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if named:
+        for name in named:
+            function = globals()[name]
+            function(checks, validation) if function.__code__.co_argcount == 2 else function(checks)
+        return checks.finish()
     for entry in ("layer", "inject"):
         for queues in (1, 2):
             folder = Path(test_dir("runtime-"))
@@ -173,6 +351,8 @@ def main():
     save_cadence(checks)
     outside_mesh(checks)
     shader_sections(checks)
+    spirv_shader_overrides(checks)
+    hunting_keys(checks)
     several_packages(checks, validation)
     directory_generation(checks, validation)
     plain_mods(checks, validation)

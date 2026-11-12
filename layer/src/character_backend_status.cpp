@@ -70,7 +70,11 @@ void character_status(CharacterBackend& b, JsonWriter& w)
         if (b.folder->presenter) b.folder->presenter->status(w);
         if (b.folder->program) {
             const auto ini = b.folder->program->status();
-            w.key("ini"); w.begin_object(); w.kn("presents", ini.presents); w.kn("draws", ini.draws); w.kn("diagnostics", ini.diagnostics); w.end_object();
+            w.key("ini"); w.begin_object(); w.kn("presents", ini.presents); w.kn("draws", ini.draws); w.kn("diagnostics", ini.diagnostics);
+            // The folder's variables, also where no package has the generation (an INI without mesh sections).
+            w.key("variables"); w.begin_object();
+            for (const auto& value : ini.variables) { w.key(value.first.c_str()); if (std::isfinite(value.second)) w.raw(std::to_string(value.second)); else w.null(); }
+            w.end_object(); w.end_object();
         }
         {
             std::lock_guard<std::mutex> lock(*b.folder->plan_mx);
@@ -89,6 +93,7 @@ void character_status(CharacterBackend& b, JsonWriter& w)
         w.kn("dither_twins_prepared", b.twins_prepared.load());
         w.end_object();
     }
+    shader_hooks_status(b, w);
     {
         const auto engine = efmi::frontend::engine_lock_stats();
         w.key("engine_lock"); w.begin_object();

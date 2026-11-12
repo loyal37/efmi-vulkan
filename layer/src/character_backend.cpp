@@ -303,6 +303,8 @@ std::shared_ptr<CharacterBackend> character_create(Device* d, const VkPhysicalDe
         backend->folder->announce();
         logf("character packages: %zu from the folder generation of %s", backend->controllers.size(), mods_folder().u8string().c_str());
         backend->rebuild_index();
+        // The first frame's draws meet the generation's ShaderOverride sections (docs/vulkan-native-mods.md).
+        shader_hooks_frame(*backend);
         // The first frame's draws see the gates of the generation loaded here (D-133).
         g_dither_off.store(std::any_of(backend->folder->gates.begin(), backend->folder->gates.end(), [](const auto& g) { return g.value != 0; }),
                            std::memory_order_relaxed);
@@ -328,6 +330,8 @@ std::shared_ptr<CharacterBackend> character_create(Device* d, const VkPhysicalDe
 void character_stop(CharacterBackend& b)
 {
     if (b.twins_sweep.valid()) b.twins_sweep.get();
+    if (b.device) b.device->shader_draws.store(false, std::memory_order_relaxed);
+    { std::unique_lock<std::shared_mutex> lock(b.index_mx); b.shader_hooks.reset(); }
     for (auto& c : b.controllers) c->stop();
     if (b.folder_loading.valid()) { auto candidate = b.folder_loading.get(); if (candidate) candidate->stop(); }
     if (b.folder_staged) { b.folder_staged->stop(); b.folder_staged.reset(); }
@@ -487,6 +491,8 @@ void character_frame(CharacterBackend& b, bool had_draws, PresentWork* present)
     }
     if (b.folder) folder_frame_and_exchange(b, had_draws, present, input);
     else if (rescan && b.directory) character_rescan(b);
+    // Route 2: the ShaderOverride hashes of the generation in place, the hunting keys of this presentation.
+    shader_hooks_frame(b);
     if (b.index_stale()) b.rebuild_index();
 }
 bool character_usable(CharacterBackend& b, std::string& reason)
@@ -531,6 +537,7 @@ const CharacterModule* builtin_character_module()
         m.enable = character_enable; m.submit = character_submit; m.submitted = character_submitted; m.pass_end = character_pass_end;
         m.bind = character_bind;
         m.created = character_created;
+        m.shader_draw = character_shader_draw;
         return m;
     }();
     return &module;

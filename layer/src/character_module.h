@@ -105,6 +105,9 @@ struct CharacterModule {
     // After the application created a graphics pipeline, its record in Device::pipes complete (D-133:
     // the twin a discard gate needs is prepared then). The creating thread.
     void (*created)(CharacterBackend&, VkPipeline pipeline) = nullptr;
+    // A non-indexed or indirect draw, while Device::shader_draws is set (docs/vulkan-native-mods.md): true when it is
+    // to be dropped (a ShaderOverride's `handling = skip`, hunting's skip). Indexed draws reach the same through record.
+    bool (*shader_draw)(CharacterBackend&, CmdBuf*, const DrawRec&) = nullptr;
 };
 
 // The copy this binary was built with.

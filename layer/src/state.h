@@ -671,6 +671,9 @@ struct Device {
     uint32_t next_pipe_id = 1;
     uint32_t next_resource_id = 1;
     std::unordered_map<VkShaderModule, std::shared_ptr<const ShaderInfo>> shaders;
+    // Route 2 (docs/vulkan-native-mods.md): the character module wants every draw (a ShaderOverride names a SPIR-V
+    // module, or hunting is enabled); set by the module on the presenting thread, read at every draw.
+    std::atomic<bool> shader_draws{false};
     std::unordered_map<uint32_t, std::weak_ptr<const ShaderInfo>> shader_by_id;
     std::shared_ptr<std::atomic<uint64_t>> shader_bytes = std::make_shared<std::atomic<uint64_t>>(0); // SPIR-V kept
     uint64_t shaders_not_retained = 0; // modules whose code was dropped because the budget was exhausted

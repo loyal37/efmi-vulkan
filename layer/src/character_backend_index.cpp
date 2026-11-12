@@ -145,11 +145,27 @@ bool index_region_hash(Device* device, const DrawRec& r, uint64_t now, const Cha
     return true;
 }
 
+static bool character_record_matched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r);
+
+// An indexed draw (docs/vulkan-native-mods.md): hunting visits it; the sections of its index region run as before, with
+// the ShaderOverride entries of its modules among their lists (RuntimeDraw::stage_hashes); a draw no section made the
+// Mod's meets hunting's skip, and the ShaderOverride entries when the sections' lists did not run.
 bool character_record(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
+{
+    if (!b.enabled.load(std::memory_order_relaxed)) return false;
+    PipelineModules modules;
+    const bool hooks = b.device && b.device->shader_draws.load(std::memory_order_relaxed) && pipeline_modules(b.device, r.pipeline, modules);
+    const bool marked = hooks && b.hunting.enabled() && b.hunting.visit(modules);
+    const uint64_t plans = t_draw_plans;
+    // The Mod's draws stand: hunting's skip keeps a list's own draws, as the original's hunting_skip does.
+    if (character_record_matched(b, cb, r)) return true;
+    return hooks && shader_draw_unmatched(b, cb, r, modules, t_draw_plans == plans, marked);
+}
+
+static bool character_record_matched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
 {
     // The first package whose section matches records the draw; the others never see it. The draw's
     // index region is hashed once (D-097) and only the packages with a section of that hash are asked.
-    if (!b.enabled.load(std::memory_order_relaxed)) return false;
     struct Clock {
         CharacterBackend& b; uint64_t began;
         ~Clock() { b.record_us += host_time_us() - began; ++b.record_calls; }
