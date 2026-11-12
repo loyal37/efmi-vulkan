@@ -52,15 +52,22 @@
 
 ## Active: the architecture review's plan (2026-11-10, docs/architecture-review-2.1.md section 8)
 
+- What is left of it without the game (2026-11-12 evening), and why each waits:
+  - P3-3: needs a corpus of public INIs from the user.
+  - P1-5's rest: the game's texture of another pixel slot (a fragment module that reads one slot from another's binding), a constant buffer or texture of another stage (a private binding per stage), input-layout edits in general (the game's DX11 semantics per Vulkan location, from the paired catalogue), the pre phase's textures for the game's own draw after a beside draw (D-179). Each is a larger change with no installed Mod that needs it.
+  - D-178's mesh file of another package's folder (one upload per package); D-180's first instance other than 0 and more than 64 instances.
+  - P4-3's and P4-4's rest (below).
+
 - Done without the game (2026-11-10, sandbox only): P3-0; Phase 0 (P0-1 to P0-9 except the game-facts notice of L-07); P3-1 (the matched-draw judge); P3-2 as the one-line sweep; P4-1 (documents); P4-2 (character_backend.cpp in eleven parts and an internal header, D-160, between two whole suite runs with equal results).
 - Open without the game:
   - Done 2026-11-11 (sandbox): BUG-088, the EFMITTL of 2026-11-10 (D-170 to D-172). To see in the game (below).
-  - D-170's property query reads the target through the draw state (`named()`, `context`, `held()`), ahead of `from_state`: at a slot a Mod's file reads its own format, which `of_declaration` would answer with the declaration's (the judge's `properties` case).
+  - D-170's property query reads the target through the draw state (`named()`, `context`, `held()`), ahead of `from_state`: at a slot a Mod's file reads its own format, which `of_declaration` would answer with the declaration's (the judge's `properties` case, which passes).
   - Done 2026-11-11 (Phase 1, above): the sweep's 12 recorded differences. No line refuses a draw; what is left differs for one draw or one slot, each recorded with what may differ (`only`).
   - Done 2026-11-12: `vs` as a value (BUG-090) reads the Core's ShaderRegex value; the sweep judges every line. `vbN->stride` and a query on `ib` are answered from the draw state.
   - P3-3: a corpus of public INIs (plan digests of the installed Mods are done: check_mod_states.py, `--accept` after a reviewed change).
   - Done 2026-11-12 (D-184): P3-4, the texture-hash sections run in the state check with their hash at every slot (the exclusions are listed in docs/ini-semantics.md).
-  - P4-3: the variant cache's eviction done 2026-11-12 (D-181, sandbox). Left: the residency's image table never shrinks, one deferred-destruction queue, L-04's first-use waits under the tracker's lock, L-06's failed image. P4-4.
+  - P4-3: the variant cache's eviction done 2026-11-12 (D-181, sandbox). Left, each without a failing check yet: the residency's image table (4096 file versions for the process; a released image's slot is not reused, so only a long session of many F10s with changed textures reaches it), one deferred-destruction queue for what the layer owns (a restructuring, no fault known), L-04's first-use waits under the tracker's lock (needs a measurement in the game first). L-06's failed image: a file whose header or size does not load is a null binding from the load on (D-139, the original's null resource); only a load that fails after (an I/O error, a file changed after the load) still refuses that draw until F10.
+  - P4-4 (L-09): the .bin package path is what the sandbox fixtures and the capture replays load; removing it means moving those to Mods folders first. Not begun.
   - Done 2026-11-12 (sandbox): BUG-089, reproduced (one snapshot batch per recording with the gate set) and fixed. To see in the game: with RabbitFX's `\` key on, a package's `batches_made` stays a handful.
   - Done 2026-11-12 (D-183, sandbox): L-07, one notice when no character draw of the process meets what the layer assumes of the game's draws. To see in the game: the notice never shows in a normal session (`game_shape.fitting` rising, `unfit` low).
 - Needs game sessions and the user's choice: Phase 1's game session (its offline part is done, above), Phase 2 (the section index from the generation's registry; a plain replaced draw without the Core; instanced character draws).

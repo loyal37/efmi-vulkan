@@ -6,6 +6,11 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.7: 2.1.6 and the evening's offline round (2026-11-12)
+
+- What it holds beyond 2.1.6: D-178 and BUG-089 (the afternoon), D-179 to D-184 and BUG-090 (the evening), below.
+- Verified on the work tree before the version commit (sandbox): the whole build and the whole regression suite, 57 (56 passed in the run; pipeline recipes timed out once at its 30-second limit in recipe_test, whose code this round did not touch, and passed three reruns in 6 to 11 seconds) steps, all passed. The version commit changes EFVK_VERSION only.
+
 ## Offline round of 2026-11-12 evening (the same request; sandbox only, not in dist)
 
 - D-179 (R-09): a list that draws without `handling = skip` draws the Mod's draws and then the game's (HackerContext's `if (!c.call_info.skip)` after the pre lists). Failing first: `own_mesh_case(beside=True)`, the Mod's triangle and the game's mesh both.
