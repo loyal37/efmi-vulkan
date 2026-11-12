@@ -136,6 +136,13 @@ std::string ini_text(const std::filesystem::path& path)
 }
 // Whether the text has a section of this name (lower case), as the original names a section: the
 // line up to its first `]`, without the spaces around.
+// Whether an INI's lists call the Core's InitializeMergedSkeleton (D-177): what makes it a Mod with a merged
+// skeleton, a character Mod, whatever it calls the list that does (an export: [CommandListInitializeMergedSkeleton]).
+// `text` as ini_text gives it.
+bool calls_skeleton_initializer(const std::string& text)
+{
+    return text.find("commandlist\\efmiv1\\initializemergedskeleton") != std::string::npos;
+}
 bool has_section(const std::string& text, const char* wanted, bool prefix = false)
 {
     const size_t length = strlen(wanted);
@@ -454,7 +461,7 @@ std::vector<std::filesystem::path> CharacterProgram::mods_characters(const std::
     std::error_code error;
     if (!std::filesystem::is_directory(mods, error)) { reason = "cannot read the Mods folder " + mods.u8string() + ": " + error.message(); return found; }
     for (const auto& ini : enabled_inis(mods))
-        if (has_section(ini_text(ini), "commandlistinitializemergedskeleton")) found.push_back(ini);
+        if (calls_skeleton_initializer(ini_text(ini))) found.push_back(ini);
     return found;
 }
 // The installed files of the libraries the runtime provides natively (RabbitFX, D-082, D-133): enabled
@@ -502,7 +509,7 @@ std::vector<std::filesystem::path> CharacterProgram::libraries(const std::filesy
     if (!std::filesystem::is_directory(mods, error)) { notes.push_back("libraries: cannot read the Mods folder " + mods.u8string() + ": " + error.message()); return {}; }
     for (const auto& ini : enabled_inis(mods)) {
         auto text = ini_text(ini);
-        if (has_section(text, "commandlistinitializemergedskeleton")) { characters.push_back(ini.parent_path()); continue; }
+        if (calls_skeleton_initializer(text)) { characters.push_back(ini.parent_path()); continue; }
         auto name = declared_namespace(ini);
         if (!name.empty() && !declared.count(name)) candidates.push_back({ini, std::move(name), std::move(text)});
     }

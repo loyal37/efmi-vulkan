@@ -119,6 +119,24 @@ void HostVisitShaderSources(const std::function<void(const std::wstring&,const s
 // (get_namespaced_section_path: from the root, with its separator; empty for an INI at the root). False for a
 // section the parser does not hold. Valid while the generation loads.
 bool HostSectionFolder(const wchar_t* section, std::wstring& folder) { return get_namespaced_section_path(section, &folder); }
+// Whether a section has a line that runs the list `target`, named with its namespace as a Mod names a list
+// of another namespace (`run = CommandList\\EFMIv1\\InitializeMergedSkeleton`): read from the section's lines,
+// so before any list is compiled.
+bool HostSectionRuns(const wchar_t* section, const wchar_t* target)
+{
+    const auto found = ini_sections.find(section);
+    if (found == ini_sections.end()) return false;
+    for (const auto& line : found->second.kv_vec) {
+        std::wstring key = line.first;
+        std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+        for (const wchar_t* prefix : {L"pre ", L"post "})
+            if (!key.compare(0, wcslen(prefix), prefix)) { key.erase(0, wcslen(prefix)); break; }
+        const auto first = key.find_first_not_of(L" \t"), last = key.find_last_not_of(L" \t");
+        if (first == std::wstring::npos || key.substr(first, last - first + 1) != L"run") continue;
+        if (!_wcsicmp(line.second.c_str(), target)) return true;
+    }
+    return false;
+}
 void HostParseTextureOverrides() { ParseTextureOverrideSections(); }
 void HostParseResourceMatching() {
     G->track_region_hashes=GetIniBool(L"Rendering",L"track_region_hashes",false,nullptr);

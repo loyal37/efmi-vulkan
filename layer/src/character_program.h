@@ -72,7 +72,7 @@ public:
     // its Mod folder, in plain characters.
     static std::string settings_name(const std::filesystem::path& ini, const std::string& mod_namespace);
     // The character Mods of an EFMI Mods folder: every enabled INI (no part of its path starts with
-    // DISABLED, as the original skips them) that declares the EFMIv1 merged-skeleton initializer.
+    // DISABLED, as the original skips them) whose lists call the Core's InitializeMergedSkeleton (D-177).
     static std::vector<std::filesystem::path> mods_characters(const std::filesystem::path& mods, std::string& reason);
     static std::vector<std::filesystem::path> native_library_files(const std::filesystem::path& mods);
     // Whether the Mods folder holds an enabled INI at all: without one there is nothing to load.

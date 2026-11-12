@@ -179,6 +179,7 @@ def main():
     folder_without_character(checks)
     shared_spans(checks, validation)
     own_mesh(checks, validation)
+    other_names(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -481,6 +482,73 @@ def shared_spans(checks, validation):
                      (counters.get("bone_jobs", 0) > 0) == (bones == "device"),
                      label + ": draws replaced, none left for bones not imported, the imports where the setting puts them " +
                      str({k: counters.get(k) for k in ("replaced", "incomplete", "bones_unavailable", "bone_jobs")}))
+
+
+def other_names(checks, validation):
+    """D-177 (review R-04, P2-3): the character contract is what the Mod hands to the Core, whatever the Mod
+    calls its own lists, variables and pools and wherever its lists assign them. To the Core a character
+    is the values of its own inputs when its lists are called: `$\\EFMIv1\\component_id`, `lod_level`,
+    `bones_count`, the pools referenced into `Pool\\EFMIv1\\Input_...` and the resource referenced into
+    `Resource\\EFMIv1\\Output_MergedSkeleton`. The layer read the contract by the names the exporter gives:
+    a section `[CommandListInitializeMergedSkeleton]`, `$bones_count`, `$max_instance_count`, `$lod_level`,
+    `Pool_MergedSkeleton_Component_...`, and the component id assigned in the section itself. The fixture
+    with every one of those names changed and the component id handed over in a list the section runs:
+    the scene's pictures must be those of the fixture as exported."""
+    root = Path(test_dir("runtime-names-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder)
+    ini = folder / "mod.ini"
+    text = ini.read_text(encoding="ascii")
+    for old, new in (("CommandListInitializeMergedSkeleton", "CommandListSetupBones"),
+                     ("$bones_count", "$nbones"), ("$max_instance_count", "$ninst"), ("$component_count", "$ncomp"), ("$lod_level", "$level"),
+                     ("Pool_MergedSkeleton_Component_VertexGroupOffsets", "Pool_Offsets"),
+                     ("Pool_MergedSkeleton_Component_VertexGroupCounts", "Pool_Counts"),
+                     ("Pool_MergedSkeleton_Component_LodRemaps", "Pool_Remaps"),
+                     ("Pool_MergedSkeleton_Instance_UpdateFrame", "Pool_Frames"),
+                     ("Pool_MergedSkeleton_Instance_LodLevel", "Pool_Lods"),
+                     ("Pool_ObjectSpatialIdentity", "Pool_Places"),
+                     ("ResourceMergedSkeletonDataRW", "ResourceBonesRW")):
+        assert old in text, old
+        text = text.replace(old, new)
+    # The Core's own names stay: only the Mod's were changed.
+    for kept in ("$\\EFMIv1\\bones_count = $nbones", "$\\EFMIv1\\lod_level = $level", "Pool\\EFMIv1\\Input_MergedSkeleton_Component_LodRemaps = ref Pool_Remaps",
+                 "Resource\\EFMIv1\\Output_MergedSkeleton = ref ResourceBonesRW", "run = CommandList\\EFMIv1\\InitializeMergedSkeleton"):
+        assert kept in text, kept
+    # The component id handed to the Core in a list the section runs, from a variable of the Mod's.
+    text, parts = re.subn(r"^\$\\EFMIv1\\component_id = (\d+)$", r"$part = \1\nrun = CommandListPart", text, flags=re.M)
+    assert parts == 4, parts
+    text = text.replace("[Constants]\nglobal persist $tint = 0\n", "[Constants]\nglobal persist $tint = 0\nglobal $part = 0\n")
+    text += "\n[CommandListPart]\n$\\EFMIv1\\component_id = $part\n"
+    ini.write_text(text, encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", VK_LAYER_PATH=os.pathsep.join([DIST, validation]), VK_LAYER_VALIDATE_SYNC="1",
+                 VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "a character Mod with names and lists of its own"
+    checks.equal(result.returncode, 0, label + ": the scene's pictures as with the fixture as exported")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    fg = status.get("folder_generation", {})
+    checks.equal((fg.get("packages"), [m.get("reason") for m in fg.get("left_out", [])]), (1, []), label + ": the Mod is loaded, not left out")
+    checks.equal((status.get("components"), status.get("sections"), status.get("skeleton_bones"), status.get("last_reason") or ""), (3, 4, 5, ""),
+                 label + ": its skeleton and its parts as the Core is handed them: three components, five bones, four sections, nothing refused")
+    counters = status.get("counters", {})
+    checks.check(counters.get("replaced", 0) > 0 and counters.get("refused_state", 0) == 0,
+                 label + ": draws replaced and none refused " + str({k: counters.get(k) for k in ("replaced", "refused_state", "hidden")}))
 
 
 def own_mesh(checks, validation):

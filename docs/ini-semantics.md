@@ -730,6 +730,27 @@ The layer:
   application's bone and follows it, the package without a skeleton went to the GPU with its mesh files,
   a runtime disable returns the application's mesh. On the build before: the plan refused.
 
+## What makes a character, and its parts (D-177)
+
+The original Core sees a Mod only through its interface: the Core's lists the Mod runs, the Core's
+variables it assigns before (`$\EFMIv1\component_id`, `lod_level`, `bones_count`, `instance_count`), the
+pools it references into the Core's inputs and the resource it references into the skeleton template.
+
+The layer reads the same, whatever the Mod calls its own things:
+
+- A character Mod: an INI whose lists run `CommandList\EFMIv1\InitializeMergedSkeleton`. The lists that do
+  are run at preparation.
+- Its bones and instances: what its lists assign to the Core's `bones_count` and `instance_count`; its
+  skeleton pools: those its lists reference into `Pool\EFMIv1\Input_MergedSkeleton_Component_...`. The
+  exporter's names (`$bones_count`, `$max_instance_count`, `Pool_MergedSkeleton_Component_...`) are a
+  fallback where nothing is handed over.
+- A section's component and LOD: the constants its lists hand to `$\EFMIv1\component_id` and
+  `$\EFMIv1\lod_level`, directly or through a variable of the Mod's, in the section's own list or in a list
+  of the Mod's it runs. A LOD never handed to the Core is the Mod's `$lod_level`, as before.
+- Checked: `sandbox/runtime_test.py` other_names (the fixture with every one of the Mod's names changed
+  and the component handed over in a list the section runs: the Mod loaded, its three components and four
+  sections, the scene's pictures); the installed Mods in every key state, 319 sections as the build before.
+
 ## A character's components and their bones (D-175, BUG-093)
 
 The original Core: a component is an offset and a count into the Mod's merged skeleton

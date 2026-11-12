@@ -146,6 +146,7 @@ void generation_status(CharacterGeneration& backend, JsonWriter& w)
     w.kn("sections", backend.package.sections.size());
     // The parts of a character the package's skeleton has; none: a package without one (D-174).
     w.kn("components", backend.package.components.size());
+    w.kn("skeleton_bones", backend.package.bones);
     w.kn("package_bytes", backend.package.payload_bytes);
     w.kn("payload_held_bytes", backend.package.payload.size()); // in host memory (ISSUE-011: none once loaded)
     w.kn("mesh_upload_microseconds", backend.mesh_upload_us.load());

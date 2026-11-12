@@ -6,6 +6,16 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## P2-3: a character is what its lists hand to the Core (D-177, 2026-11-12; sandbox only, not in dist)
+
+- The user, after 2.1.5: of the three open items of Phase 2 the point is the second, the contract read by the exporter's names at load.
+- From the original Core (read): it knows a Mod through its own interface only, the lists a Mod runs, the Core's variables it assigns, the pools and the resource it references into the Core's inputs. D-177 has it.
+- Changed: `frontend/xxmi/character_core.cpp` (the initializer lists by their call, the counts and pools by what is handed to the Core, a section's component and LOD by what its lists hand over, in lists it runs as well; the sections read again at preparation), `frontend/xxmi/ini_module.cpp` (`HostSectionRuns`), `frontend/xxmi/draw_plan.*` (`original(const CommandListEvaluatable*)`), `layer/src/character_program.cpp` (a character Mod by its call of the initializer), the status's `skeleton_bones`.
+- Failing first: the scene `other_names` of `sandbox/runtime_test.py` (the fixture with every one of the Mod's own names changed and the component handed over in a list the section runs), 1 of 5 on the build before (the Mod not taken as a character), 5 of 5 now.
+- Plans of the installed folder as it is today (22 Mods; the user has updated avywenna, perlica, Yvonne since 2.1.5 was built): the deployed 2.1.5 against this build, by hash and count, 319 sections the same, none added, removed or changed. A first try that read the sections again without unwrapping the adapter's operands lost avywenna 1.7's stride branches; this comparison caught it.
+- Verified in the work tree (sandbox): the whole build; text, unit 117, the original frontend host, the installed folder's syntax and HLSL, the original INI runtime 514, INI evaluation 65, the execution matrix, both judges, the installed Mods' offline plans (three steps; 7922 states), broken files, containment, the eleven capture replays, character replacement 377 and 115, live INI rendering 159, probe end to end, modes 50, Vulkan validation 76. All passed.
+- Not done: not in the main checkout's dist (that is 2.1.5, without D-177; the game was running when this was finished); nothing of it has run in the game.
+
 ## 2.1.5: Phase 2's first steps and BUG-093 as one build (2026-11-12)
 
 - What it holds beyond 2.1.4: D-173 (the sections of every INI of a Mod's folder), D-174 (packages without a skeleton, a Mods folder without a character Mod), D-175 (components that share bones, a remap at either LOD: BUG-093, the user's Yvonne), D-176 (a section without a component draws a mesh of its own). The sections below have each.

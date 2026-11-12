@@ -18,6 +18,7 @@
 
 void HostCompileGraph(const std::wstring&, const std::vector<std::wstring>&);
 bool HostSectionFolder(const wchar_t* section, std::wstring& folder);
+bool HostSectionRuns(const wchar_t* section, const wchar_t* target);
 // Pinned original resource identity encoding in ResourceHash.cpp.
 float EncodeFloat30(const uint32_t hash);
 
@@ -61,6 +62,12 @@ CustomResource& core_resource(const wchar_t* name)
     if (found == customResources.end()) core_missing(L"[resource" + core_namespace + name + L"]");
     return found->second;
 }
+CustomResourcePool& core_pool(const wchar_t* name)
+{
+    const auto found = customResourcePools.find(L"pool" + core_namespace + name);
+    if (found == customResourcePools.end()) core_missing(L"[pool" + core_namespace + name + L"]");
+    return found->second;
+}
 // A name given in UTF-8 (a Mod's namespace from the layer) as the parser spells it. A byte-by-byte
 // widening sign-extended every byte outside ASCII (U+FFE6 for 0xE6), so a Mod named in another script
 // never found its own sections (D-154).
@@ -92,6 +99,9 @@ class CharacterCore : public RuntimeExtension {
         // it from the root; known while the generation loads (D-173).
         std::wstring folder;
         bool folder_known = false;
+        // The Mod's lists that call the Core's InitializeMergedSkeleton (D-177), by their section names:
+        // what the exporter calls [CommandListInitializeMergedSkeleton], whatever the Mod calls it.
+        std::vector<std::wstring> initializers;
         size_t outside_package = 0;
         std::vector<uint32_t> original_components;
         CustomResource* skeleton = nullptr;
@@ -184,6 +194,147 @@ class CharacterCore : public RuntimeExtension {
     bool textures = false;                 // the host answers texture queries (D-077)
     std::set<std::wstring> version_told_;  // lines whose Mod was told about its required version
     size_t texture_sections = 0;
+    // What a Mod hands to the Core is read where its lists meet the Core's interface (D-177): the Core's
+    // variables they assign, the pools and resources they reference into the Core's inputs, the Core's lists
+    // they run. The Mod's own names for its lists, variables and pools play no part.
+    // The Core's own lists: a Mod's lists are followed into the lists they run, not into these.
+    std::unordered_set<const ExplicitCommandListSection*> core_sections_;
+    // Every command of a list as the original parsed it, inside its branches and, with `follow`, inside the
+    // lists it runs that are not the Core's.
+    template <class Visit>
+    void each_command(const CommandList* list, Visit&& visit, std::unordered_set<const CommandList*>& seen, bool follow = true, unsigned depth = 0) const
+    {
+        if (!list || depth > 32 || !seen.insert(list).second) return;
+        for (const auto& held : list->commands) {
+            const CommandListCommand* command = DrawPlanAdapter::original(*held);
+            if (const auto* branch = dynamic_cast<const IfCommand*>(command)) {
+                each_command(branch->true_commands_pre.get(), visit, seen, follow, depth + 1);
+                each_command(branch->false_commands_pre.get(), visit, seen, follow, depth + 1);
+                continue;
+            }
+            visit(*command);
+            if (!follow) continue;
+            const auto* run = dynamic_cast<const RunExplicitCommandList*>(command);
+            if (run && run->command_list_section && !core_sections_.count(run->command_list_section))
+                each_command(&run->command_list_section->command_list, visit, seen, follow, depth + 1);
+        }
+    }
+    // A global variable by where its value is kept, which is how an operand names it.
+    mutable std::unordered_map<const float*, const CommandListVariable*> variables_by_value_;
+    const CommandListVariable* variable_at(const float* value) const
+    {
+        if (variables_by_value_.size() != command_list_globals.size()) {
+            variables_by_value_.clear();
+            for (const auto& item : command_list_globals) variables_by_value_[&item.second.fval] = &item.second;
+        }
+        const auto found = variables_by_value_.find(value);
+        return found == variables_by_value_.end() ? nullptr : found->second;
+    }
+    // The variable a list hands to `target` (`$\EFMIv1\lod_level = $lod_level`: the Mod's LOD variable, whatever
+    // its name), when every such assignment in the list, its branches and the Mod's lists it runs names the same
+    // one; null for none, or where a constant or an expression is assigned.
+    const CommandListVariable* feeder_of(const CommandList* list, const CommandListVariable* target) const
+    {
+        const CommandListVariable* found = nullptr;
+        bool other = false;
+        std::unordered_set<const CommandList*> seen;
+        each_command(list, [&](const CommandListCommand& command) {
+            const auto* assignment = dynamic_cast<const VariableAssignment*>(&command);
+            if (!assignment || assignment->var != target) return;
+            const auto* operand = dynamic_cast<const CommandListOperand*>(DrawPlanAdapter::original(assignment->expression.evaluatable.get()));
+            const CommandListVariable* fed = operand && operand->type == ParamOverrideType::VARIABLE && operand->var_ftarget
+                                                 ? variable_at(operand->var_ftarget) : nullptr;
+            if (!fed || fed == target || (found && found != fed)) other = true;
+            else found = fed;
+        }, seen);
+        return other ? nullptr : found;
+    }
+    // Whether a list, its branches or the Mod's lists it runs assign `target` at all.
+    bool assigns(const CommandList* list, const CommandListVariable* target) const
+    {
+        bool found = false;
+        std::unordered_set<const CommandList*> seen;
+        each_command(list, [&](const CommandListCommand& command) {
+            const auto* assignment = dynamic_cast<const VariableAssignment*>(&command);
+            found |= assignment && assignment->var == target;
+        }, seen);
+        return found;
+    }
+    // The one constant a list assigns to `target`, in its branches and the Mod's lists it runs as well: none
+    // when there is no assignment, one that is no constant, or two that differ.
+    uint32_t constant_to(const CommandList* list, const CommandListVariable* target) const
+    {
+        if (!target) return efvk::kCharacterNone;
+        std::set<uint32_t> values;
+        bool unknown = false;
+        std::unordered_set<const CommandList*> seen;
+        each_command(list, [&](const CommandListCommand& command) {
+            const auto* assignment = dynamic_cast<const VariableAssignment*>(&command);
+            if (!assignment || assignment->var != target) return;
+            float value = 0;
+            if (const_cast<CommandListExpression&>(assignment->expression).static_evaluate(&value) &&
+                std::isfinite(value) && value >= 0 && value < 65536 && std::floor(value) == value)
+                values.insert(uint32_t(value));
+            else unknown = true;
+        }, seen);
+        return !unknown && values.size() == 1 ? *values.begin() : efvk::kCharacterNone;
+    }
+    // The variable whose constants are what a section hands to the Core's `core` input: the Mod's own variable
+    // it hands over, else the Core's variable itself where the section's lists assign it; null where they never do.
+    const CommandListVariable* handed_through(const CommandList* list, const CommandListVariable* core) const
+    {
+        if (const CommandListVariable* fed = feeder_of(list, core)) return fed;
+        return assigns(list, core) ? core : nullptr;
+    }
+    // The Mod's lists: its explicit sections and its TextureOverrides' lists.
+    std::vector<const CommandList*> lists_of(const Mod& m) const
+    {
+        std::vector<const CommandList*> out;
+        const std::wstring lists = L"commandlist" + m.mod, overrides = L"textureoverride" + m.mod;
+        for (const auto& section : explicitCommandListSections)
+            if (!_wcsnicmp(section.first.c_str(), lists.c_str(), lists.size())) { out.push_back(&section.second.command_list); out.push_back(&section.second.post_command_list); }
+        for (const auto& hashed : G->mTextureOverrideMap)
+            for (const auto& entry : hashed.second)
+                if (!_wcsnicmp(entry.ini_section.c_str(), overrides.c_str(), overrides.size())) { out.push_back(&entry.command_list); out.push_back(&entry.post_command_list); }
+        return out;
+    }
+    // The number the Mod's lists hand to one of the Core's variables (`$\EFMIv1\bones_count = $bones_count`),
+    // with the Mod's variables as they are after its [Constants]: false when no list hands one over, or two differ.
+    bool core_number(const Mod& m, const wchar_t* name, float& out) const
+    {
+        const CommandListVariable* target = &var(name);
+        std::set<float> values;
+        bool unknown = false;
+        for (const CommandList* list : lists_of(m)) {
+            std::unordered_set<const CommandList*> seen;
+            each_command(list, [&](const CommandListCommand& command) {
+                const auto* assignment = dynamic_cast<const VariableAssignment*>(&command);
+                if (!assignment || assignment->var != target) return;
+                float value = 0;
+                if (const_cast<CommandListExpression&>(assignment->expression).static_evaluate(&value, nullptr, true) && std::isfinite(value)) values.insert(value);
+                else unknown = true;
+            }, seen, false);
+        }
+        if (unknown || values.size() != 1) return false;
+        out = *values.begin();
+        return true;
+    }
+    // The pool the Mod's lists reference into one of the Core's input pools (`Pool\EFMIv1\Input_... = ref Pool_...`);
+    // null when no list does, or two name different pools.
+    CustomResourcePool* core_pool_source(const Mod& m, const wchar_t* name) const
+    {
+        const CustomResourcePool* target = &core_pool(name);
+        std::set<CustomResourcePool*> sources;
+        for (const CommandList* list : lists_of(m)) {
+            std::unordered_set<const CommandList*> seen;
+            each_command(list, [&](const CommandListCommand& command) {
+                const auto* copy = dynamic_cast<const PoolCopyOperation*>(&command);
+                if (copy && copy->dst.custom_resource_pool == target && copy->src.custom_resource_pool && !(copy->options & ResourceCopyOptions::COPY_MASK))
+                    sources.insert(copy->src.custom_resource_pool);
+            }, seen, false);
+        }
+        return sources.size() == 1 ? *sources.begin() : nullptr;
+    }
     // The constant a section's command list assigns to `name`, at its top level or inside its `if`
     // branches (EFMI exports guard the assignments with `if $mod_enabled && DRAW_TYPE == 4`): one
     // value when every assignment found gives the same constant, none when there is none, one that is
@@ -274,13 +425,6 @@ class CharacterCore : public RuntimeExtension {
                 }
         return out;
     }
-    static uint32_t assigned(const CommandList& list, const std::wstring& name)
-    {
-        std::set<uint32_t> values;
-        bool unknown = false;
-        assignments(&list, name, values, unknown);
-        return !unknown && values.size() == 1 ? *values.begin() : efvk::kCharacterNone;
-    }
     // LIMIT-041: an EFMI export may tell a component's LODs apart by the vertex layout, branches
     // `if vbN->stride == K` of its TextureOverride each assigning one component and LOD. The original
     // evaluates the condition per draw from the stride of the bound vertex buffer (GetResourceStride,
@@ -289,10 +433,11 @@ class CharacterCore : public RuntimeExtension {
     struct StrideChoice { uint32_t slot, stride, component, lod; };
     static bool stride_condition(const CommandListExpression& expression, uint32_t& slot, uint32_t& stride)
     {
-        const auto* op = dynamic_cast<const CommandListOperator*>(expression.evaluatable.get());
+        // Read the same before and after the adapter wrapped the operands it answers (a second reading at prepare, D-177).
+        const auto* op = dynamic_cast<const CommandListOperator*>(DrawPlanAdapter::original(expression.evaluatable.get()));
         if (!op || op->token != L"==") return false;
         auto side = [&](const std::shared_ptr<CommandListEvaluatable>& target, const std::shared_ptr<CommandListEvaluatable>& value) {
-            const auto* operand = dynamic_cast<const CommandListOperand*>(target.get());
+            const auto* operand = dynamic_cast<const CommandListOperand*>(DrawPlanAdapter::original(target.get()));
             float k = 0;
             if (!operand || operand->type != ParamOverrideType::TEXTURE || operand->texture_filter_target.type != ResourceCopyTargetType::VERTEX_BUFFER ||
                 operand->texture_filter_target.evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE ||
@@ -306,8 +451,8 @@ class CharacterCore : public RuntimeExtension {
     }
     // The choices of such a list, in its order; false when the component is assigned outside them or a
     // branch assigns no single constant component.
-    static bool stride_choices(const CommandList* list, const std::wstring& component, const std::wstring& lod, std::vector<StrideChoice>& out,
-                               unsigned depth = 0)
+    bool stride_choices(const CommandList* list, const CommandListVariable* component, const CommandListVariable* lod, std::vector<StrideChoice>& out,
+                        unsigned depth = 0) const
     {
         if (!list) return true;
         if (depth > 32) return false;
@@ -316,14 +461,14 @@ class CharacterCore : public RuntimeExtension {
             const auto* branch = dynamic_cast<const IfCommand*>(command);
             if (!branch) {
                 const auto* assignment = dynamic_cast<const VariableAssignment*>(command);
-                if (assignment && assignment->var && !_wcsicmp(assignment->var->name.c_str(), component.c_str())) return false;
+                if (assignment && assignment->var == component) return false;
                 continue;
             }
             StrideChoice choice{};
             if (stride_condition(branch->expression, choice.slot, choice.stride)) {
                 if (!branch->true_commands_pre) return false;
-                choice.component = assigned(*branch->true_commands_pre, component);
-                choice.lod = assigned(*branch->true_commands_pre, lod);
+                choice.component = constant_to(branch->true_commands_pre.get(), component);
+                choice.lod = constant_to(branch->true_commands_pre.get(), lod);
                 if (choice.component == efvk::kCharacterNone) return false;
                 out.push_back(choice);
                 // An `elif` continues the choices in the branch not taken.
@@ -462,11 +607,19 @@ global $mod_id = -1
                                  L"enum_override_type_original", L"enum_override_type_skip", L"gpu_posed", L"instance_config_vs_cb_slot",
                                  L"lod_level", L"cfg_ms_max_lod_level_count", L"version", L"required_version", L"mod_id"}) var(name);
         for (const auto* name : {L"outputmergedskeleton_template", L"output_mergedskeleton"}) core_resource(name);
+        for (const auto* name : {L"input_mergedskeleton_component_vertexgroupoffsets", L"input_mergedskeleton_component_vertexgroupcounts",
+                                 L"input_mergedskeleton_component_lodremaps"}) core_pool(name);
     }
     std::vector<std::wstring> install(DrawPlanAdapter& a) override
     {
         adapter = &a;
         check_interface();
+        {
+            const std::wstring core = L"commandlist" + core_namespace;
+            core_sections_.clear();
+            for (const auto& section : explicitCommandListSections)
+                if (!_wcsnicmp(section.first.c_str(), core.c_str(), core.size())) core_sections_.insert(&section.second);
+        }
         // `Original_VS_CB->SpatialHash(...)` in a replaced draw's plan: the renderer's instance entry.
         a.plan_resource_queries([this](ResourceCopyTarget& target, CommandListState& state, float& value, std::wstring& why) {
             if (target.type == ResourceCopyTargetType::RENDER_TARGET || target.type == ResourceCopyTargetType::DEPTH_STENCIL_TARGET)
@@ -661,11 +814,19 @@ global $mod_id = -1
             });
         // Preparation executes the original mod's bone declarations, including
         // its exact LOD1 file references. Runtime connection executes them too.
-        for (const auto& m : mods_) {
-            // Named when missing (an export of another shape, or a namespace the parser spelled otherwise).
-            const std::wstring root = L"commandlist" + m.mod + L"initializemergedskeleton";
-            if (!explicitCommandListSections.count(root)) throw std::runtime_error(narrow(L"The Mod declares no [" + root + L"]"));
-            HostCompileGraph(root, boundaries);
+        // The lists that declare each Mod's skeleton are those of its lists that call the Core's
+        // InitializeMergedSkeleton (D-177): found by that call, not by the exporter's name for the list. No
+        // list is compiled yet, so the call is read from the sections' lines. A Mod none of whose lists
+        // calls it is named when it is prepared.
+        const std::wstring initializer = command(L"initializemergedskeleton");
+        for (auto& m : mods_) {
+            m.initializers.clear();
+            const std::wstring lists = L"commandlist" + m.mod;
+            for (const auto& section : explicitCommandListSections)
+                if (!_wcsnicmp(section.first.c_str(), lists.c_str(), lists.size()) && HostSectionRuns(section.first.c_str(), initializer.c_str()))
+                    m.initializers.push_back(section.first);
+            std::sort(m.initializers.begin(), m.initializers.end());
+            for (const auto& root : m.initializers) HostCompileGraph(root, boundaries);
         }
         return boundaries;
     }
@@ -780,10 +941,19 @@ global $mod_id = -1
     }
     bool discover_sections(std::wstring& why)
     {
-        const std::wstring component_id = L"$" + core_namespace + L"component_id";
+        const CommandListVariable* const core_component = &var(L"component_id");
+        const CommandListVariable* const core_lod = &var(L"lod_level");
+        // Read twice: when the overrides are parsed (the sections are then known whatever happens to the load
+        // after), and again when every list is compiled (prepare), when what a section hands to the Core in a
+        // list it runs can be followed.
+        texture_sections = 0;
+        if (rest_) rest_->clear();
         for (auto& m : mods_) {
-            m.folder.clear();
-            m.folder_known = HostSectionFolder((L"commandlist" + m.mod + L"initializemergedskeleton").c_str(), m.folder) && !m.folder.empty();
+            m.found.clear(); m.outside_package = 0;
+            if (!m.folder_known) {
+                m.folder.clear();
+                m.folder_known = !m.initializers.empty() && HostSectionFolder(m.initializers.front().c_str(), m.folder) && !m.folder.empty();
+            }
         }
         for (const auto& hashed : G->mTextureOverrideMap) {
             for (const auto& entry : hashed.second) {
@@ -795,12 +965,22 @@ global $mod_id = -1
                 s.section.hash = hashed.first;
                 const bool first_ok = entry.match_first_index.op == FuzzyMatchOp::ALWAYS || constant(entry.match_first_index, s.section.match_first);
                 if (own && m->discovery && mesh && constant(entry.match_index_count, s.section.match_count) && s.section.match_count && first_ok) {
-                    const std::wstring lod_level = L"$" + m->mod + L"lod_level";
-                    s.original = assigned(entry.command_list, component_id);
-                    s.section.lod = assigned(entry.command_list, lod_level);
+                    // The component and the LOD are what the section's lists hand to the Core (D-177): the
+                    // constants they assign to `$\EFMIv1\component_id` and `$\EFMIv1\lod_level`, or to the
+                    // variable of the Mod's they hand over there, in the section's own list or one it runs.
+                    // Where the lists never hand the Core a LOD, the Mod's `$lod_level` as before: it keeps the
+                    // LOD its own draw lists read.
+                    const CommandListVariable* const component_through = handed_through(&entry.command_list, core_component);
+                    const CommandListVariable* lod_through = handed_through(&entry.command_list, core_lod);
+                    if (!lod_through) {
+                        const auto named = command_list_globals.find(L"$" + m->mod + L"lod_level");
+                        lod_through = named == command_list_globals.end() ? nullptr : &named->second;
+                    }
+                    s.original = constant_to(&entry.command_list, component_through);
+                    s.section.lod = constant_to(&entry.command_list, lod_through);
                     std::vector<StrideChoice> choices;
                     std::set<uint32_t> strides;
-                    if (s.original == efvk::kCharacterNone && stride_choices(&entry.command_list, component_id, lod_level, choices) && !choices.empty() &&
+                    if (s.original == efvk::kCharacterNone && stride_choices(&entry.command_list, component_through ? component_through : core_component, lod_through, choices) && !choices.empty() &&
                         std::all_of(choices.begin(), choices.end(), [&](const StrideChoice& c) { return c.slot == choices[0].slot && strides.insert(c.stride).second; })) {
                         // One section per branch (LIMIT-041).
                         for (const auto& c : choices) {
@@ -939,6 +1119,11 @@ global $mod_id = -1
                         m->roots.insert(&entry.command_list); m->roots.insert(&entry.post_command_list);
                         root_mods_[&entry.command_list] = m; root_mods_[&entry.post_command_list] = m;
                     }
+        // Every list is compiled now: the sections once more, with what they hand to the Core in the lists they run.
+        if (folder_ || std::any_of(mods_.begin(), mods_.end(), [](const Mod& m) { return m.discovery != nullptr; })) {
+            std::wstring refused;
+            if (!discover_sections(refused)) { why = refused; return false; }
+        }
         struct Preparing { Mod*& slot; ~Preparing() { slot = nullptr; } } preparing{preparing_};
         // Every Mod is tried: one that cannot be prepared is named with its reason (CharacterDiscovery::refused),
         // so the folder leaves out exactly those and loads again, instead of loading every Mod alone to find it.
@@ -960,30 +1145,43 @@ global $mod_id = -1
     }
     bool prepare_mod(DrawPlanAdapter& a, Mod& m, CommandListState& state, std::wstring& why)
     {
-        // What the Core's contract needs of the Mod's own declarations, each named when it is missing
-        // (an export of another shape refuses with the name, not a map's error).
-        const std::wstring init_name = L"commandlist" + m.mod + L"initializemergedskeleton";
-        const auto init_found = explicitCommandListSections.find(init_name);
-        if (init_found == explicitCommandListSections.end()) return fail(why, (L"The Mod declares no [" + init_name + L"]").c_str());
-        auto& init = init_found->second;
-        a.adapt(init.command_list); a.adapt(init.post_command_list);
-        DrawPlan plan;
-        if (!a.execute_pair(init.command_list, init.post_command_list, state, plan, why) || !m.skeleton || !plan.items.empty()) return false;
+        // The Mod's skeleton is what its lists hand to the Core (D-177), whatever the Mod calls them: the
+        // lists that call the Core's InitializeMergedSkeleton declare it and are run here, as the Mod runs
+        // them before its first draw; the bone and instance counts are what its lists assign to the Core's
+        // `bones_count` and `instance_count`; its pools are those its lists reference into the Core's input
+        // pools. Where a list hands nothing over (a count set by other means), the names an export gives
+        // them are tried; what is then still missing is said.
+        if (m.initializers.empty()) return fail(why, L"None of the Mod's lists calls the Core's InitializeMergedSkeleton");
+        for (const auto& name : m.initializers) {
+            auto& init = explicitCommandListSections.at(name);
+            a.adapt(init.command_list); a.adapt(init.post_command_list);
+            DrawPlan plan;
+            if (!a.execute_pair(init.command_list, init.post_command_list, state, plan, why) || !plan.items.empty()) return false;
+        }
+        if (!m.skeleton) return fail(why, L"The Mod's lists gave the Core's InitializeMergedSkeleton no skeleton resource");
         const auto pools = L"pool" + m.mod + L"_mergedskeleton_component_";
         SkeletonFilePlan metadata; FilePlanCompiler files(customResources);
-        auto variable_of = [&](const wchar_t* name, float& out) {
-            const auto found = command_list_globals.find(L"$" + m.mod + name);
-            if (found == command_list_globals.end()) return fail(why, (L"The Mod declares no $" + m.mod + name).c_str());
+        auto number_of = [&](const wchar_t* core, const wchar_t* named, float& out) {
+            if (core_number(m, core, out)) return true;
+            const auto found = command_list_globals.find(L"$" + m.mod + named);
+            if (found == command_list_globals.end())
+                return fail(why, (std::wstring(L"The Mod's lists hand the Core no one ") + core + L", and it declares no $" + m.mod + named).c_str());
             out = found->second.fval; return true;
         };
-        auto pool_of = [&](const wchar_t* name) -> CustomResourcePool* {
-            const auto found = customResourcePools.find(pools + name);
-            if (found == customResourcePools.end()) { fail(why, (L"The Mod declares no [" + pools + name + L"]").c_str()); return nullptr; }
+        auto pool_of = [&](const wchar_t* core, const wchar_t* named) -> CustomResourcePool* {
+            if (CustomResourcePool* handed = core_pool_source(m, core)) return handed;
+            const auto found = customResourcePools.find(pools + named);
+            if (found == customResourcePools.end()) {
+                fail(why, (std::wstring(L"The Mod's lists reference no one pool into the Core's ") + core + L", and it declares no [" + pools + named + L"]").c_str());
+                return nullptr;
+            }
             return &found->second;
         };
         float bones = 0, instances = 0;
-        if (!variable_of(L"bones_count", bones) || !variable_of(L"max_instance_count", instances)) return false;
-        auto* offsets = pool_of(L"vertexgroupoffsets"); auto* counts = pool_of(L"vertexgroupcounts"); auto* remaps = pool_of(L"lodremaps");
+        if (!number_of(L"bones_count", L"bones_count", bones) || !number_of(L"instance_count", L"max_instance_count", instances)) return false;
+        auto* offsets = pool_of(L"input_mergedskeleton_component_vertexgroupoffsets", L"vertexgroupoffsets");
+        auto* counts = pool_of(L"input_mergedskeleton_component_vertexgroupcounts", L"vertexgroupcounts");
+        auto* remaps = pool_of(L"input_mergedskeleton_component_lodremaps", L"lodremaps");
         if (!offsets || !counts || !remaps) return false;
         if (!read_skeleton_plan(integer(bones), integer(instances), integer(var(L"cfg_ms_max_lod_level_count").fval),
             *offsets, *counts, *remaps, a, files, metadata, why)) return false;

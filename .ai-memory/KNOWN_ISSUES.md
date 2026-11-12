@@ -18,7 +18,7 @@
 - The original: the Core's pools give each component an offset and a count into the merged skeleton and a remap per LOD; nothing requires the spans apart, and a remap at LOD 0 is one more entry of the pool. To read first: the Core's MergedSkeleton.ini (how AttachComponent copies a component's bones, what a null and a file remap mean per LOD), then what the layer's skeleton needs of disjoint ranges (the import jobs, coverage per component, the bone masks of streams).
 - While it is open: the vk01 replay "captured frame with a library's texture slots" and "installed Mods offline plans in every key state" are red on this folder.
 - Fixed (D-175): components may share bones and either LOD may have a remap. Failing first: the scene `shared_spans` of `sandbox/runtime_test.py` (the fixture written as the tool writes a Mod: a fourth component on component 0's bones with the LOD 1 remap, component 0 with a LOD 0 remap), 2 of 10 checks on the build before, 10 of 10 after, with the bones imported on the device and on the CPU. The installed Yvonne loads offline again and plans in every key state, and the vk01 replay passes. Not seen in the game.
-- Left of R-04: the skeleton and the sections are still read by the exporter's names at load.
+- Left of R-04 after D-177 (2026-11-12): the reading is static; a component chosen by a value computed at draw time is not seen at load.
 
 ## BUG-091: With two Mods of one character and one namespace installed, a part of one kept the game's look (seen in the game 2026-11-11, 2.1.3; OPEN, not analysed, not reproduced)
 

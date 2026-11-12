@@ -407,8 +407,9 @@ No lock order inversion was found (recording: `character_mx` shared, the control
 > decides only which packages have a skeleton. P2-2 done the same day (D-176): a section without a
 > component draws a mesh of its own under the game's vertex stage and bones. P2-4 is not begun.
 > An installed Mod met R-04 that night (BUG-093), and a part of R-04 went with it (D-175): components
-> may share bones and either LOD may have a remap. Left of P2-3: the skeleton and the sections are read
-> by the exporter's names at load.
+> may share bones and either LOD may have a remap. P2-3 the same day (D-177): the skeleton and the
+> sections are read from what the Mod's lists hand to the Core, not from the exporter's names. Left of
+> P2-3: a section the static reading finds nothing in is not yet read again at its first draw.
 
 Each step test first, as the working agreement says: the check that fails before, the change, the
 touched area. Phases 0 and 3a come first: they are small, and they make the rest measurable.

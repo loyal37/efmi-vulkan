@@ -2026,6 +2026,20 @@ const CommandListCommand* DrawPlanAdapter::original(const CommandListCommand& co
 {
     const auto* bridge=dynamic_cast<const BridgeCommand*>(&command);return bridge?bridge->original.get():&command;
 }
+const CommandListEvaluatable* DrawPlanAdapter::original(const CommandListEvaluatable* node)
+{
+    for(unsigned depth=0;node && depth<8;++depth){
+        if(const auto* q=dynamic_cast<const NativeResourceQuery*>(node)){node=q->source.get();continue;}
+        if(const auto* q=dynamic_cast<const NativeShaderQuery*>(node)){node=q->source.get();continue;}
+        if(const auto* q=dynamic_cast<const RenderTargetQuery*>(node)){node=q->source.get();continue;}
+        if(const auto* q=dynamic_cast<const HostValueQuery*>(node)){node=q->source.get();continue;}
+        if(const auto* q=dynamic_cast<const HostWindowQuery*>(node)){node=q->source.get();continue;}
+        if(const auto* q=dynamic_cast<const ShaderSlotGuard*>(node)){node=q->source.get();continue;}
+        if(dynamic_cast<const UnansweredOperand*>(node))return nullptr;
+        return node;
+    }
+    return node;
+}
 void DrawPlanAdapter::resource_matches(ResourceMatchQuery query){
     if(runtime_->active || !runtime_->adapted.empty() || !query || runtime_->resource_match)
         refuse(L"Install one source resource matcher before adapting command lists");

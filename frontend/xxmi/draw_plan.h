@@ -216,6 +216,9 @@ public:
     void index_region_hash(std::function<bool(uint32_t&)>);
     // The original command an adapted list holds in place of `command` (itself when not adapted).
     static const CommandListCommand* original(const CommandListCommand& command);
+    // The original operand an adapted expression holds in place of `node` (a host query around it), itself when
+    // it is not wrapped; null where the adapter put no operand of the original's (an unanswered one).
+    static const CommandListEvaluatable* original(const CommandListEvaluatable* node);
     using ResourceMatchQuery=std::function<bool(ResourceCopyTarget&,CommandListState&,SourceResourceMatch&,std::wstring&)>;
     // General source targets, including IB/VB, stage slots, resources and pools.
     // Mutually exclusive with the legacy pixel-only file-plan provider.

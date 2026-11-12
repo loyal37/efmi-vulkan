@@ -97,18 +97,20 @@ The replacement's parts (`layer/src`, split 2026-11-10, D-160; one file of 4326 
 ## What makes a Mod a Mod (the gates)
 
 1. Every enabled INI is an input: its lists and keys run. A package (what carries sections, mesh files
-   and the texture catalogue on the device) is made per INI with a section
-   `[CommandListInitializeMergedSkeleton]` (`CharacterProgram::mods_characters`), with a skeleton, and per
+   and the texture catalogue on the device) is made per INI whose lists run the Core's
+   InitializeMergedSkeleton (`CharacterProgram::mods_characters`, D-177), with a skeleton, and per
    folder outside those INIs' folders whose INIs have mesh sections, without one (D-174). A Mods folder
    without a character Mod loads as any other; the folder's generation is a program of its own.
 2. The folder loads (above).
 3. Discovery (`CharacterCore::discover_sections`, `discover_contract`): the host's sections are the
    registry's TextureOverrides with a constant `match_index_count`, as the original's draw maps hold them
-   (D-173). One of the Mod's namespace whose list assigns a constant component and LOD is a part of the
+   (D-173). One of the Mod's namespace whose lists hand the Core a constant component and LOD (directly or
+   through a variable of the Mod's, in the section's list or one it runs: D-177) is a part of the
    character; one that assigns none, and one of another INI of the Mod's folder, is a section without a
    component (its lists run at the draws it matches, and the plan says whether the draw is hidden, drawn
    with the Mod's textures, replaced by a mesh of the Mod's under the game's vertex stage and bones
-   (D-176), or left). The skeleton comes from the Mod's initializer and its pools: a
+   (D-176), or left). The skeleton comes from the lists that run the Core's initializer, the counts the
+   Mod's lists hand to the Core and the pools they reference into its inputs (D-177): a
    component is an offset and a count of bones with a remap per LOD, and two may share bones (D-175; the
    package's `spans` are what a draw's needed bones are counted in). A LOD no line assigned has no remap. The mesh sections of an INI outside every character Mod's folder are
    the sections of that folder's package without a skeleton (D-174).
