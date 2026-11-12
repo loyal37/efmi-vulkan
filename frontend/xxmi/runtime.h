@@ -140,6 +140,9 @@ struct RuntimeDraw {
     // call; a Mod that runs the Core's spatial identification itself reads it (D-086). Null: none.
     const uint8_t* instance_entry = nullptr;
     size_t instance_entry_size = 0;
+    // A section whose lists compute the component (D-182): called with the component (the package's index) and the
+    // LOD the lists handed the Core at its call, when they are not this draw's `component` and `lod`. Null: none.
+    std::function<void(uint32_t component, uint32_t lod)> handed_component;
     // The draw's render targets as its pipeline's subpass names them (D-087): bit i for a color
     // attachment at location i, which the fragment shader's output i (DX11 oN) writes, bit 8 for a
     // depth attachment. `render_pass` tells the attachments of different render passes apart.

@@ -48,7 +48,8 @@ local $levels = $\EFMIv1\cfg_ms_max_lod_level_count
 """
 
 
-def fixture(folder, salt=0, settings="fixture", name="character.bin", namespace="runtime_fixture", texture_properties=False):
+def fixture(folder, salt=0, settings="fixture", name="character.bin", namespace="runtime_fixture", texture_properties=False,
+            computed_component=False):
     package = folder / name
     fixture_package(package, salt)
     data = package.read_bytes()
@@ -85,6 +86,7 @@ global $texture_array = -9
 global $texture_absent = -9
 global $stored = 0
 global $vs_value = -9
+global $part_base = 0
 [KeyTint]
 key = ctrl 5
 condition = $active == 1
@@ -113,8 +115,9 @@ $texture_array = ps-t1->Array
 $texture_absent = ps-t9->Width
 """
         text += "$vs_value = vs\n"
-        text += fr"""$\EFMIv1\component_id = {component}
-$\EFMIv1\gpu_posed = 1
+        # D-182: the component as a value the lists compute at the draw, which no static reading tells.
+        text += (fr"$\EFMIv1\component_id = $part_base + {component}" + "\n") if computed_component else (fr"$\EFMIv1\component_id = {component}" + "\n")
+        text += fr"""$\EFMIv1\gpu_posed = 1
 CommandList\EFMIv1\Callback_Component_DrawCustom = ref CommandListDraw{component}
 run = CommandList_Component_DrawInstances
 store = $stored, ResourceStoreSource, 0

@@ -182,6 +182,7 @@ def main():
     other_names(checks, validation)
     other_folder_image(checks, validation)
     instanced_draw(checks, validation)
+    computed_component(checks, validation)
     implicit_namespace(checks)
     stride_branches(checks)
     lod_left_by_another_mod(checks)
@@ -520,6 +521,41 @@ def instanced_draw(checks, validation):
     counters = status.get("counters", {})
     checks.check(counters.get("instanced_draws", 0) > 0 and counters.get("refused_instances", 0) == 0,
                  label + ": decomposed, not refused " + str({k: counters.get(k) for k in ("instanced_draws", "refused_instances", "replaced")}))
+
+
+def computed_component(checks, validation):
+    """D-182 (review P2-3): a section whose lists hand the Core a component computed at the draw
+    (`$\\EFMIv1\\component_id = $part_base + N`), which no static reading tells. The original Core reads the variable
+    when the Mod's list calls it. The layer read only constants: every such section was one without a component,
+    whose Core call failed the contract, and the character stayed the game's."""
+    root = Path(test_dir("runtime-computed-"))
+    mods = root / "Mods"
+    folder = mods / "fixture"
+    folder.mkdir(parents=True)
+    fixture(folder, computed_component=True)
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1", EFMI_VK_M2_TEXTURE_PRELOAD="1",
+                 EFMI_VK_M2_IDENTITY_EXPIRY_MS="500", VK_LAYER_PATH=os.pathsep.join([DIST, validation]),
+                 VK_LAYER_VALIDATE_SYNC="1", VK_LAYER_DUPLICATE_MESSAGE_LIMIT="0", XDG_CACHE_HOME=str(root), TEMP=str(root), TMP=str(root), TMPDIR=str(root))
+    env = layer_env(str(root / "layer.log"), extra=extra)
+    env["VK_LAYER_PATH"] = extra["VK_LAYER_PATH"]
+    args = [str(Path(DIST) / "efmi_vk_variant_gpu.exe"), "--character", "--material", "--validation", "--lazy-packages"]
+    result = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, errors="replace", timeout=180)
+    output = result.stdout + result.stderr
+    (root / "stdout.txt").write_text(output.encode("ascii", "backslashreplace").decode(), encoding="ascii")
+    label = "sections that hand the Core a computed component"
+    checks.equal(result.returncode, 0, label + ": the whole character scene as with constants")
+    checks.check("validation: errors=0 warnings=0" in output, label + ": clean core/sync validation")
+    if result.returncode:
+        print(output[-3000:]); print("artifacts:", root)
+    report = folder / "character-final.json"
+    status = json.loads(report.read_text(encoding="utf-8"))["result"]["replacement"] if report.is_file() else {}
+    counters = status.get("counters", {})
+    checks.check(counters.get("components_handed", 0) > 0 and counters.get("replaced", 0) > 0,
+                 label + ": taken from what the lists handed the Core " + str({k: counters.get(k) for k in ("components_handed", "replaced", "refused_state")}))
 
 
 def other_folder_image(checks, validation):

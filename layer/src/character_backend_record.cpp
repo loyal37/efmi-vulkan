@@ -193,7 +193,28 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
     auto& restore_offsets = scratch_restore_offsets; restore_offsets.clear();
     {
         std::shared_lock<std::shared_mutex> lock(device->res_mx);
-        const CharacterSection* const section = &package.sections[section_index];
+        const CharacterSection* section = &package.sections[section_index];
+        // A section whose lists compute the component (D-182): the draw is made for the component they handed the
+        // Core at the section's last draw; before the first, it goes as a section without one, whose lists run and
+        // hand it over.
+        CharacterSection handed_section;
+        std::pair<uint32_t, uint32_t> handed_now{kCharacterNone, kCharacterNone};
+        if (section->computed) {
+            if (handed.size() != package.sections.size()) handed.assign(package.sections.size(), {kCharacterNone, kCharacterNone});
+            if (handed[section_index].first < package.components.size()) {
+                handed_section = *section;
+                handed_section.component = handed[section_index].first; handed_section.lod = handed[section_index].second;
+                section = &handed_section;
+            }
+        }
+        // The lists handed the Core another component than the draw was made for: the next draw is made for it, and
+        // this one is held, as the Core holds an object's first frame (the game's mesh is never shown for the Mod's).
+        const auto handed_over = [&] {
+            if (!section->computed || handed_now.first == kCharacterNone) return false;
+            handed[section_index] = handed_now;
+            ++counters[C_COMPUTED];
+            return true;
+        };
         // A draw that needs the package on the device while it is not there: what the draw becomes.
         const auto bring_up = [&] {
             if (!activated.load(std::memory_order_relaxed)) {
@@ -228,6 +249,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 request.pixel_texture = [this, &r](unsigned slot, efmi::frontend::RuntimeTexture& texture, std::string& why) {
                     return pixel_texture(r, slot, texture, why); };
                 request.texture_roles = [this, &r](int32_t roles[3], std::string& why) { return texture_roles(r, roles, why); };
+                if (section->computed) request.handed_component = [&handed_now](uint32_t component, uint32_t level) { handed_now = {component, level}; };
                 const auto found = device->pipes.find(r.pipeline);
                 if (found != device->pipes.end()) {
                     render_targets(found->second, request);
@@ -236,7 +258,9 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 bool skip = false, added = false, textures = false; std::string reason;
                 // With the pipeline's vertex input, which a list that draws a mesh of its own is planned by (D-176).
                 const VertexInputRecipe* const vertex = found != device->pipes.end() && found->second.recipe ? &found->second.recipe->vertex : nullptr;
-                if (!plan_draw(request, runtime_list, skip, added, reason, vertex, &textures)) return refuse(C_STATE, "INI hide: " + reason);
+                const bool planned = plan_draw(request, runtime_list, skip, added, reason, vertex, &textures);
+                if (handed_over()) return on_device ? true : bring_up();
+                if (!planned) return refuse(C_STATE, "INI hide: " + reason);
                 if (!skip && !textures && !runtime_list.count) return false;
                 // A draw the plan added gets its material plans now: a later plan of the same state adds nothing.
                 if (added && !refresh_materials()) return false;
@@ -245,7 +269,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     // the package comes up.
                     if (!on_device) { bring_up(); return false; }
                     if (found == device->pipes.end() || !found->second.recipe || !found->second.layout) return false;
-                    record_own_mesh(cb, r, found->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                    record_own_mesh(cb, r, found->second, section_index, present, runtime_list);
                     return false;
                 }
                 if (!on_device) return bring_up();
@@ -253,13 +277,13 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     const auto pipe = device->pipes.find(r.pipeline);
                     if (pipe == device->pipes.end() || !pipe->second.recipe || !pipe->second.layout)
                         return refuse(C_PIPELINE, "texture-only draw pipeline metadata missing");
-                    return record_textures(cb, r, pipe->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                    return record_textures(cb, r, pipe->second, section_index, present, runtime_list);
                 }
                 if (runtime_list.count) {
                     // The lists hide the game's draw and draw a mesh of their own (D-176).
                     if (found == device->pipes.end() || !found->second.recipe || !found->second.layout)
                         return refuse(C_PIPELINE, "a Mod's own mesh: pipeline metadata missing");
-                    return record_own_mesh(cb, r, found->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                    return record_own_mesh(cb, r, found->second, section_index, present, runtime_list);
                 }
             } else if (!on_device) return bring_up();
             // With the package's mesh left to the game this frame, what it would hide stays as well.
@@ -454,6 +478,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 return pixel_texture(r, slot, texture, why); };
             request.texture_roles = [this, &r](int32_t roles[3], std::string& why) { return texture_roles(r, roles, why); };
             request.vertex_stride = [&pipe](unsigned slot, uint32_t& stride, std::string& why) { return vertex_stride(pipe->second, slot, stride, why); };
+            if (section->computed) request.handed_component = [&handed_now](uint32_t component, uint32_t level) { handed_now = {component, level}; };
             const SourceFacts& facts = facts_of(pipe->second, site);
             request.source_vs_config_slot = facts.vs_config_slot;
             request.rolling_bone_source = facts.rolling_bones;
@@ -469,8 +494,9 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 return true;
             };
             bool skip = false, added = false, textures = false; std::string reason;
-            if (!plan_draw(request, runtime_list, skip, added, reason, &pipe->second.recipe->vertex, &textures))
-                return refuse(C_STATE, "INI plan: " + reason);
+            const bool planned = plan_draw(request, runtime_list, skip, added, reason, &pipe->second.recipe->vertex, &textures);
+            if (handed_over()) return true;
+            if (!planned) return refuse(C_STATE, "INI plan: " + reason);
             // Draws beside the game's (D-179): drawn as a hiding plan's are, and the game's draw goes after them.
             if (!skip && !textures && runtime_list.count) { skip = true; beside = true; }
             if (!skip) {
@@ -485,7 +511,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                     ++counters[C_KEPT]; return false;
                 }
                 if (added && !refresh_materials()) return false;
-                const bool textured = record_textures(cb, r, pipe->second, static_cast<uint32_t>(section - package.sections.data()), present, runtime_list);
+                const bool textured = record_textures(cb, r, pipe->second, section_index, present, runtime_list);
                 if (textured) identity->shown = true;
                 return textured;
             }
@@ -567,7 +593,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         original.index_type = r.index_size == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
 
         bool pending = false;
-        if (!material_draws(pipe->second, static_cast<uint32_t>(section - package.sections.data()), r, present, *list,
+        if (!material_draws(pipe->second, section_index, r, present, *list,
                             material_plans, material_views, material_origin)) return false;
         lap(S_MATERIALS);
         // EFMITTL's translucent draws (D-113): captured at the end of the pass when the library's
@@ -1075,7 +1101,8 @@ bool generation_record(CharacterGeneration& backend, CmdBuf* cb, const DrawRec& 
     try {
         // Sections with a component are the Core's; its instances are decomposed as the Core does (P2-4). A section
         // without one runs its lists once for the whole draw, as the original's do.
-        if (r.instances > 1 && section < backend.package.sections.size() && backend.package.sections[section].component != kCharacterNone)
+        if (r.instances > 1 && section < backend.package.sections.size() &&
+            (backend.package.sections[section].component != kCharacterNone || backend.package.sections[section].computed))
             return backend.record_instances(cb, r, section);
         return backend.record(cb, r, section);
     }

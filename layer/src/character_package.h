@@ -115,6 +115,10 @@ struct CharacterSection {
     // TextureOverride that tells a component's LODs apart by `if vbN->stride == K` (LIMIT-041). Not in
     // the file.
     uint32_t stride_slot = kCharacterNone, stride = 0;
+    // The section's lists hand the Core a component the static reading cannot tell (a value computed at the draw,
+    // D-182): the component stays none here, and the host takes the one the lists handed the Core at the section's
+    // draws. Not in the file.
+    bool computed = false;
 };
 struct CharacterEdit {
     uint32_t binding = 0;

@@ -540,12 +540,28 @@ class CharacterCore : public RuntimeExtension {
     }
     bool contract(const Mod& m, std::wstring& reason)
     {
+        if (!current.handed_component) return fits(m) || fail(reason, L"Original Core request differs from the resolved native identity, bone or LOD contract");
+        if (fits(m)) return true;
+        // A section whose lists compute the component (D-182). The original Core reads `component_id` and `lod_level`
+        // when the Mod's list calls it: what they hold then is the draw's component. The host has to know it before
+        // the lists run (the component's bones are imported first), so it takes what the lists handed the Core at
+        // the section's last draw; the lists hand it over here when the draw cannot go as it was made.
+        const float asked = v(L"component_id").fval, level = v(L"lod_level").fval;
+        const auto at = std::isfinite(asked) && asked >= 0 && std::floor(asked) == asked
+            ? std::find(m.original_components.begin(), m.original_components.end(), uint32_t(asked)) : m.original_components.end();
+        if (at != m.original_components.end() && (level == 0 || level == 1)) {
+            const uint32_t component = uint32_t(at - m.original_components.begin()), lod = uint32_t(level);
+            if (component != current.component || lod != current.lod) current.handed_component(component, lod);
+        }
+        return fail(reason, L"Original Core request differs from the resolved native identity, bone or LOD contract");
+    }
+    bool fits(const Mod& m)
+    {
         const auto& expected = m.expected;
         return (current.identity && current.instances == 1 && !current.first_instance && current.component < expected.components.size() && current.lod < 2 &&
             m.original_components.size() == expected.components.size() &&
             integer(v(L"component_id").fval) == m.original_components[current.component] && lod_agrees(expected) &&
-            integer(v(L"bones_count").fval) == expected.bones && v(L"gpu_posed").fval == 1 && v(L"custom_mesh_scale").fval == 1) ||
-            fail(reason, L"Original Core request differs from the resolved native identity, bone or LOD contract");
+            integer(v(L"bones_count").fval) == expected.bones && v(L"gpu_posed").fval == 1 && v(L"custom_mesh_scale").fval == 1);
     }
 public:
     // The version the installed Core declares (`global $version` of its main.ini), 0 when not known.
@@ -995,6 +1011,9 @@ global $mod_id = -1
                         }
                         continue;
                     }
+                    // The lists hand the Core a component, but no constant (a value computed at the draw): the host
+                    // takes what they hand it at the section's draws (D-182).
+                    s.section.computed = s.original == efvk::kCharacterNone && (component_through != nullptr);
                     m->found.push_back(s);
                     continue;
                 }
@@ -1245,7 +1264,7 @@ global $mod_id = -1
     void after_draw() noexcept override
     {
         // The host's answers refer to its draw: none of them outlives it.
-        current.pixel_texture = nullptr; current.texture_roles = nullptr; current.source_srv = nullptr;
+        current.pixel_texture = nullptr; current.texture_roles = nullptr; current.source_srv = nullptr; current.handed_component = nullptr;
         instance_queries.clear(); if (efmittl) efmittl->after_draw();
     }
     void library_hook(LibraryHook hook) noexcept override { if (efmittl) efmittl->library_hook(hook); }
