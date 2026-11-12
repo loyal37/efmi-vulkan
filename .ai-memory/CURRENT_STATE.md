@@ -10,6 +10,9 @@
 
 - What it holds beyond 2.1.4: D-173 (the sections of every INI of a Mod's folder), D-174 (packages without a skeleton, a Mods folder without a character Mod), D-175 (components that share bones, a remap at either LOD: BUG-093, the user's Yvonne), D-176 (a section without a component draws a mesh of its own). The sections below have each.
 - Verified on the work tree's build of the version commit (sandbox): the whole build (shared header stamp 0x4437a4d9119220e0, unchanged) and the whole regression suite, 57 steps, all passed.
+- Deployed for the development setup, 2026-11-12 10:44: the main checkout's `dist` built from b17e51f with the game not running (checked before and after the build); `efmi_vk.cfg` and the saved settings as they were. The 2.1.4 binaries are kept in `build/dist-2.1.4-20261111` of the main checkout (copied back over `dist` with the game closed, they return to 2.1.4).
+- That dist in the sandbox through the inject entry with its own configuration and the installed Mods at Vulkan 1.3: version 2.1.5, mode probe, 19 packages, none left out (Yvonne with six components and 14 sections, last rite with 16 sections, the two hair sections among them), validation clean, the notices only Xaihi's two inert ShaderOverride lines. The step "live INI rendering" on that dist: 154 checks passed.
+- Not done: nothing of 2.1.5 has run in the game. The user's next start through the EFMI Vulkan Launcher loads it; what to look at is in TASKS.
 
 ## Phase 2, P2-2: a section without a component draws a mesh of its own (D-176, 2026-11-12; sandbox only, not deployed)
 

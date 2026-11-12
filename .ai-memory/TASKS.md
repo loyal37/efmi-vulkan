@@ -1,5 +1,14 @@
 # EFMI Vulkan - Tasks
 
+## Next: 2.1.5 in the game (in the main checkout's dist since 2026-11-12 10:44)
+
+- The user's next start loads it (the log's first line names 2.1.5). To see, and to read from the status:
+  - Yvonne as the user's tool left it (LOD parts on the LOD 0 part's bones): replaced at LOD 0 and at LOD 1 (close and far), no notice that it is not loaded; its package's `incomplete` and `bones_unavailable` not rising.
+  - last rite's hair with the Mod's diffuse texture (`Texture\hair.ini`; the package's `textured` counter rising while the hair is on screen).
+  - Every other installed Mod as in the 2.1.3 session: no new notice, `refused_state` 0, the panels (`k\1.ini`) reacting as before.
+  - The notices of an F10 standing still with frame generation on (2.1.4's BUG-092, not yet seen in the game either).
+- If something that worked is broken: the 2.1.4 binaries are in `build/dist-2.1.4-20261111`, the 2.0.8 ones in `build/dist-2.0.8-20261027`.
+
 ## Active: Phase 2 of the review, a Mod by what it does (2026-11-11, D-173; the user: this is the point)
 
 - Done (sandbox only, not deployed): P2-1, the sections of every INI of a character Mod's folder (D-173) and packages without a skeleton with a Mods folder that needs no character Mod (D-174); CURRENT_STATE.
