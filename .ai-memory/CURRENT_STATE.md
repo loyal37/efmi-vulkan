@@ -10,6 +10,7 @@
 
 - What it holds beyond 2.1.6: D-178 and BUG-089 (the afternoon), D-179 to D-184 and BUG-090 (the evening), below.
 - Verified on the work tree before the version commit (sandbox): the whole build and the whole regression suite, 57 (56 passed in the run; pipeline recipes timed out once at its 30-second limit in recipe_test, whose code this round did not touch, and passed three reruns in 6 to 11 seconds) steps, all passed. The version commit changes EFVK_VERSION only.
+- Deployed for the development setup, 2026-11-12 19:39: the main checkout's `dist` built from 0a90532 with the game not running (checked before and after the build); `efmi_vk.cfg` and the saved settings as they were. The 2.1.6 binaries are kept in `build/dist-2.1.6-20261112` of the main checkout. Loaded there in the sandbox through the inject entry with dist's own configuration and the installed Mods at Vulkan 1.3: version 2.1.7, 22 packages, none left out, the notices only Xaihi's two inert ShaderOverride lines, `game_shape` told false, validation clean. Not loaded into the game.
 
 ## Offline round of 2026-11-12 evening (the same request; sandbox only, not in dist)
 

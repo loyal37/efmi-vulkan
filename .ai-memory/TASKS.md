@@ -1,6 +1,11 @@
 # EFMI Vulkan - Tasks
 
-## Next: 2.1.6 in the game (in the main checkout's dist since 2026-11-12 15:41; 2.1.5 with D-177)
+## Next: 2.1.7 in the game (in the main checkout's dist since 2026-11-12 19:39; 2.1.6 with D-178 to D-184, BUG-089, BUG-090)
+
+- As for 2.1.6 and 2.1.5 below, and: no notice that the game's character draws are not what the layer knows (D-183; the status's `game_shape.fitting` rising, `told` false); with RabbitFX's `\` key on, a package's `batches_made` a handful (BUG-089); a Mod that binds another Mod's texture drawn with it (D-178).
+- If something that worked is broken: the 2.1.6 binaries are in `build/dist-2.1.6-20261112`.
+
+## 2.1.6 in the game (in the main checkout's dist 2026-11-12 15:41 to 19:39; 2.1.5 with D-177)
 
 - As for 2.1.5 below, and: every installed Mod loaded as before (D-177 reads the contract from what the lists hand to the Core; offline the plans of all 22 Mods are as 2.1.5's).
 
