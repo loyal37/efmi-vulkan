@@ -6,6 +6,10 @@
 
 > Launcher, 2026-10-29 22:24: the EFMI profile switched back to DX11 at the user's request (d3d11_mode_cmd_args = -force-d3d11, xxmi_dll_inject_mode = DIRECT; game and launcher closed, checked twice; only the two value spans changed, every other JSON value unchanged, exact readback; backup and manifest in build/backups/launcher-dx11-20261029-222441/). The injected library (signed) is still F:\efmi vulkan\dist\efmi_vk_inject.dll; the user sets it to F:\EFMI MCP\dist\efmi_probe.dll in the launcher UI before a DX11 start (a DX11 start with efmi_vk_inject.dll injected crashed on 2026-10-11). Before that, 2026-10-25 15:50: switched to Vulkan (build/backups/launcher-vulkan-20261025-155010/).
 
+## 2.1.8: 2.1.7 and D-185 (2026-11-12)
+
+- EFVK_VERSION only, on a tree whose touched areas passed after D-185 (the whole suite ran on 2.1.7's tree).
+
 ## 2.1.7 in the game, and the two findings of that session (2026-11-12 evening)
 
 - Loaded into the real game by the user, 2026-11-12 20:10 (PID 7584, after the 19:39 deployment; the probe's status: 2.1.7, entry inject). Read by the agent from status samples and captures (the probe, read only), and the user's screenshots. 22 packages, none left out; arcane, Si Lunabelle, TangTang, Yvonne (LOD 0 and 1, D-175 in the game) and Zhuangfangyi replaced; no notice but Xaihi's two inert lines and Zhuangfangyi's two below; `game_shape` 3.95 million fitting, 3171 unfit (Zhuangfangyi's dash), not told. Si Lunabelle's `incomplete` was 3544 at her first appearances and then rose 33 in about 930,000 draws.
