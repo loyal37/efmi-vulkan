@@ -18,6 +18,12 @@ Launcher (next to `EFMI\Mods`):
   `Core\EFMI`, so EFMI\EFMI-Vulkan and EFMI\Mods\EFMI-Vulkan both work; 2.0.9's `../Mods` found nothing
   in the latter, BUG-073; a named folder may be relative to the DLL's folder), replacement on, the
   settings the game was played with. The layer's own folder is never part of the Mods folder's content.
+- `switch_renderer.bat` and `switch_renderer.ps1`: the switch between the DirectX 11 and the Vulkan
+  configuration of the launcher's EFMI profile (the README's steps 3 and 4 and their reversal),
+  done by editing the five values of the EFMI importer in the launcher's config and signing the
+  injected-libraries value with the launcher's own key pair; with EFF installed, its proxy
+  `vulkan-1.dll` is parked for Vulkan and restored for DirectX 11. Windows PowerShell only, no
+  disk scan, a backup of the config before every write.
 - `README.txt` (install and use), `LICENSE.txt` (GPLv3), `THIRD_PARTY_NOTICES.md`, `licenses\`.
 
 Not in it: tests, the sandbox, the replacement module files, the layer manifest, symbols (kept in
