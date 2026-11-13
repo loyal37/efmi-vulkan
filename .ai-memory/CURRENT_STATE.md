@@ -18,6 +18,12 @@
 - After the rebase (this worktree's build of it, no new compiler warning): the same steps and the EFMITTL ones (hook rules on the paired catalogue, owned transparency), 35 steps, all passed: the original INI runtime 515, character replacement 377, live INI rendering 203, Vulkan validation 76 among them.
 - Not verified: nothing of it ran in the game; the replays with project copies of removed Mods (build/replay-mods, absent in this worktree) and the steps of other areas were not run.
 
+## 2.1.9: 2.1.8, the dash fix (D-186) and route 2's first step (D-187, D-188) (2026-11-12 night)
+
+- The user, after both side sessions finished: merge them, and let the route 2 session go on as far as it can. Merged into engine-work: claude/dash-cb-bones-e6d724 (D-186, LIMIT-027: the dash after-images' bones from their uniform block of 4096 vectors, as the original Core's cb3/cb4 source) as 1daa128, and claude/vulkan-loader-d7c127 (D-187 ShaderOverride by SPIR-V hash, D-188 hunting; docs/vulkan-native-mods.md) as ae4db05. Only record conflicts (TASKS, SESSION_LOG, DECISIONS); the code merged on its own.
+- Verified on the merged tree (sandbox): the whole build and the whole regression suite, 57 steps, all passed (the original frontend host failed once with a permission error on `F:\vulkan\efmi-xxmi-host-prototype\pristine`, which every worktree shares, and passed when rerun with the three steps that depend on it); the shared header stamp changed (0x2626bed2541f57c9; the injected DLL and the module go together). The version commit changes EFVK_VERSION only.
+- The route 2 session goes on from ae4db05 on its own branch (the rest of hunting, replacing game shaders, other stages' slots), from decision D-189 on.
+
 ## 2.1.8: 2.1.7 and D-185 (2026-11-12)
 
 - EFVK_VERSION only, on a tree whose touched areas passed after D-185 (the whole suite ran on 2.1.7's tree).

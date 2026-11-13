@@ -11,7 +11,7 @@
 
 - Done (D-185, in the main checkout's dist as 2.1.8 since 21:24): translucent shadows by opacity (BUG-094). To see in the game: Zhuangfangyi's skin under the shirt and sarong lit as under DX11; the status's `translucent_shadows` rising. If something broke: 2.1.7's binaries in `build/dist-2.1.7-20261112`.
 - Done (D-186, sandbox, merged into engine-work 2026-11-12 night, not in dist yet): bones from a uniform block of 4096 vectors (LIMIT-027, the dash), as the original Core's cb3/cb4 source. To see in the game after a deployment: Zhuangfangyi's after-images with the Mod's mesh and textures while she dashes; the package's `constant_bones` rising, `refused_variant` (`spirv_required_buffer_missing`) gone, `incomplete` and `bones_unavailable` not rising during the dash. Left: such a draw on an object whose other components the device imports reads only what the CPU master holds (`incomplete` otherwise); the device form of the Core's copy would lift it, if the game shows the case.
-- Route 2 (the Vulkan loader): started in a session of its own (SPIR-V-hash ShaderOverride and hunting), on its own branch.
+- Route 2 (the Vulkan loader): its first step (D-187, D-188) merged into engine-work; it goes on in a session of its own (the rest of hunting, replacing game shaders, other stages' slots), on its own branch, decisions from D-189.
 
 
 ## Next: 2.1.7 in the game (in the main checkout's dist since 2026-11-12 19:39; 2.1.6 with D-178 to D-184, BUG-089, BUG-090)
