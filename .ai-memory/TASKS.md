@@ -1,9 +1,16 @@
 # EFMI Vulkan - Tasks
 
+## Current priorities after the progress audit (2026-11-13)
+
+- Source 2.1.9 (5206e0d) includes D-185 to D-188; deployed dist is 2.1.8, latest recorded game session 2.1.7. The merged worktree binaries predate the version-only commit and still identify as 2.1.8. Build the final version before deployment; the merged host/backend header stamp changed, so deploy the pair together with the game closed. No deployment was performed or newly requested by this review.
+- Real-game acceptance still needed: translucent shadows (D-185), dash after-images (D-186, including mixed CPU/device bone coverage), and route 2's ShaderOverride/hunting. A session requires the user's authorization on the spot. This round's 31 sandbox checks are not game acceptance.
+- Route 2 next: review and finish the uncommitted D-189 work in its existing side worktree, then game-shader replacement, bindings/draws on otherwise unmatched draws and other stages' slots. Its existing log reports 33 passing steps; no merge or verification of that uncommitted tree was done in this audit.
+- Compatibility remains partial at P1-5 (moved application textures, non-pixel bindings, general input layouts, beside-draw textures), cross-package meshes and instancing edges. Broader public-Mod INIs (P3-3), first-use/F10 measurements and lifetime work (P4-3), legacy paths (P4-4), and broader hardware validation remain. Older dated task sections are historical checkpoints; use CURRENT_STATE's audit to resolve their stale deployment/game statements.
+
 ## Active: route 2, a Vulkan 3DMigoto for this game (the user, 2026-11-10; docs/vulkan-native-mods.md)
 
-- The order: the review's Phase 1 and Phase 2 (done) -> ShaderOverride by SPIR-V hash and hunting (this step) -> replacing game shaders -> slots of other stages and render targets.
-- Done 2026-11-12 on branch claude/vulkan-loader-d7c127, sandbox only, not merged, not in any dist: D-187 (ShaderOverride by SPIR-V hash), D-188 (hunting of vertex and fragment modules). What is not done of it: LIMIT-048.
+- The order: the review's Phase 1 and Phase 2 core work (implemented, with the limits below) -> ShaderOverride by SPIR-V hash and hunting (this step) -> replacing game shaders -> slots of other stages and render targets.
+- Done 2026-11-12 on branch claude/vulkan-loader-d7c127 and merged through ae4db05 into engine-work/main, source 2.1.9; sandbox only, not in the main checkout's dist: D-187 (ShaderOverride by SPIR-V hash), D-188 (hunting of vertex and fragment modules). What is not done of it: LIMIT-048.
 - To see in the game (needs the user's word for a session, and a build with it in dist): with the installed d3dx.ini, numpad 0 turns hunting on; numpad 1/2 and 4/5 walk the frame's fragment and vertex modules (a notice `PS n/m: hash` per key) and the selected module's draws vanish; numpad 3/6 marks (the log's `>>>> pixel shader marked` line, the hash on the clipboard); `+` clears. The status's `hunting` (visited counts in the game, skipped) and the frame time while hunting is on. Then a test Mod: a ShaderOverride with a hash found that way and `handling = skip` hides those draws; one with `filter_index` makes a TextureOverride's `if ps == N` true there. The installed Mods as before (no ShaderOverride of theirs acts: all six are DX11 hashes).
 - Next, each test first: (1) replacing a game module by its hash (pipeline variants as the anti-dither twins; with it `pink`/`original` marking, `depth_filter`, `model`, dumping a marked module); (2) a ShaderOverride's bindings and draws at any draw, and the game's textures there (slots by (set, binding)); (3) hunting of index and vertex buffers, render targets, compute shaders; frame analysis.
 
