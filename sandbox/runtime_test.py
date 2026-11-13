@@ -239,7 +239,7 @@ def hunting_keys(checks):
             checks.check(not h.get("selected", {}).get("pixel"), label + ": next_pixelshader does nothing while soft disabled " + str(h))
             h = press(0x60, lambda h: h.get("mode") == 1)
             h = wait(lambda h: h.get("visited", {}).get("pixel", 0) >= 1 and h.get("visited", {}).get("vertex", 0) >= 1)
-            checks.check(h.get("mode") == 1 and h.get("visited", {}) == {"vertex": 1, "pixel": 1},
+            checks.check(h.get("mode") == 1 and (h.get("visited", {}).get("vertex"), h.get("visited", {}).get("pixel")) == (1, 1),
                          label + ": toggle_hunting enables it, and the frame's two modules are visited " + str(h))
             h = press(0x62, lambda h: h.get("selected", {}).get("pixel"))
             checks.equal((h.get("selected", {}).get("pixel"), h.get("position", {}).get("pixel")), ("%08x" % fragment, "1/1"),
@@ -262,6 +262,120 @@ def hunting_keys(checks):
     log = sb.log()
     checks.check(">>>> pixel shader marked: pixel shader hash = %08x" % fragment in log,
                  label + ": the mark is logged as the original logs it, with the module's hash")
+
+
+def hunting_buffers(checks):
+    """Route 2, the rest of hunting (docs/vulkan-native-mods.md section 6, D-189): as the original's Hunting.cpp, the frame's
+    index buffer regions (their hash is the TextureOverride hash), vertex buffer regions and render targets are visited and
+    selected; a selected index buffer keeps its draws from the GPU; its mark is logged as the original's; marking a module
+    with a dump action writes its SPIR-V into the layer's ShaderFixes; analyse_frame writes the next frame's draws into
+    FrameAnalysis-<time>/log.txt; the `hunting` operand reads 2 (soft disabled) and 1 (enabled). The sandbox records
+    inline (no worker threads), so the draws' render targets are known."""
+    vertex, fragment = sandbox_shader_hashes()
+    root = Path(test_dir("runtime-hunting-buffers-"))
+    mods = root / "Mods"
+    (mods / "panel").mkdir(parents=True)
+    (mods / "panel" / "panel.ini").write_text("namespace = runtime_panel\n[Constants]\nglobal $mode = 0\n[Present]\n$mode = hunting\n",
+                                              encoding="ascii")
+    (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\nexclude_recursive = DISABLED*\n"
+                                   "[Rendering]\nrecursive_include = 1\n"
+                                   "[Hunting]\nhunting = 2\nmarking_mode = skip\nmarking_actions = hlsl asm\n"
+                                   "toggle_hunting = no_modifiers VK_NUMPAD0\nnext_pixelshader = no_modifiers VK_NUMPAD2\n"
+                                   "mark_pixelshader = no_modifiers VK_NUMPAD3\nnext_indexbuffer = no_modifiers VK_NUMPAD8\n"
+                                   "mark_indexbuffer = no_modifiers VK_NUMPAD9\nnext_vertexbuffer = no_modifiers VK_MULTIPLY\n"
+                                   "mark_vertexbuffer = no_modifiers VK_SUBTRACT\nnext_rendertarget = no_modifiers VK_NUMPAD7\n"
+                                   "done_hunting = no_modifiers VK_ADD\nanalyse_frame = no_modifiers VK_F9\n", encoding="ascii")
+    settings = root / "settings"
+    settings.mkdir()
+    keys = root / "keys.txt"
+    keys.write_text("1\n", encoding="ascii")
+    extra = dict(EFMI_VK_M2_MODS=str(mods), EFMI_VK_M2_CORE=str(CORE), EFMI_VK_M2_SETTINGS=str(settings), EFMI_VK_M2_ENABLED="1",
+                 EFMI_VK_TEST_KEYS=str(keys))
+    label = "hunting of buffers and targets"
+    expected_regions = []
+    with Sandbox(seconds=90, threads=0, env_extra=extra, entry="layer") as sb:
+        expected_regions = sorted(int(d["hash"], 16) for d in sb.expected["draws"])
+        with ProbeClient(sb.pid) as probe:
+            def status():
+                try:
+                    return probe.status().get("replacement", {})
+                except Exception:
+                    return {}
+            def hunting():
+                return status().get("hunting", {})
+            def mode_value():
+                return status().get("folder_generation", {}).get("ini", {}).get("variables", {}).get("$\\runtime_panel\\mode")
+            def wait(what, seconds=8.0):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    h = hunting()
+                    if what(h):
+                        return h
+                    time.sleep(0.1)
+                return hunting()
+            def press(key, until):
+                keys.write_text("1 %d\n" % key, encoding="ascii")
+                h = wait(until)
+                keys.write_text("1\n", encoding="ascii")
+                time.sleep(0.3)
+                return h
+            wait(lambda h: h.get("keys"), 5)
+            checks.equal(mode_value(), 2, label + ": the `hunting` operand reads 2 while soft disabled, as XXMI's")
+            press(0x60, lambda h: h.get("mode") == 1)
+            h = wait(lambda h: h.get("visited", {}).get("index", 0) >= len(expected_regions) and h.get("visited", {}).get("target", 0) >= 1)
+            time.sleep(0.3)
+            checks.equal(mode_value(), 1, label + ": and 1 once enabled")
+            visited = h.get("visited", {})
+            checks.check(visited.get("index") == len(set(expected_regions)) and visited.get("buffer", 0) >= 1 and visited.get("target", 0) >= 1,
+                         label + ": the frame's index regions (one per mesh), vertex buffer regions and render target are visited " + str(visited))
+            h = press(0x68, lambda h: h.get("selected", {}).get("index"))
+            checks.equal(h.get("selected", {}).get("index"), "%08x" % expected_regions[0],
+                         label + ": next_indexbuffer selects the lowest index region hash, the TextureOverride hash of that mesh")
+            before = wait(lambda h: h.get("skipped", 0) > 0).get("skipped", 0)
+            time.sleep(0.5)
+            checks.check(0 < before < hunting().get("skipped", 0), label + ": its draw is kept from the GPU every frame")
+            h = press(0x69, lambda h: h.get("marks", 0) >= 1)
+            h = press(0x6A, lambda h: h.get("selected", {}).get("buffer"))
+            checks.check(bool(h.get("selected", {}).get("buffer")), label + ": next_vertexbuffer selects a vertex buffer region " + str(h.get("selected")))
+            h = press(0x6D, lambda h: h.get("marks", 0) >= 2)
+            h = press(0x67, lambda h: h.get("selected", {}).get("target"))
+            checks.check(bool(h.get("selected", {}).get("target")), label + ": next_rendertarget selects the frame's render target " + str(h.get("selected")))
+            h = press(0x6B, lambda h: not h.get("selected", {}).get("index"))
+            h = press(0x62, lambda h: h.get("selected", {}).get("pixel"))
+            h = press(0x63, lambda h: h.get("dumps", 0) >= 1)
+            dumped = settings / "ShaderFixes" / ("%08x-ps.spv" % fragment)
+            checks.check(dumped.is_file() and crc32c(dumped.read_bytes()) == fragment,
+                         label + ": mark_pixelshader with a dump action writes the module's SPIR-V into the layer's ShaderFixes " + str(h.get("last_dump")))
+            h = press(0x6B, lambda h: not h.get("selected", {}).get("pixel"))
+            h = press(0x78, lambda h: h.get("analyses", 0) >= 1)
+            checks.equal(h.get("analyses"), 1, label + ": analyse_frame writes one frame analysis")
+            logs = list(settings.glob("FrameAnalysis-*/log.txt"))
+            text = logs[0].read_text(encoding="ascii", errors="replace") if logs else ""
+            draws = [line for line in text.splitlines() if "DrawIndexedInstanced(" in line]
+            checks.check(len(draws) >= len(expected_regions) and ("PSSetShader hash=%08x" % fragment) in text and
+                         ("IASetIndexBuffer hash=%08x" % expected_regions[0]) in text,
+                         label + ": its log has the frame's draws with their module and index region hashes " + str((len(draws), [str(p) for p in logs])))
+            # AnalyseFrame refuses an existing timestamp directory: a second capture must never overwrite evidence.
+            from datetime import datetime, timedelta
+            reserved = []
+            for delta in range(-1, 12):
+                path = settings / (datetime.now() + timedelta(seconds=delta)).strftime("FrameAnalysis-%Y-%m-%d-%H%M%S")
+                path.mkdir(exist_ok=True)
+                log_path = path / "log.txt"
+                if not log_path.exists():
+                    log_path.write_text("previous capture\n", encoding="ascii")
+                reserved.append((log_path, log_path.read_bytes()))
+            keys.write_text("1 120\n", encoding="ascii")
+            time.sleep(0.7)
+            keys.write_text("1\n", encoding="ascii")
+            time.sleep(0.5)
+            checks.check(hunting().get("analyses") == 1 and all(path.read_bytes() == saved for path, saved in reserved),
+                         label + ": an existing frame-analysis directory is refused and its evidence stays unchanged")
+        sb.proc.terminate()
+        sb.proc.wait(timeout=60)
+    log = sb.log()
+    checks.check((">>>> Index buffer marked: index buffer hash = %08x" % expected_regions[0]) in log and ">>>> Vertex buffer marked: vertex buffer hash = " in log,
+                 label + ": the marks are logged as the original logs them")
 
 
 def save_cadence(checks):
@@ -353,6 +467,7 @@ def main():
     shader_sections(checks)
     spirv_shader_overrides(checks)
     hunting_keys(checks)
+    hunting_buffers(checks)
     several_packages(checks, validation)
     directory_generation(checks, validation)
     plain_mods(checks, validation)

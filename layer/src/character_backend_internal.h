@@ -698,19 +698,42 @@ struct PipelineModules {
 };
 bool pipeline_modules(Device* device, VkPipeline pipeline, PipelineModules& out);
 
-// 3DMigoto's hunting (Hunting.cpp) over the modules of the frame's draws, for the process: the installation's
-// [Hunting] keys reach it through the folder generation's input dispatcher.
+// What hunting and frame analysis read of a draw (docs/vulkan-native-mods.md section 6): its modules, the hash of its
+// index region (the TextureOverride hash), its vertex buffers' region hashes as the original's track_region_hashes
+// takes them (ResourceHash.cpp GetVertexBufferRegionOffset and Size), and its colour targets' images.
+struct DrawFacts {
+    PipelineModules modules;
+    bool indexed = false, index_known = false;
+    uint32_t index_hash = 0;
+    uint32_t vertex_mask = 0;                 // bit i: binding i has a hash
+    uint32_t vertex_hashes[kMaxVb] = {};
+    uint32_t target_count = 0;
+    uint32_t targets[8] = {};                 // image ids of the colour attachments the pipeline's subpass writes
+    uint32_t target_format[8] = {}, target_width[8] = {}, target_height[8] = {};
+};
+
+// 3DMigoto's hunting (Hunting.cpp) over what the frame's draws use, for the process: the installation's [Hunting]
+// keys reach it through the folder generation's input dispatcher. Kinds: vertex and pixel (fragment) shader modules,
+// index buffer regions, vertex buffer regions, render targets.
 class Hunting {
 public:
+    enum Kind { Vertex = 0, Pixel = 1, Index = 2, Buffer = 3, Target = 4, Kinds = 5 };
     // At a folder generation's load and after every F10 exchange, as the original's reload reads [Hunting] again.
     void configure(const efmi::frontend::HuntingSettings& settings);
-    // A hunting key, on the presenting thread.
-    void act(efmi::frontend::HuntingAction action);
+    // A hunting key, on the presenting thread. `device` finds a marked module's bytes for its dump; `folder` is where
+    // dumps and frame analyses go (the layer's settings folder).
+    void act(efmi::frontend::HuntingAction action, Device* device, const std::filesystem::path& folder);
     bool enabled() const { return mode_.load(std::memory_order_relaxed) == 1; }
-    // While enabled, at a draw: its modules visited; true when it is to be kept from the GPU (the selection, skip).
-    bool visit(const PipelineModules& modules);
-    // Once per presentation: the original's TimeoutHuntingBuffers.
-    void frame();
+    // The value the `hunting` operand reads: the original's mode, 2 (soft disabled) where no key was registered.
+    int operand() const { const int mode = mode_.load(std::memory_order_relaxed); return mode ? mode : 2; }
+    // While enabled, at a draw: what it uses visited; true when it is to be kept from the GPU (the selection, skip).
+    bool visit(const DrawFacts& facts);
+    // Frame analysis (FrameAnalysis.cpp, the log): armed by its key, it records the draws between the next two
+    // presentations. `analysing` at a draw; `analyse` adds the draw's lines.
+    bool analysing() const { return analysing_.load(std::memory_order_relaxed); }
+    void analyse(const DrawRec& r, const DrawFacts& facts);
+    // Once per presentation: the original's TimeoutHuntingBuffers; a frame analysis begun or written.
+    void frame(const std::filesystem::path& folder);
     void status(JsonWriter& w);
 private:
     std::string line_locked(int kind) const;
@@ -720,13 +743,22 @@ private:
     bool keys_ = false, told_mode_ = false;
     int marking_mode_ = 0;
     uint32_t actions_ = 3;
-    std::set<uint32_t> visited_[2]; // vertex, pixel (fragment) modules, in ascending order as the original's sets
-    std::set<uint32_t> peers_[2];   // the other kind's modules drawn with the selected one, for the mark's log
-    uint32_t selected_[2] = {};
-    bool has_selected_[2] = {};
+    std::set<uint32_t> visited_[Kinds];  // in ascending order, as the original's std::set
+    std::set<uint32_t> peers_[Kinds][2]; // the vertex and pixel modules drawn with the selected element, for the mark's log
+    uint32_t selected_[Kinds] = {};
+    bool has_selected_[Kinds] = {};
+    int buffer_slot_ = -1;               // the original's gSelectedVertexBufferSlotId: -1 every slot
+    std::map<uint32_t, std::string> target_text_; // a visited render target's description, for its mark
     uint64_t last_key_us_ = 0;
     std::atomic<uint64_t> skipped_{0};
-    uint64_t marks_ = 0;
+    uint64_t marks_ = 0, dumps_ = 0;
+    std::string last_dump_;
+    // Frame analysis.
+    std::atomic<bool> analysing_{false};
+    bool armed_ = false;
+    uint64_t analysed_draws_ = 0, analyses_ = 0;
+    std::filesystem::path analysis_path_;
+    std::string analysis_;
 };
 
 // The module's backend: one controller per configured package. A directory names every live
@@ -837,6 +869,9 @@ void character_rescan(CharacterBackend& b);
 bool index_region_hash(Device* device, const DrawRec& r, uint64_t now, const CharacterBackend::Index& index, uint32_t& hash);
 // character_backend_shaders.cpp (docs/vulkan-native-mods.md)
 void shader_hooks_frame(CharacterBackend& b);
+// What hunting and frame analysis read of a draw whose modules are known; `buffers`: its index and vertex buffers too.
+void draw_facts(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, bool buffers, DrawFacts& facts);
+bool hunting_draw(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, DrawFacts& facts);
 bool shader_draw_unmatched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, const PipelineModules& modules, bool run_lists, bool marked);
 void shader_hooks_status(CharacterBackend& b, JsonWriter& w);
 // character_backend_twins.cpp
