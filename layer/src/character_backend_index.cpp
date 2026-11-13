@@ -153,13 +153,13 @@ static bool character_record_matched(CharacterBackend& b, CmdBuf* cb, const Draw
 bool character_record(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
 {
     if (!b.enabled.load(std::memory_order_relaxed)) return false;
-    PipelineModules modules;
-    const bool hooks = b.device && b.device->shader_draws.load(std::memory_order_relaxed) && pipeline_modules(b.device, r.pipeline, modules);
-    const bool marked = hooks && b.hunting.enabled() && b.hunting.visit(modules);
+    DrawFacts facts;
+    const bool hooks = b.device && b.device->shader_draws.load(std::memory_order_relaxed) && pipeline_modules(b.device, r.pipeline, facts.modules);
+    const bool marked = hooks && hunting_draw(b, cb, r, facts);
     const uint64_t plans = t_draw_plans;
     // The Mod's draws stand: hunting's skip keeps a list's own draws, as the original's hunting_skip does.
     if (character_record_matched(b, cb, r)) return true;
-    return hooks && shader_draw_unmatched(b, cb, r, modules, t_draw_plans == plans, marked);
+    return hooks && shader_draw_unmatched(b, cb, r, facts.modules, t_draw_plans == plans, marked);
 }
 
 static bool character_record_matched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)

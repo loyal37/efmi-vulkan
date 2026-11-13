@@ -74,8 +74,21 @@ context until changed; not issuing a draw has no further consequence.
   and the visited peers, copies the hash to the clipboard (`HashToClipboard`, "copied to clipboard"
   on the overlay), dumps the shader's HLSL or assembly to ShaderFixes, takes screenshots, as
   `marking_actions` says.
-- **Frame analysis** (`analyse_frame`): dumps every draw's bindings and resources of one frame. Not
-  part of this step.
+- **Index and vertex buffers** (BeforeDraw with `track_region_hashes`, ResourceHash.cpp): the index
+  buffer's hash is the region hash of the draw's indices (the TextureOverride hash); a vertex buffer's is
+  the CRC-32C of its region from `offset + stride * FirstVertex`, `stride * VertexCount` bytes long, or for
+  an indexed draw `(3 * IndexCount + 10) / 20 + 3` vertices from the base vertex (the EFMI fork's
+  estimate). `next_vertexbuffer_slot` restricts the vertex buffers to one slot (-1, every slot, first) and
+  starts their set again. Render targets are the bound views' resources; their mark logs the resource's
+  hash and description (`LogRenderTarget`).
+- **`hunting` as a value** (CommandList.cpp): `G->hunting`. XXMI never leaves it at 0 (ParseHuntingSection
+  sets 2 for `hunting = 0`), so a list reads 2 while hunting is soft disabled and 1 while enabled; the
+  optimiser folds it to 0 only when hunting is disabled outright.
+- **Frame analysis** (`AnalyseFrame`, FrameAnalysis.cpp): only while hunting is enabled; the next frame
+  is logged into `FrameAnalysis-%Y-%m-%d-%H%M%S` beside the DLL (`log.txt`: per draw, numbered with six
+  digits, the calls that set its state with the shaders' hashes, then the draw call), and with
+  `analyse_options` the bound resources are dumped as files; a second press aborts; the overlay says
+  "Frame analysis saved to ...".
 
 ## 2. What Vulkan has of it, and what not
 
@@ -194,16 +207,36 @@ does (the user, 2026-11-12: consider the compatibility with the existing DX11 ro
   other marking modes need a replaced fragment shader (the next step): until then they select and mark
   but draw as is, said once.
 - **Mark**: the original's log lines with the 8-digit hash (`>>>> pixel shader marked: pixel shader
-  hash = 8a1b2c3d`, then the visited peer modules), a notice on the overlay, and the hash on the
-  clipboard when `marking_actions` has `clipboard` (the player's own clipboard, as XXMI). Dumping the
-  module (`hlsl`, `asm`) is a later part: the layer would write the SPIR-V and its disassembly into a
-  folder of its own, never into the installation.
-- **What the player sees**: a notice per key with the selection (`PS 3/40: 8a1b2c3d`) in place of the
-  overlay's line. The status has a `hunting` object (mode, marking mode, the visited counts, the
-  selection, how many draws were skipped, marks).
-- **Not yet**: index and vertex buffers (their region hashes for every draw while hunting), render
-  targets, compute shaders (the layer does not hook dispatches yet), frame analysis, the `hunting`
-  operand (reads 0 as before).
+  hash = 8a1b2c3d`, `>>>> Index buffer marked: index buffer hash = ...`, `>>>> Vertex buffer marked:
+  ...`, `>>>> Render target marked: ...` with the image's format and size, then the visited peer modules),
+  a notice on the overlay, and the hash on the clipboard when `marking_actions` has `clipboard` (the
+  player's own clipboard, as XXMI). With `hlsl`, `asm` or `regex` (the original's dump actions) a marked
+  module's SPIR-V is written as the game created it, `<hash>-vs.spv` or `<hash>-ps.spv`, into
+  `ShaderFixes` in the layer's settings folder (never the installation's, which is the DX11 route's): the
+  file to start a replacement from (section 7).
+- **Index and vertex buffers, render targets** (D-189): while enabled every indexed draw's index region
+  hash, its vertex buffers' region hashes by the original's rule (above; both read from the application's
+  mapping or the layer's shadow copy, as the original reads its own copy of a buffer) and its colour
+  targets' images (known where the draw
+  is recorded inside its render pass instance; draws in secondary command buffers have none) are
+  visited; `next_`/`previous_`/`mark_` index buffer, vertex buffer (and `next_`/`previous_vertexbuffer_slot`)
+  and render target select and mark as the shaders do, and a draw with a selected one is skipped.
+- **`hunting` as a value** (D-189): the generation's `G->hunting` is the layer's mode (2 where no key is
+  registered or while soft disabled, 1 enabled), set before the optimiser and at every presentation.
+  No installed Mod reads it.
+- **Frame analysis, the log** (D-189): `analyse_frame` while enabled records the draws between the next
+  two presentations into `FrameAnalysis-<time>/log.txt` in the layer's settings folder: per draw its
+  number, command buffer and pipeline, `VSSetShader hash=...` and the other stages, the index region
+  hash, the vertex buffers' region hashes, the colour targets, then the call as the original names it
+  (`DrawIndexedInstanced(...)`, `DrawInstanced(...)`, the indirect forms); a notice says where. Dumping
+  the resources (`analyse_options` dump_rt, dump_tex, dump_cb, dump_vb, dump_ib) needs reading the game's
+  images and buffers back after the frame: not yet.
+- **What the player sees**: a notice per key with the selection (`PS 3/40: 8a1b2c3d`, `IB 2/5: ...`,
+  `RT 1/1: image 7`) in place of the overlay's line. The status has a `hunting` object (mode, marking
+  mode, the visited counts and selections of the five kinds, the vertex buffer slot, draws skipped,
+  marks, dumps, frame analyses).
+- **Not yet**: compute shaders (the layer does not hook dispatches yet), the marking modes other than
+  `skip`, dumping resources in a frame analysis, the overlay's steady line.
 
 ## 7. What needs the game
 
@@ -220,5 +253,5 @@ notices while playing; whether any game pipeline has no module hash (inline modu
    with it the `pink` and `original` marking modes, `depth_filter` and `model`.
 2. Slots of other stages and render targets by (set, binding) for Vulkan-native lists, and the
    bindings and draws of a ShaderOverride's lists at any draw.
-3. Hunting of index and vertex buffers, render targets and compute shaders; frame analysis; dumping a
-   marked module.
+3. Hunting of compute shaders (dispatches hooked); frame analysis's resource dumps. (Index and vertex
+   buffers, render targets, the `hunting` value, dumping a marked module and frame analysis's log: D-189.)

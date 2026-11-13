@@ -190,7 +190,9 @@ enum class LibraryHook : uint32_t { CopyShader = 1 };
 // The original's hunting keys (Hunting.cpp ParseHuntingSection) of the installation's [Hunting] section, as the
 // generation's input dispatcher met them (docs/vulkan-native-mods.md section 6). The host hunts.
 enum class HuntingAction : uint32_t {
-    Toggle = 1, NextMarkingMode, NextPixel, PreviousPixel, MarkPixel, NextVertex, PreviousVertex, MarkVertex, Done
+    Toggle = 1, NextMarkingMode, NextPixel, PreviousPixel, MarkPixel, NextVertex, PreviousVertex, MarkVertex, Done,
+    NextIndex, PreviousIndex, MarkIndex, NextVertexBuffer, PreviousVertexBuffer, MarkVertexBuffer, NextVertexBufferSlot,
+    PreviousVertexBufferSlot, NextRenderTarget, PreviousRenderTarget, MarkRenderTarget, AnalyseFrame
 };
 struct HuntingSettings {
     bool keys = false;             // the section registered a hunting key (its `hunting` is 1 or 2)
@@ -241,6 +243,9 @@ public:
     // dispatched since the last call, in order.
     HuntingSettings hunting() const;
     std::vector<HuntingAction> take_hunting_actions();
+    // The original's G->hunting as the host's hunting has it (1 enabled, 2 soft disabled): what the `hunting` operand
+    // reads, from the next presentation on.
+    void hunting_mode(int mode);
     bool bind_source_shaders(const SourceShaderState&,std::string& reason);
     bool intercept(const RuntimeShaderCall&,std::string& reason);
     // Input is supplied by the host. Tests never send input to other processes.

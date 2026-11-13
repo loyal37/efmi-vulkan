@@ -154,6 +154,11 @@ void RuntimeParseHunting(int& hunting, int& marking_mode, unsigned& marking_acti
         {L"next_pixelshader", 3, true}, {L"previous_pixelshader", 4, true}, {L"mark_pixelshader", 5, false},
         {L"next_vertexshader", 6, true}, {L"previous_vertexshader", 7, true}, {L"mark_vertexshader", 8, false},
         {L"done_hunting", 9, false},
+        {L"next_indexbuffer", 10, true}, {L"previous_indexbuffer", 11, true}, {L"mark_indexbuffer", 12, false},
+        {L"next_vertexbuffer", 13, true}, {L"previous_vertexbuffer", 14, true}, {L"mark_vertexbuffer", 15, false},
+        {L"next_vertexbuffer_slot", 16, true}, {L"previous_vertexbuffer_slot", 17, true},
+        {L"next_rendertarget", 18, true}, {L"previous_rendertarget", 19, true}, {L"mark_rendertarget", 20, false},
+        {L"analyse_frame", 21, false},
     };
     for (const auto& b : bindings)
         keys |= RegisterIniKeyBinding(L"Hunting", b.key, callback, nullptr, b.repeats ? repeat : 0, reinterpret_cast<void*>(uintptr_t(b.action)));

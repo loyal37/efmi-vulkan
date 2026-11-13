@@ -287,6 +287,7 @@ struct IniRuntime::Impl {
     std::vector<uint32_t> shader_hashes;
     HuntingSettings hunting;
     size_t hunting_keys_first = 0, hunting_keys_last = 0; // the hunting keys among the original's key actions
+    std::atomic<int> hunting_mode{0}; // the host's hunting mode for G->hunting, 0 until the host says
     std::mutex hunting_mx;
     std::vector<HuntingAction> hunting_actions;
     void snapshot_variables()
@@ -521,6 +522,9 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
             RuntimeParseHunting(mode, marking, actions, keys, hunting_key);
             p.hunting_keys_last = RuntimeInputCount();
             p.hunting.hunting = mode; p.hunting.marking_mode = marking; p.hunting.marking_actions = actions; p.hunting.keys = keys;
+            // The `hunting` operand (CommandListOperand::evaluate reads G->hunting): XXMI never leaves it at 0 (disabled), a
+            // section without hunting keys is soft disabled (2). Before the optimiser, which folds it to 0 only when 0.
+            G->hunting = mode == 1 ? 1 : 2;
         }
         CommandList constants,post_constants; RuntimeCompileConstants(constants,post_constants);
         auto roots = registered_command_lists;
@@ -780,6 +784,7 @@ void RuntimePublishTransitionParameters()
 bool IniRuntime::replayable() const { return impl_->replayable; }
 std::vector<uint32_t> IniRuntime::shader_hashes() const { return impl_->shader_hashes; }
 HuntingSettings IniRuntime::hunting() const { return impl_->hunting; }
+void IniRuntime::hunting_mode(int mode) { if (mode == 1 || mode == 2) impl_->hunting_mode.store(mode, std::memory_order_relaxed); }
 std::vector<HuntingAction> IniRuntime::take_hunting_actions()
 {
     std::lock_guard<std::mutex> lock(impl_->hunting_mx);
@@ -809,6 +814,7 @@ bool IniRuntime::present(const RuntimeInput& input, uint64_t frame, float second
         auto phase = [](const char*) {};
 #endif
         auto& p = *impl_; Scope scope(p.state); phase("present scope"); G->frame_no = unsigned(frame); G->gTime = seconds; G->gFrameTime = input.frame_seconds;
+        if (const int hunting = p.hunting_mode.load(std::memory_order_relaxed)) G->hunting = hunting;
         p.last_input = input; p.state.sample = input;
         G->hWnd = w.present ? RuntimeWindowHandle() : nullptr;
         if (input.resolution_width) { G->mResolutionInfo.width = int(input.resolution_width); G->mResolutionInfo.height = int(input.resolution_height); }

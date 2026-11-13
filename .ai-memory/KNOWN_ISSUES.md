@@ -114,7 +114,7 @@
 
 - At a draw no Mod section made the Mod's, a ShaderOverride's lists set variables, run lists and skip the draw; a binding or a draw of those lists is not done (the game's draw stays, said once, the status's `shader_overrides.kept`), and the game's textures there are not answered (`checktextureoverride = ps-tN`, texture queries: they are answered from a package's material state). Needs the slots of route 2's later steps.
 - The legacy `depth_filter` and `model` of a SPIR-V-hash section do nothing (a notice): they swap in the original shader, which needs shader replacement (the next step).
-- Hunting: vertex and fragment modules only (no index or vertex buffers, render targets, compute shaders), marking mode `skip` only (the others select and mark but draw as is), no dump of a marked module, no frame analysis, the `hunting` operand reads 0, the 60-second timeout counts hunting keys only (the original counts any key event). The overlay shows a notice per key, not the original's steady `VS:n/m PS:n/m` line.
+- Hunting (D-189 added index and vertex buffers, render targets, the `hunting` value, dumps, frame analysis's log): no compute shaders (dispatches are not hooked), marking mode `skip` only (the others select and mark but draw as is), render targets only where a draw is recorded inside its render pass instance, frame analysis without resource dumps, the 60-second timeout counts hunting keys only (the original counts any key event). The overlay shows a notice per key, not the original's steady `VS:n/m PS:n/m` line.
 - A module created inline in a pipeline (`VkShaderModuleCreateInfo` chained into a stage) or a shader object has no hash here; none was seen in this game.
 - Nothing of it has run in the game.
 
