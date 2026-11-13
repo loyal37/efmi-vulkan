@@ -1,4 +1,4 @@
-# EFMI Vulkan - Architecture (the 2.1 tree)
+# EFMI Vulkan - Architecture
 
 > Rewritten 2026-11-10 from the code (docs/architecture-review-2.1.md, P4-1). What was here before, the
 > history of the candidates 0.5 to 2.0, is `.ai-memory/archive/ARCHITECTURE-until-2.1.md`. Verified state,
@@ -10,6 +10,14 @@ A DLL the launcher injects into the game's Vulkan process. It sits in front of t
 finds the draws of characters that an installed EFMI Mod replaces, runs the Mod's INI through the
 original 3DMigoto (XXMI) parser and interpreter, and draws the Mod's meshes and textures in the game's
 own render passes. Nothing of the game, the launcher or the Mods is changed on disk.
+
+The native route (D-187 to D-190) adds SPIR-V-hash ShaderOverride lists, hunting/dumps and native
+ShaderFixes. `shader_fixes.cpp` loads an immutable shader revision with the folder generation; the
+variant cache applies it to game twins and character variants. Recorded command owners retain the
+actual pipelines, and resource metadata retains original descriptor-layout/immutable-sampler handles
+through application destruction. Native HLSL can be compiled and validated offline by
+`scripts/compile_game_shader.py`. The precise supported interfaces and remaining route-2 work are in
+`docs/vulkan-native-mods.md`; sandbox verification and game acceptance stay separate.
 
 ## Binaries
 

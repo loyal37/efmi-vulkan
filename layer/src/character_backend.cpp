@@ -348,7 +348,13 @@ void character_retire(CharacterBackend& b, uint32_t id)
         for (uint32_t k = 0; k < kCaptureKinds; ++k) b.variants->retire(capture_identity(id, CaptureKind(k)));
         b.variants->retire(twin_identity(id));
     }
-    { std::unique_lock<std::shared_mutex> lock(b.twins_mx); b.twins.erase(id); b.twins_failed.erase(id); }
+    {
+        std::unique_lock<std::shared_mutex> lock(b.twins_mx);
+        for (auto it = b.twins.begin(); it != b.twins.end();)
+            if (std::get<1>(it->first) == id) it = b.twins.erase(it); else ++it;
+        for (auto it = b.twins_failed.begin(); it != b.twins_failed.end();)
+            if (std::get<1>(*it) == id) it = b.twins_failed.erase(it); else ++it;
+    }
     { std::unique_lock<std::shared_mutex> lock(g_dither_mx); g_dither_pipelines.erase(id); }
     if (b.translucency) b.translucency->retire(id);
     { std::lock_guard<std::mutex> lock(b.copy_mx); b.copy_facts.erase(id); }

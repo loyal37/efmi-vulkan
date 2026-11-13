@@ -889,6 +889,37 @@ static void capture_empty_intervals()
 
 #include "render_target_cases.h"
 
+static unsigned sampler_destroys = 0;
+static unsigned layout_destroys = 0;
+static VKAPI_ATTR void VKAPI_CALL destroy_retained_sampler(VkDevice, VkSampler, const VkAllocationCallbacks*) { ++sampler_destroys; }
+static VKAPI_ATTR void VKAPI_CALL destroy_retained_layout(VkDevice, VkDescriptorSetLayout, const VkAllocationCallbacks*) {
+    check(sampler_destroys == 0, "retained layout is destroyed before its immutable sampler"); ++layout_destroys;
+}
+static void immutable_sampler_lifetime()
+{
+    Device d; d.d.DestroySampler = destroy_retained_sampler;
+    d.d.DestroyDescriptorSetLayout = destroy_retained_layout;
+    const auto sampler = h<VkSampler>(301); const auto sl = h<VkDescriptorSetLayout>(302);
+    VkSamplerCreateInfo ci = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    on_create_sampler(&d, sampler, &ci);
+    layout(d, sl, {{0, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, &sampler}});
+    auto held = d.set_layouts.at(sl);
+    check(on_destroy_sampler(&d, sampler) && sampler_destroys == 0,
+          "application sampler destruction waits for immutable layout owners");
+    check(on_destroy_set_layout(&d, sl) && layout_destroys == 0, "application layout destruction waits for queued metadata owners");
+    check(sampler_destroys == 0 && held->bindings.at(0).immutable_owners.at(0)->handle == sampler,
+          "queued layout metadata retains the exact immutable sampler handle");
+    held.reset();
+    check(sampler_destroys == 1 && layout_destroys == 1, "last retained owner destroys the layout and sampler once");
+    VkAllocationCallbacks allocator{};
+    on_create_sampler(&d, sampler, &ci, &allocator);
+    check(!on_destroy_sampler(&d, sampler) && sampler_destroys == 1,
+          "custom allocator sampler destruction remains synchronous in the hook");
+    on_create_sampler(&d, sampler, &ci);
+    d.samplers.clear();
+    check(sampler_destroys == 1, "metadata alone never destroys an application-owned sampler");
+}
+
 int main()
 {
     util_init(GetModuleHandleW(nullptr));
@@ -906,6 +937,7 @@ int main()
     character_cache_cases(check);
     capture_empty_intervals();
     render_target_cases();
+    immutable_sampler_lifetime();
     printf("tracker_test: %d/%d checks passed\n", passed, passed + failed);
     return failed ? 1 : 0;
 }

@@ -2,6 +2,7 @@
 #include "variant_fixture.h"
 #include "../layer/src/variant_cache.h"
 #include "material_fixture.h"
+#include "src/spirv.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -255,6 +256,57 @@ int main()
         a.variant.reset(); b.variant.reset();
         cache.stop();
         kept.reset();
+    }
+    {
+        // F10 publishes new shader code without destroying a pipeline still held by recorded commands.
+        VariantCache cache(handle<VkDevice>(1),dispatch(),4);
+        auto first=std::make_shared<NativeShaderSet>(); first->revision=1;
+        cache.native_shaders(first);
+        auto old=await(cache,91,recipe,layout,vertex);
+        auto second=std::make_shared<NativeShaderSet>(); second->revision=2;
+        cache.native_shaders(second);
+        auto current=await(cache,91,recipe,layout,vertex);
+        check(old.variant && current.variant && old.variant->pipeline!=current.variant->pipeline,
+              "a new native shader revision makes another pipeline for the same game pipeline");
+        cache.retire(91);
+        check(old.variant && current.variant && driver.count()>0,"recorded owners keep both shader revisions alive after retirement");
+        cache.stop(); old.variant.reset(); current.variant.reset();
+        check(driver.count()==0,"both native shader revisions release after their recording owners");
+    }
+    {
+        auto retained_layout = std::make_shared<PipelineLayoutInfo>(*layout);
+        auto set = std::make_shared<DescriptorLayoutInfo>(*retained_layout->sets[0]);
+        set->lifetime = std::make_shared<SetLayoutLifetime>(); set->lifetime->handle = handle<VkDescriptorSetLayout>(9998);
+        auto sampler = std::make_shared<SamplerLifetime>();
+        sampler->handle = handle<VkSampler>(9999);
+        std::weak_ptr<SamplerLifetime> weak = sampler;
+        DescriptorBinding binding; binding.type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        binding.count = 1; binding.stages = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.immutable_samplers = {sampler->handle}; binding.immutable_owners = {sampler};
+        set->bindings[99] = std::move(binding); retained_layout->sets[0] = set;
+        VariantCache cache(handle<VkDevice>(1),dispatch(),4);
+        FragmentPatch patch; patch.keep_vertex = true; patch.native_only = true;
+        auto ready = await(cache,92,recipe,retained_layout,vertex,patch);
+        check(ready.variant && ready.variant->own_layout == VK_NULL_HANDLE,
+              "native variant retains immutable samplers without appending a descriptor set");
+        cache.retire(92); cache.stop(); retained_layout.reset(); set.reset(); sampler.reset();
+        check(!weak.expired(), "native pipeline owns its immutable sampler after source metadata is retired");
+        ready.variant.reset();
+        check(weak.expired() && driver.count()==0, "recording owner releases native pipeline and immutable sampler together");
+    }
+    {
+        // A native VS can preserve Vulkan IO yet remove the bone pattern the compatibility renderer needs.
+        auto fixes=std::make_shared<NativeShaderSet>(); fixes->revision=3;
+        auto shader=std::make_shared<ShaderInfo>(); shader->code=spv::vertex_shader();
+        for(const auto& stage:recipe->stages) if(stage.stage==VK_SHADER_STAGE_VERTEX_BIT)
+            fixes->modules[(uint64_t(stage.stage)<<32)|stage.shader->hash]=shader;
+        fixes->compatible=[](const std::vector<uint32_t>&,const std::vector<uint32_t>&,VkShaderStageFlagBits,const std::string&,std::string&){return true;};
+        VariantCache cache(handle<VkDevice>(1),dispatch(),4); cache.native_shaders(fixes);
+        auto ready=await(cache,93,recipe,layout,vertex);
+        check(ready.variant && !ready.variant->native_replaced && !ready.variant->native_warning.empty(),
+              "a native shader incompatible with mesh rewrites preserves the character variant using its original shaders");
+        cache.stop(); ready.variant.reset();
+        check(driver.count()==0,"native adaptation fallback releases every owned object");
     }
     printf("variant cache: %d checks passed, %d failed\n",passed,failed);
     return failed?1:0;

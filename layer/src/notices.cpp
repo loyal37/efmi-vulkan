@@ -208,6 +208,7 @@ std::wstring test_value(const wchar_t* name)
 }
 struct {
     std::wstring path = test_value(L"EFMI_VK_TEST_NOTICES_READBACK");
+    std::wstring trigger = test_value(L"EFMI_VK_TEST_NOTICES_READBACK_TRIGGER");
     bool recorded = false, written = false;
     int slot = -1;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -475,7 +476,8 @@ bool draw(Overlay& o, PresentWork* present, const SwapchainInfo& chain, VkImage 
     o.f.CmdEndRenderPass(slot->cb);
     const bool four_bytes = chain.format == VK_FORMAT_B8G8R8A8_UNORM || chain.format == VK_FORMAT_B8G8R8A8_SRGB ||
                             chain.format == VK_FORMAT_R8G8B8A8_UNORM || chain.format == VK_FORMAT_R8G8B8A8_SRGB;
-    if (!g_readback.path.empty() && !g_readback.recorded && four_bytes && (chain.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+    if (!g_readback.path.empty() && !g_readback.recorded && four_bytes && (chain.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) &&
+        (g_readback.trigger.empty() || GetFileAttributesW(g_readback.trigger.c_str()) != INVALID_FILE_ATTRIBUTES)) {
         VkBufferCreateInfo bi = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bi.size = VkDeviceSize(chain.extent.width) * chain.extent.height * 4; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VkMemoryRequirements req = {};

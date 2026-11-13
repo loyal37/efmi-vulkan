@@ -248,10 +248,75 @@ notices while playing; whether any game pipeline has no module hash (inline modu
 
 ## 8. What comes after this step
 
-1. Replacing game shaders: a Mod's SPIR-V (or HLSL compiled to it) in place of a module by its hash,
-   through pipeline variants made when the game creates the pipeline (as the anti-dither twins), and
-   with it the `pink` and `original` marking modes, `depth_filter` and `model`.
+1. Replacing game shaders: D-190 implements the SPIR-V files and an offline HLSL compiler (section 9).
+   The `pink` and `original` marking modes and legacy `depth_filter` remain separate follow-up work;
+   the compiler's explicit `--model` chooses the native HLSL target, not an INI `model` directive.
 2. Slots of other stages and render targets by (set, binding) for Vulkan-native lists, and the
    bindings and draws of a ShaderOverride's lists at any draw.
 3. Hunting of compute shaders (dispatches hooked); frame analysis's resource dumps. (Index and vertex
    buffers, render targets, the `hunting` value, dumping a marked module and frame analysis's log: D-189.)
+
+## 9. Native game shader replacement (D-190)
+
+The layer reads `<hash>-<stage>_replace.spv` from `ShaderFixes` inside its settings folder. `hash` is
+the original eight-digit CRC-32C from hunting; `stage` is `vs`, `hs`, `ds`, `gs` or `ps`. Hunting's
+`<hash>-ps.spv` dumps do not act until explicitly made replacement files. The DX11 installation's
+ShaderFixes folder is not read or changed. A native shader keeps the game's entry point, descriptor
+set/binding interface, push constants, and stage inputs/outputs. It can stop using inputs/descriptors,
+but cannot add resources or widen declared access. Vertex and other producer stages must keep outputs
+needed by the next stage, including built-ins. Changed resource bindings belong to the next route-2 step.
+
+An HLSL source can be compiled offline, using the tools installed in `F:/vulkan`:
+
+```powershell
+python scripts/compile_game_shader.py shader.hlsl --hash 12345678 --stage ps --output-dir dist/settings/ShaderFixes
+```
+
+Replace the example hash with the hunted module's hash. Use explicit `[[vk::binding(binding, set)]]`
+and `[[vk::location(location)]]` declarations; this compiler does not apply the compatibility route's
+DX11 register shifts. `--entry` defaults to `main`, `--model` to `6_0`, and `--target` to `vulkan1.1`.
+The compiler validates its temporary SPIR-V before replacing the destination atomically; compilation
+or validation failure leaves the last good file intact. This command only creates a file. F10 loads
+it into an already running layer; real-game loading still requires the project's authorization rules.
+
+Files load with the folder generation, initially and on F10. The folder worker validates SPIR-V for
+the application's Vulkan version and the enabled features supported by the owned shader runtime. A
+known pipeline's interface is checked there too; new pipelines are checked on the variant worker.
+An invalid reload keeps the last good module and reports why; deletion restores the game shader.
+Unchanged code keeps the same revision and cached variants. An interface mismatch first encountered
+on a new pipeline keeps that pipeline's original stage. A refused native stage does not suppress a
+character Mod's mesh. ShaderOverride matching and hunting always use the original hash.
+
+A shader can satisfy Vulkan's interface but remove a pattern the compatibility renderer needs for
+its bone or image rewrite. If such a replacement prevents a character variant from being built,
+that variant retries with the game's original stages and records the reason. This preserves the Mod
+mesh; it does not claim that every authored shader can compose with the compatibility rewrites.
+
+Variants are prepared from owned graphics recipes when game pipelines are created or the files reload.
+A shader-only variant keeps the application's full layout without adding a private set. Character
+variants use the same published shader set before their ordinary vertex/image rewrites. Queued builds
+retain a revision snapshot, and recorded command buffers retain their actual pipelines through
+completion, including an old revision after F10. Native twins obey the backend's enable switch.
+
+Descriptor layouts and immutable samplers retain the original handles until the application has
+requested destruction and all metadata/variant/recording owners are gone. Using the original layout
+also avoids a false incompatibility from the pinned validation layer's immutable-sampler pointer
+comparison. The original 3DMigoto saves sampler references with `PSGetSamplers`, restores them with
+`PSSetSamplers` and then releases them; Vulkan requires this lifetime to be explicit. Native shader
+replacement adds no resource upload or write dependency: the replacement must preserve the game's
+resource access contract; existing queue order/barriers and the character path's owned-work
+synchronization still apply. See the Vulkan specification's
+[pipeline layout compatibility](https://docs.vulkan.org/spec/latest/chapters/descriptorsets.html#descriptorsets-compatibility).
+
+The status's `shader_fixes` reports loaded files, revision, bind count and file-validation warnings.
+Per-pipeline interface/build refusals appear in the overlay and log. A file count alone is not proof
+that a replacement was drawn. Current boundaries: graphics pipelines captured by the existing recipe
+tracker; a single matching entry point; supported core capabilities and fully tracked layouts. Layout
+binding flags, unsupported extension state, and immutable samplers/layouts created with custom host
+allocators remain refused. An empty Mods folder supports initial ShaderFixes loading; F10 uses the
+INI generation's input dispatcher and therefore needs an active INI configuration. Compute shader
+replacement, native arbitrary resource/draw lists, legacy filters and marking modes remain pending.
+
+Verification lives in `sandbox/native_shader_test.py`; `sandbox/run_all.py --no-build --only native-shaders`
+adds tracker lifetime, pipeline/cache, live INI and validation checks. These are sandbox results, not
+real-game acceptance.

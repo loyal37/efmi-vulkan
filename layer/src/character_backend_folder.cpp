@@ -122,6 +122,7 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
                                                 TextureResidency* textures, std::shared_ptr<VariantCache> variants, Translucency* translucency, BoneMerge* bones)
 {
     auto folder = std::make_shared<FolderGeneration>();
+    folder->shader_fixes = load_shader_fixes(device, variants ? variants->native_shaders() : nullptr);
     folder->device = device;
     CharacterProgram::FolderSource source;
     source.mods = mods_folder();

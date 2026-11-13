@@ -480,9 +480,35 @@ void shader_hooks_frame(CharacterBackend& b)
     CharacterProgram* program = b.folder ? b.folder->program : nullptr;
     std::shared_ptr<const CharacterBackend::ShaderHooks> current;
     { std::shared_lock<std::shared_mutex> lock(b.index_mx); current = b.shader_hooks; }
-    if (!current ? program != nullptr : current->folder != b.folder) {
+    if (!current ? b.folder != nullptr : current->folder != b.folder) {
         auto next = std::make_shared<CharacterBackend::ShaderHooks>();
         next->folder = b.folder;
+        if (b.variants) {
+            const auto fixes = b.folder ? b.folder->shader_fixes : nullptr;
+            const auto previous = b.variants->native_shaders();
+            b.variants->native_shaders(fixes);
+            if ((fixes ? fixes->revision : 0) != (previous ? previous->revision : 0)) {
+                decltype(b.twins) retired;
+                { std::unique_lock<std::shared_mutex> lock(b.twins_mx); retired.swap(b.twins); b.twins_failed.clear(); }
+                // A staged generation may have warmed its local lookup before this revision was published.
+                // Its next draw must ask the revision-keyed variant cache again.
+                for (const auto& controller : b.controllers) {
+                    std::shared_lock<std::shared_mutex> lock(controller->mutex);
+                    if (controller->active) {
+                        std::lock_guard<std::mutex> mod(controller->active->mod_mx);
+                        controller->active->variant_lookup.clear();
+                    }
+                }
+                prepare_twins(b);
+            }
+            if (fixes) {
+                if (!fixes->modules.empty()) logf("ShaderFixes: %zu native module(s), revision %llu", fixes->modules.size(), static_cast<unsigned long long>(fixes->revision));
+                for (const auto& warning : fixes->warnings) {
+                    logf("ShaderFixes: %s", warning.c_str());
+                    notice(NoticeLevel::Warning, "shader replacement", warning.c_str());
+                }
+            }
+        }
         if (program && program->runtime()) {
             next->program = program;
             next->hashes = program->runtime()->shader_hashes();
@@ -571,6 +597,13 @@ void shader_hooks_status(CharacterBackend& b, JsonWriter& w)
     w.kn("kept", b.shader_draws_kept.load()); w.kn("refused", b.shader_draws_refused.load());
     { std::lock_guard<std::mutex> lock(b.shader_note_mx); w.kv("last_reason", b.shader_note); }
     w.end_object();
+    const auto fixes = b.variants ? b.variants->native_shaders() : nullptr;
+    w.key("shader_fixes"); w.begin_object();
+    w.kn("loaded", fixes ? fixes->modules.size() : 0); w.kn("revision", fixes ? fixes->revision : 0);
+    w.kn("binds", b.shader_fix_binds.load());
+    w.key("warnings"); w.begin_array();
+    if (fixes) for (const auto& warning : fixes->warnings) w.str(warning.c_str());
+    w.end_array(); w.end_object();
     b.hunting.status(w);
 }
 

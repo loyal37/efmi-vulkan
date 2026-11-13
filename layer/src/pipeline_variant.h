@@ -19,6 +19,16 @@ struct VariantDispatch {
 #undef X
 };
 
+// A reload publishes one immutable set. Queued builds and recorded commands retain the old set/pipelines.
+struct NativeShaderSet {
+    uint64_t revision = 0;
+    // (Vulkan stage << 32) | original SPIR-V CRC-32C. A shader's original identity never changes.
+    std::map<uint64_t, std::shared_ptr<const ShaderInfo>> modules;
+    std::vector<std::string> warnings;
+    bool (*compatible)(const std::vector<uint32_t>&, const std::vector<uint32_t>&,
+                       VkShaderStageFlagBits, const std::string&, std::string&) = nullptr;
+};
+
 struct FragmentPatch {
     // Ordered images become private bindings 2+i; nulls consume no descriptors.
     // Neither list contains asset handles, component ids or inferred slot names.
@@ -35,6 +45,9 @@ struct FragmentPatch {
     // With keep_vertex: the variant draws a Mod's own buffers under the application's vertex stage (D-176),
     // so one for its vertex input alone, without an image moved, is a variant.
     bool own_geometry = false;
+    // A game pipeline with only its shaders replaced: keep the application's complete layout, with no private set.
+    bool native_only = false;
+    std::shared_ptr<const NativeShaderSet> native_shaders;
 };
 std::vector<VkDescriptorSetLayoutBinding> private_draw_bindings(uint32_t image_count);
 
@@ -58,13 +71,19 @@ public:
     uint32_t image_count = 0;
     uint32_t bone_set = 0, bone_binding = 0;
     std::string reason;
+    std::string native_warning;
+    uint32_t native_replaced = 0;
     VkResult result = VK_SUCCESS;
 private:
+    bool build_recipe(const GraphicsRecipe&, const PipelineLayoutInfo&, const VertexInputRecipe&, uint32_t,
+                      const FragmentPatch&, const VkPhysicalDeviceLimits&);
     void clear();
     VkDevice dev_;
     VariantDispatch d_;
     VkPipelineCache cache_ = VK_NULL_HANDLE; // the device's variant pipeline cache (D-101), or none
     std::vector<VkDescriptorSetLayout> sets_;
+    std::vector<std::shared_ptr<SamplerLifetime>> samplers_;
+    std::vector<std::shared_ptr<const DescriptorLayoutInfo>> source_sets_;
 };
 
 struct DrawGeometry {

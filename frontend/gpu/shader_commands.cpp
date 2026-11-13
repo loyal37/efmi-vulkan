@@ -1,4 +1,5 @@
 #include "shader_commands_internal.h"
+#include "native_shader.h"
 #include "image_formats.h"
 #include "shader_usage.h"
 #include "driver_workarounds.h"
@@ -40,6 +41,7 @@ void shader_capabilities(const HlslProgram& program,const ShaderDevice& device){
         case SpvCapabilityDenormPreserve:case SpvCapabilityDenormFlushToZero:
         case SpvCapabilitySignedZeroInfNanPreserve:case SpvCapabilityRoundingModeRTE:supported=device.host.float_controls;break;
         case SpvCapabilityGeometry:supported=f.geometryShader;break;
+        case SpvCapabilityTessellation:supported=f.tessellationShader;break;
         case SpvCapabilityFloat64:supported=f.shaderFloat64;break;
         case SpvCapabilityInt64:supported=f.shaderInt64;break;
         case SpvCapabilityInt16:supported=f.shaderInt16;break;
@@ -78,6 +80,132 @@ ComputePipeline::~ComputePipeline()=default;
 const HlslProgram& ComputePipeline::program() const {return impl_->programs.front();}
 ShaderSampler::ShaderSampler(std::shared_ptr<Impl> impl):impl_(std::move(impl)){}
 ShaderSampler::~ShaderSampler()=default;
+bool validate_native_shader(const std::vector<uint32_t>& words, VkShaderStageFlagBits stage,
+                            const ShaderHost& host, const VkPhysicalDeviceFeatures& features, uint32_t api, std::string& reason) {
+    try {
+        ShaderDevice d;
+        d.host = host;
+        d.resource.enabled_features = features;
+        require(host.validator.is_absolute(), "Native validator path must be absolute");
+        d.validator = LoadLibraryExW(host.validator.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        require(d.validator != nullptr, "Cannot load native SPIR-V validator");
+#define X(name) d.name = reinterpret_cast<decltype(d.name)>(GetProcAddress(d.validator, #name)); require(d.name != nullptr, "Missing validator entry " #name);
+        VALIDATOR_FUNCS(X)
+#undef X
+        HlslProgram program;
+        program.spirv = words; program.stage = stage; program.vulkan_version = api;
+        d.validate(program);
+        for (size_t at = 5; at < words.size(); at += words[at] >> 16)
+            if ((words[at] & 65535) == SpvOpCapability) program.capabilities.push_back(words[at + 1]);
+        shader_capabilities(program, d);
+        SpvReflectShaderModule reflected{};
+        require(spvReflectCreateShaderModule(words.size() * 4, words.data(), &reflected) == SPV_REFLECT_RESULT_SUCCESS,
+                "Cannot reflect native shader");
+        const bool correct_stage = reflected.entry_point_count == 1 && uint32_t(reflected.shader_stage) == uint32_t(stage);
+        spvReflectDestroyShaderModule(&reflected);
+        require(correct_stage, "Native shader must have one entry point of the named stage");
+        reason.clear();
+        return true;
+    } catch (const std::exception& e) { reason = e.what(); return false; }
+}
+
+bool native_shader_interface(const std::vector<uint32_t>& original, const std::vector<uint32_t>& replacement,
+                             VkShaderStageFlagBits stage, const std::string& entry, std::string& reason) {
+    struct Reflection {
+        SpvReflectShaderModule module{};
+        bool valid = false;
+        ~Reflection() { if (valid) spvReflectDestroyShaderModule(&module); }
+        void read(const std::vector<uint32_t>& code) {
+            require(spvReflectCreateShaderModule(code.size() * 4, code.data(), &module) == SPV_REFLECT_RESULT_SUCCESS,
+                    "Cannot reflect native shader interface");
+            valid = true;
+        }
+    } before, after;
+    try {
+        before.read(original); after.read(replacement);
+        const auto& a = before.module; const auto& b = after.module;
+        require(a.entry_point_count == 1 && b.entry_point_count == 1 && b.entry_point_name && entry == b.entry_point_name &&
+                uint32_t(b.shader_stage) == uint32_t(stage), "Native shader entry point or stage differs");
+        for (uint32_t i = 0; i < b.descriptor_binding_count; ++i) {
+            const auto& next = b.descriptor_bindings[i];
+            const SpvReflectDescriptorBinding* old = nullptr;
+            for (uint32_t j = 0; j < a.descriptor_binding_count; ++j)
+                if (a.descriptor_bindings[j].set == next.set && a.descriptor_bindings[j].binding == next.binding) old = &a.descriptor_bindings[j];
+            require(old && old->descriptor_type == next.descriptor_type && old->count == next.count && old->block.size >= next.block.size,
+                    "Native shader changes a descriptor interface");
+            require(!next.accessed || old->accessed, "Native shader accesses a previously unused descriptor");
+            require(old->resource_type == next.resource_type && old->input_attachment_index == next.input_attachment_index &&
+                    old->image.dim == next.image.dim && old->image.depth == next.image.depth && old->image.arrayed == next.image.arrayed &&
+                    old->image.ms == next.image.ms && old->image.sampled == next.image.sampled && old->image.image_format == next.image.image_format,
+                    "Native shader changes an image type or resource access class");
+            if (old->type_description && next.type_description &&
+                (old->type_description->type_flags & SPV_REFLECT_TYPE_FLAG_EXTERNAL_IMAGE)) {
+                const auto& x = *old->type_description; const auto& y = *next.type_description;
+                constexpr uint32_t scalar = SPV_REFLECT_TYPE_FLAG_BOOL | SPV_REFLECT_TYPE_FLAG_INT | SPV_REFLECT_TYPE_FLAG_FLOAT;
+                require((x.type_flags & scalar) == (y.type_flags & scalar) &&
+                        x.traits.numeric.scalar.width == y.traits.numeric.scalar.width &&
+                        x.traits.numeric.scalar.signedness == y.traits.numeric.scalar.signedness,
+                        "Native shader changes an image sampled scalar type");
+            }
+            constexpr uint32_t access = SPV_REFLECT_DECORATION_NON_WRITABLE | SPV_REFLECT_DECORATION_NON_READABLE;
+            require((next.decoration_flags & old->decoration_flags & access) == (old->decoration_flags & access),
+                    "Native shader expands descriptor read/write access");
+            const auto block_access = [&](const auto& self, const SpvReflectBlockVariable& x, const SpvReflectBlockVariable& y) -> bool {
+                if ((x.decoration_flags & y.decoration_flags & access) != (x.decoration_flags & access)) return false;
+                for (uint32_t n = 0; n < y.member_count; ++n) {
+                    const SpvReflectBlockVariable* member = nullptr;
+                    for (uint32_t m = 0; m < x.member_count; ++m) if (x.members[m].offset == y.members[n].offset) member = &x.members[m];
+                    if (!member || !self(self, *member, y.members[n])) return false;
+                }
+                return true;
+            };
+            require(block_access(block_access, old->block, next.block), "Native shader expands storage block access");
+        }
+        for (uint32_t i = 0; i < b.push_constant_block_count; ++i) {
+            const auto& next = b.push_constant_blocks[i];
+            bool covered = false;
+            for (uint32_t j = 0; j < a.push_constant_block_count; ++j) {
+                const auto& old = a.push_constant_blocks[j];
+                covered |= next.offset >= old.offset && uint64_t(next.offset) + next.size <= uint64_t(old.offset) + old.size;
+            }
+            require(covered, "Native shader expands push constants");
+        }
+        const auto same_variable = [](const auto& self, const SpvReflectInterfaceVariable& x, const SpvReflectInterfaceVariable& y) -> bool {
+            if (x.built_in != y.built_in || (x.built_in < 0 && (x.location != y.location || x.component != y.component)) || x.format != y.format ||
+                x.array.dims_count != y.array.dims_count || x.member_count != y.member_count ||
+                x.numeric.scalar.width != y.numeric.scalar.width || x.numeric.vector.component_count != y.numeric.vector.component_count) return false;
+            for (uint32_t i = 0; i < x.array.dims_count; ++i) if (x.array.dims[i] != y.array.dims[i]) return false;
+            for (uint32_t i = 0; i < x.member_count; ++i) if (!self(self, x.members[i], y.members[i])) return false;
+            return true;
+        };
+        const auto flatten = [](const auto& self, const SpvReflectInterfaceVariable* variable, std::vector<const SpvReflectInterfaceVariable*>& out) -> void {
+            if (variable->member_count && !variable->array.dims_count)
+                for (uint32_t i = 0; i < variable->member_count; ++i) self(self, &variable->members[i], out);
+            else out.push_back(variable);
+        };
+        auto compatible = [&](SpvReflectInterfaceVariable* const* used, uint32_t count,
+                             SpvReflectInterfaceVariable* const* supplied, uint32_t available) {
+            std::vector<const SpvReflectInterfaceVariable*> needs, has;
+            for (uint32_t i = 0; i < count; ++i) flatten(flatten, used[i], needs);
+            for (uint32_t i = 0; i < available; ++i) flatten(flatten, supplied[i], has);
+            for (const auto* variable : needs) {
+                bool found = false;
+                for (const auto* candidate : has) found |= same_variable(same_variable, *variable, *candidate);
+                if (!found) return false;
+            }
+            return true;
+        };
+        require(compatible(b.input_variables, b.input_variable_count, a.input_variables, a.input_variable_count),
+                "Native shader changes an input location");
+        require(compatible(b.output_variables, b.output_variable_count, a.output_variables, a.output_variable_count),
+                "Native shader changes an output location");
+        if (stage != VK_SHADER_STAGE_FRAGMENT_BIT)
+            require(compatible(a.output_variables, a.output_variable_count, b.output_variables, b.output_variable_count),
+                    "Native shader removes an output used by the next stage");
+        reason.clear(); return true;
+    } catch (const std::exception& e) { reason = e.what(); return false; }
+}
+
 ShaderCommands::ShaderCommands(ResourceCommands& commands,ShaderHost host):impl_(std::make_unique<Impl>(commands)){
     require(host.get_device_proc && host.objects && host.properties.apiVersion>=commands.device_.api_version &&
         commands.device_.api_version>=VK_API_VERSION_1_1 && (commands.device_.queue_flags&VK_QUEUE_COMPUTE_BIT),

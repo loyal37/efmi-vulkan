@@ -31,6 +31,20 @@ bool pipeline_dither(uint32_t id, const GraphicsRecipe& recipe)
 } // namespace character_internal
 
 namespace {
+bool has_native_shader(const std::shared_ptr<const NativeShaderSet>& fixes, const GraphicsRecipe& recipe)
+{
+    if (fixes) for (const auto& stage : recipe.stages)
+        if (stage.shader && fixes->modules.count((uint64_t(stage.stage) << 32) | stage.shader->hash)) return true;
+    return false;
+}
+
+FragmentPatch game_shader_patch(const std::shared_ptr<const NativeShaderSet>& fixes, bool native, bool dither)
+{
+    FragmentPatch patch;
+    patch.keep_vertex = true; patch.native_only = native; patch.no_dither = dither; patch.native_shaders = fixes;
+    return patch;
+}
+
 // A recording that bound twins keeps them until it completed: the application may destroy its pipeline
 // meanwhile, and the variant cache retire the twin with it.
 struct TwinOwner final : CommandOwner {
@@ -49,7 +63,10 @@ struct TwinOwner final : CommandOwner {
 VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
 {
     // RabbitFX's state alone decides, as under DX11 its replaced shaders do whatever the character Mods do.
-    if (!g_dither_off.load(std::memory_order_relaxed) || !b.variants || !cb) return pipeline;
+    if (!b.variants || !cb) return pipeline;
+    const auto fixes = b.variants->native_shaders();
+    const bool dither_off = g_dither_off.load(std::memory_order_relaxed);
+    if (!dither_off && (!fixes || fixes->modules.empty())) return pipeline;
     uint32_t id = 0;
     std::shared_ptr<const GraphicsRecipe> recipe;
     std::shared_ptr<const PipelineLayoutInfo> layout;
@@ -59,23 +76,34 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
         if (pipe == b.device->pipes.end() || !pipe->second.recipe || !pipe->second.layout) return pipeline;
         id = pipe->second.id; recipe = pipe->second.recipe; layout = pipe->second.layout;
     }
-    if (!pipeline_dither(id, *recipe)) return pipeline;
+    const bool native = b.enabled.load(std::memory_order_relaxed) && has_native_shader(fixes, *recipe);
+    const bool dither = dither_off && pipeline_dither(id, *recipe);
+    if (!native && !dither) return pipeline;
+    const CharacterBackend::TwinKey key{fixes ? fixes->revision : 0, id, dither};
     std::shared_ptr<const PipelineVariant> twin;
     {
         std::shared_lock<std::shared_mutex> lock(b.twins_mx);
-        if (b.twins_failed.count(id)) return pipeline;
-        const auto found = b.twins.find(id);
+        if (b.twins_failed.count(key)) return pipeline;
+        const auto found = b.twins.find(key);
         if (found != b.twins.end()) twin = found->second;
     }
     if (!twin) {
         // Prepared when the game created the pipeline (character_created), so normally made by now; a twin
         // still being built is waited for (bounded), as a replaced draw waits for its variant (D-103).
-        const auto result = b.variants->await(twin_identity(id), recipe, layout, recipe->vertex, twin_patch(), std::chrono::milliseconds(4000));
+        const auto result = b.variants->await(twin_identity(id), recipe, layout, recipe->vertex, game_shader_patch(fixes, native, dither), std::chrono::milliseconds(4000));
         std::unique_lock<std::shared_mutex> lock(b.twins_mx);
-        if (result.variant) twin = b.twins[id] = result.variant;
+        if (result.variant) {
+            twin = b.twins[key] = result.variant;
+            if (!twin->native_warning.empty()) {
+                logf("ShaderFixes: pipeline %u: %s; original shader kept", id, twin->native_warning.c_str());
+                notice(NoticeLevel::Warning, "shader replacement", twin->native_warning.c_str());
+            }
+        }
         else {
-            if (result.state == VariantState::Failed && b.twins_failed.insert(id).second)
-                logf("character dither: no twin for pipeline %u: %s", id, result.reason.c_str());
+            if (result.state == VariantState::Failed && b.twins_failed.insert(key).second) {
+                logf("game shader: no variant for pipeline %u: %s", id, result.reason.c_str());
+                notice(NoticeLevel::Warning, "shader replacement", result.reason.c_str());
+            }
             return pipeline;
         }
     }
@@ -86,6 +114,7 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
     owner.used = true;
     if (std::find(owner.held.begin(), owner.held.end(), twin) == owner.held.end()) owner.held.push_back(twin);
     ++b.twin_binds;
+    if (native && twin->native_replaced) ++b.shader_fix_binds;
     return twin->pipeline;
 }
 // At the application's graphics pipeline creation (D-133): when the Mods have a discard gate, the twin of a
@@ -94,13 +123,21 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
 void prepare_twin(CharacterBackend& b, uint32_t id, const std::shared_ptr<const GraphicsRecipe>& recipe,
                   const std::shared_ptr<const PipelineLayoutInfo>& layout)
 {
-    if (!recipe || !layout || !pipeline_dither(id, *recipe)) return;
-    const auto result = b.variants->prepare(twin_identity(id), recipe, layout, recipe->vertex, twin_patch());
-    if (result.state == VariantState::Queued) ++b.twins_prepared;
+    if (!recipe || !layout) return;
+    const auto fixes = b.variants->native_shaders();
+    const bool native = has_native_shader(fixes, *recipe);
+    const bool dither = g_dither_gated.load(std::memory_order_relaxed) && pipeline_dither(id, *recipe);
+    for (int state = 0; state < 2; ++state) {
+        if ((!state && !native) || (state && !dither)) continue;
+        const auto result = b.variants->prepare(twin_identity(id), recipe, layout, recipe->vertex, game_shader_patch(fixes, native, state != 0));
+        if (result.state == VariantState::Queued) ++b.twins_prepared;
+    }
 }
 void character_created(CharacterBackend& b, VkPipeline pipeline)
 {
-    if (!g_dither_gated.load(std::memory_order_relaxed) || !b.variants) return;
+    if (!b.variants) return;
+    const auto fixes = b.variants->native_shaders();
+    if (!g_dither_gated.load(std::memory_order_relaxed) && (!fixes || fixes->modules.empty())) return;
     uint32_t id = 0;
     std::shared_ptr<const GraphicsRecipe> recipe;
     std::shared_ptr<const PipelineLayoutInfo> layout;
@@ -115,7 +152,9 @@ void character_created(CharacterBackend& b, VkPipeline pipeline)
 // A backend made while the game already has its pipelines (a module exchange): their twins, as above.
 void prepare_twins(CharacterBackend& b)
 {
-    if (!g_dither_gated.load(std::memory_order_relaxed) || !b.variants) return;
+    if (!b.variants) return;
+    const auto fixes = b.variants->native_shaders();
+    if (!g_dither_gated.load(std::memory_order_relaxed) && (!fixes || fixes->modules.empty())) return;
     std::vector<std::tuple<uint32_t, std::shared_ptr<const GraphicsRecipe>, std::shared_ptr<const PipelineLayoutInfo>>> pipes;
     {
         std::shared_lock<std::shared_mutex> resources(b.device->res_mx);

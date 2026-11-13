@@ -71,6 +71,8 @@ void PipelineVariant::clear()
     if (pipeline) d_.DestroyPipeline(dev_, pipeline, nullptr);
     if (layout) d_.DestroyPipelineLayout(dev_, layout, nullptr);
     for (auto s : sets_) if (s) d_.DestroyDescriptorSetLayout(dev_, s, nullptr);
+    samplers_.clear();
+    source_sets_.clear();
     pipeline = VK_NULL_HANDLE; layout = VK_NULL_HANDLE; own_layout = VK_NULL_HANDLE; image_count=0; sets_.clear();
 }
 
@@ -129,22 +131,61 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
                             const VertexInputRecipe& vertex, uint32_t max_sets,
                             const FragmentPatch& patch,const VkPhysicalDeviceLimits& limits)
 {
+    native_warning.clear(); native_replaced = 0;
+    if (!patch.native_shaders || patch.native_shaders->modules.empty())
+        return build_recipe(recipe, source, vertex, max_sets, patch, limits);
+    GraphicsRecipe changed = recipe;
+    for (auto& stage : changed.stages) {
+        if (!stage.shader) continue;
+        const auto found = patch.native_shaders->modules.find((uint64_t(stage.stage) << 32) | stage.shader->hash);
+        if (found == patch.native_shaders->modules.end()) continue;
+        std::string why;
+        if (!patch.native_shaders->compatible ||
+            !patch.native_shaders->compatible(stage.shader->code, found->second->code, stage.stage, stage.entry, why)) {
+            native_warning = why.empty() ? "Native shader interface validator unavailable" : why;
+            continue; // Only this shader falls back; an invalid shader must not suppress a Mod's mesh.
+        }
+        stage.shader = found->second;
+        ++native_replaced;
+    }
+    if (build_recipe(changed, source, vertex, max_sets, patch, limits)) return true;
+    if (!patch.native_only && native_replaced) {
+        native_warning = "Native replacement cannot serve this mesh variant (" + reason + "); original stages kept";
+        native_replaced = 0;
+        return build_recipe(recipe, source, vertex, max_sets, patch, limits);
+    }
+    return false;
+}
+
+bool PipelineVariant::build_recipe(const GraphicsRecipe& recipe, const PipelineLayoutInfo& source,
+                                   const VertexInputRecipe& vertex, uint32_t max_sets,
+                                   const FragmentPatch& patch,const VkPhysicalDeviceLimits& limits)
+{
     clear(); reason.clear(); result = VK_SUCCESS;
     VertexRepoint rewritten;
     if (patch.keep_vertex) {
         // Only the layout: the private set above the pipeline's own sets, no vertex rewrite.
         if (!recipe.complete) { reason = "recipe:" + recipe.reason; return false; }
-        if (!source.complete || source.flags || source.sets.empty() || source.sets.size() > 8 || source.sets.size() >= max_sets) {
+        if (!source.complete || source.flags || (!patch.native_only && source.sets.empty()) || source.sets.size() > 8 ||
+            source.sets.size() + (patch.native_only ? 0 : 1) > max_sets) {
             reason = "layout_requires_complete_sets_and_one_free_slot"; return false;
         }
         for (const auto& s : source.sets) {
             if (!s || !s->complete || s->flags) { reason = "set_layout_unsupported"; return false; }
-            for (const auto& pair : s->bindings)
-                if (!pair.second.immutable_samplers.empty() || pair.second.flags) { reason = "immutable_sampler_or_binding_flags"; return false; }
+            for (const auto& pair : s->bindings) {
+                const auto& b = pair.second;
+                if (b.flags) { reason = "binding_flags_unsupported"; return false; }
+                if (!b.immutable_samplers.empty() && !s->lifetime) { reason = "immutable_layout_not_retained"; return false; }
+                if (b.immutable_owners.size() != b.immutable_samplers.size()) { reason = "immutable_sampler_not_retained"; return false; }
+                for (size_t i = 0; i < b.immutable_owners.size(); ++i)
+                    if (!b.immutable_owners[i] || b.immutable_owners[i]->handle != b.immutable_samplers[i]) {
+                        reason = "immutable_sampler_not_retained"; return false;
+                    }
+            }
         }
         // A texture-only draw moves images; a twin of the application's pipeline (D-133) only drops the dither;
         // a Mod's own mesh under the application's vertex stage (D-176) may change the vertex input alone.
-        if (patch.images.empty() && patch.nulls.empty() && !patch.no_dither && !patch.own_geometry) {
+        if (patch.images.empty() && patch.nulls.empty() && !patch.no_dither && !patch.own_geometry && !patch.native_only) {
             reason = "texture_only_variant_without_images"; return false;
         }
     } else if (!prepare_vertex_variant(recipe, source, max_sets, rewritten, reason)) return false;
@@ -155,31 +196,42 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
     if(image_count>32){reason="fragment_patch_budget";return false;}
     bone_set = rewritten.bone_set; bone_binding = rewritten.bone_binding;
     size_t vs_index = 0;
-    while (recipe.stages[vs_index].stage != VK_SHADER_STAGE_VERTEX_BIT) ++vs_index;
+    while (vs_index < recipe.stages.size() && recipe.stages[vs_index].stage != VK_SHADER_STAGE_VERTEX_BIT) ++vs_index;
     auto good = [&](VkResult r, const char* what) {
         result = r;
         if (r != VK_SUCCESS) { reason = what; return false; }
         return true;
     };
+    std::vector<VkDescriptorSetLayout> layouts;
     for (const auto& s : source.sets) {
+        if (s->lifetime) {
+            source_sets_.push_back(s); layouts.push_back(s->lifetime->handle);
+            continue;
+        }
         std::vector<VkDescriptorSetLayoutBinding> bindings;
         for (const auto& pair : s->bindings) {
             const auto& b = pair.second;
-            bindings.push_back({pair.first, static_cast<VkDescriptorType>(b.type), b.count, b.stages, nullptr});
+            bindings.push_back({pair.first, static_cast<VkDescriptorType>(b.type), b.count, b.stages,
+                                b.immutable_samplers.empty() ? nullptr : b.immutable_samplers.data()});
+            samplers_.insert(samplers_.end(), b.immutable_owners.begin(), b.immutable_owners.end());
         }
         VkDescriptorSetLayoutCreateInfo ci = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         ci.bindingCount = static_cast<uint32_t>(bindings.size()); ci.pBindings = bindings.data();
         VkDescriptorSetLayout set = VK_NULL_HANDLE;
         if (!good(d_.CreateDescriptorSetLayout(dev_, &ci, nullptr, &set), "create_set_layout")) { clear(); return false; }
         sets_.push_back(set);
+        layouts.push_back(set);
     }
+    if (!patch.native_only) {
     const auto own_bindings=private_draw_bindings(image_count);
     VkDescriptorSetLayoutCreateInfo set_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     set_info.bindingCount = static_cast<uint32_t>(own_bindings.size()); set_info.pBindings = own_bindings.data();
     if (!good(d_.CreateDescriptorSetLayout(dev_, &set_info, nullptr, &own_layout), "create_own_layout")) { clear(); return false; }
     sets_.push_back(own_layout);
+    layouts.push_back(own_layout);
+    }
     VkPipelineLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_info.setLayoutCount = static_cast<uint32_t>(sets_.size()); layout_info.pSetLayouts = sets_.data();
+    layout_info.setLayoutCount = static_cast<uint32_t>(layouts.size()); layout_info.pSetLayouts = layouts.data();
     layout_info.pushConstantRangeCount = static_cast<uint32_t>(source.pushes.size()); layout_info.pPushConstantRanges = source.pushes.data();
     if (!good(d_.CreatePipelineLayout(dev_, &layout_info, nullptr, &layout), "create_pipeline_layout")) { clear(); return false; }
     VkRenderPass pass = VK_NULL_HANDLE;

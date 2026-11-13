@@ -148,6 +148,7 @@ STEPS = [
     ("M2 hook rendering", [os.path.join(HERE, "m2_test.py")]),
     ("character replacement", [os.path.join(HERE, "character_test.py")]),
     ("live INI rendering", [os.path.join(HERE, "runtime_test.py")]),
+    ("native game shader replacement", [os.path.join(HERE, "native_shader_test.py")]),
     ("owned Present on a swap chain", [os.path.join(HERE, "owned_present_test.py")]),
     ("probe end to end", [os.path.join(HERE, "probe_test.py")]),
     ("modes", [os.path.join(HERE, "modes_test.py")]),
@@ -168,6 +169,7 @@ GROUPS = {
     "ini": ["INI", "frontend host", "declarations", "registers", "Core facts", "texture roles", "texture properties", "offline plans",
             "as the judge", "one line at a time"],
     "owned": ["owned", "GPU resources", "HLSL", "Present compute", "as the judge"],
+    "native-shaders": ["native game shader", "native tracker", "pipeline recipes and variants", "live INI rendering", "Vulkan validation"],
     # A minute or so, for every change: text, the Python units, the expression cases, what each command
     # class does in a replaced draw, and the original as the judge.
     "quick": ["text check", "unit tests", "source-defined INI evaluation", "INI execution matrix", "as the judge"],

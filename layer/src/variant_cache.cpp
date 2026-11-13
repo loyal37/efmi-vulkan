@@ -23,6 +23,9 @@ VariantCache::Key VariantCache::key_for(uint64_t identity, const VertexInputReci
     key.fragment.push_back(fragment.keep_vertex ? 1u : 0u);
     key.fragment.push_back(fragment.no_dither ? 1u : 0u);
     key.fragment.push_back(fragment.own_geometry ? 1u : 0u);
+    key.fragment.push_back(fragment.native_only ? 1u : 0u);
+    const uint64_t revision = fragment.native_shaders ? fragment.native_shaders->revision : 0;
+    key.fragment.push_back(uint32_t(revision)); key.fragment.push_back(uint32_t(revision >> 32));
     return key;
 }
 
@@ -43,13 +46,17 @@ VariantCache::~VariantCache() { stop(); }
 VariantResult VariantCache::request(uint64_t identity, std::shared_ptr<const GraphicsRecipe> recipe,
                                    std::shared_ptr<const PipelineLayoutInfo> layout, const VertexInputRecipe& vertex,const FragmentPatch& fragment)
 {
-    return submit(identity, std::move(recipe), std::move(layout), vertex, fragment, false);
+    auto active = fragment;
+    if (!active.native_shaders) active.native_shaders = native_shaders();
+    return submit(identity, std::move(recipe), std::move(layout), vertex, active, false);
 }
 
 VariantResult VariantCache::prepare(uint64_t identity, std::shared_ptr<const GraphicsRecipe> recipe,
                                    std::shared_ptr<const PipelineLayoutInfo> layout, const VertexInputRecipe& vertex,const FragmentPatch& fragment)
 {
-    return submit(identity, std::move(recipe), std::move(layout), vertex, fragment, true);
+    auto active = fragment;
+    if (!active.native_shaders) active.native_shaders = native_shaders();
+    return submit(identity, std::move(recipe), std::move(layout), vertex, active, true);
 }
 
 VariantResult VariantCache::submit(uint64_t identity, std::shared_ptr<const GraphicsRecipe> recipe,
@@ -89,10 +96,12 @@ VariantResult VariantCache::await(uint64_t identity, std::shared_ptr<const Graph
                                   std::shared_ptr<const PipelineLayoutInfo> layout, const VertexInputRecipe& vertex,
                                   const FragmentPatch& fragment, std::chrono::milliseconds timeout)
 {
-    auto result = request(identity, recipe, layout, vertex, fragment);
+    auto active = fragment;
+    if (!active.native_shaders) active.native_shaders = native_shaders();
+    auto result = submit(identity, recipe, layout, vertex, active, false);
     if (result.state != VariantState::Queued && result.state != VariantState::Building) return result;
     const auto began = std::chrono::steady_clock::now();
-    const auto key = key_for(identity, vertex, fragment);
+    const auto key = key_for(identity, vertex, active);
     std::unique_lock<std::mutex> lock(mutex_);
     ++waits_;
     done_.wait_for(lock, timeout, [&] {

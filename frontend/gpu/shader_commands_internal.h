@@ -25,7 +25,8 @@ struct ShaderDevice {
             ShaderDevice& d;spv_context context=nullptr;spv_validator_options options=nullptr;spv_diagnostic diagnostic=nullptr;
             ~Validation(){if(diagnostic)d.spvDiagnosticDestroy(diagnostic);if(options)d.spvValidatorOptionsDestroy(options);if(context)d.spvContextDestroy(context);}
         } v{*this};
-        v.context=spvContextCreate(program.vulkan_version>=VK_API_VERSION_1_2?SPV_ENV_VULKAN_1_2:SPV_ENV_VULKAN_1_1);
+        v.context=spvContextCreate(program.vulkan_version>=VK_API_VERSION_1_3?SPV_ENV_VULKAN_1_3:
+                                  program.vulkan_version>=VK_API_VERSION_1_2?SPV_ENV_VULKAN_1_2:SPV_ENV_VULKAN_1_1);
         v.options=spvValidatorOptionsCreate();shader_require(v.context && v.options,"Cannot create shader validator");
         spvValidatorOptionsSetScalarBlockLayout(v.options,host.scalar_block_layout);
         spvValidatorOptionsSetUniformBufferStandardLayout(v.options,host.uniform_buffer_standard_layout);

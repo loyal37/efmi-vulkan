@@ -19,9 +19,6 @@ RESOURCE_HOOKS(ShaderModule, VkShaderModule, VkShaderModuleCreateInfo, on_create
 RESOURCE_HOOKS(Image, VkImage, VkImageCreateInfo, on_create_image, on_destroy_image)
 RESOURCE_HOOKS(ImageView, VkImageView, VkImageViewCreateInfo, on_create_image_view, on_destroy_image_view)
 RESOURCE_HOOKS(BufferView, VkBufferView, VkBufferViewCreateInfo, on_create_buffer_view, on_destroy_buffer_view)
-RESOURCE_HOOKS(Sampler, VkSampler, VkSamplerCreateInfo, on_create_sampler, on_destroy_sampler)
-RESOURCE_HOOKS(DescriptorSetLayout, VkDescriptorSetLayout, VkDescriptorSetLayoutCreateInfo,
-               on_create_set_layout, on_destroy_set_layout)
 RESOURCE_HOOKS(PipelineLayout, VkPipelineLayout, VkPipelineLayoutCreateInfo, on_create_pipeline_layout, on_destroy_pipeline_layout)
 RESOURCE_HOOKS(RenderPass, VkRenderPass, VkRenderPassCreateInfo, on_create_render_pass, on_destroy_render_pass)
 RESOURCE_HOOKS(Framebuffer, VkFramebuffer, VkFramebufferCreateInfo, on_create_framebuffer, on_destroy_framebuffer)
@@ -30,6 +27,38 @@ RESOURCE_HOOKS(DescriptorUpdateTemplate, VkDescriptorUpdateTemplate, VkDescripto
 RESOURCE_HOOKS(DescriptorUpdateTemplateKHR, VkDescriptorUpdateTemplate, VkDescriptorUpdateTemplateCreateInfo,
                on_create_descriptor_template, on_destroy_descriptor_template)
 #undef RESOURCE_HOOKS
+
+VKAPI_ATTR VkResult VKAPI_CALL hk_CreateSampler(VkDevice device, const VkSamplerCreateInfo* info,
+                                               const VkAllocationCallbacks* alloc, VkSampler* sampler)
+{
+    count_call(HI_CreateSampler);
+    Device* dev = dev_of(device);
+    const auto result = dev->d.CreateSampler(device, info, alloc, sampler);
+    if (result == VK_SUCCESS) on_create_sampler(dev, *sampler, info, alloc);
+    return result;
+}
+VKAPI_ATTR void VKAPI_CALL hk_DestroySampler(VkDevice device, VkSampler sampler, const VkAllocationCallbacks* alloc)
+{
+    count_call(HI_DestroySampler);
+    Device* dev = dev_of(device);
+    if (!sampler || !on_destroy_sampler(dev, sampler)) dev->d.DestroySampler(device, sampler, alloc);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL hk_CreateDescriptorSetLayout(VkDevice device, const VkDescriptorSetLayoutCreateInfo* info,
+                                                           const VkAllocationCallbacks* alloc, VkDescriptorSetLayout* layout)
+{
+    count_call(HI_CreateDescriptorSetLayout);
+    Device* dev = dev_of(device);
+    const auto result = dev->d.CreateDescriptorSetLayout(device, info, alloc, layout);
+    if (result == VK_SUCCESS) on_create_set_layout(dev, *layout, info, alloc);
+    return result;
+}
+VKAPI_ATTR void VKAPI_CALL hk_DestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout layout, const VkAllocationCallbacks* alloc)
+{
+    count_call(HI_DestroyDescriptorSetLayout);
+    Device* dev = dev_of(device);
+    if (!layout || !on_destroy_set_layout(dev, layout)) dev->d.DestroyDescriptorSetLayout(device, layout, alloc);
+}
 
 #define RENDER_PASS2_HOOK(Name) \
     VKAPI_ATTR VkResult VKAPI_CALL hk_##Name(VkDevice device, const VkRenderPassCreateInfo2* info, \

@@ -1,5 +1,5 @@
 // Metadata for shader modules, image resources and descriptor bindings.
-// No Vulkan calls are made here. Ordinary sets resolve at submit; pushes at record.
+// Ordinary sets resolve at submit; pushes at record. Retained immutable samplers defer destruction.
 #include "state.h"
 #include "json.h"
 #include "texture_identity.h"
@@ -159,7 +159,7 @@ void on_create_buffer_view(Device* dev, VkBufferView h, const VkBufferViewCreate
     dev->buffer_views[h] = view;
 }
 
-void on_create_sampler(Device* dev, VkSampler h, const VkSamplerCreateInfo* info)
+void on_create_sampler(Device* dev, VkSampler h, const VkSamplerCreateInfo* info, const VkAllocationCallbacks* alloc)
 {
     if (skip(dev)) return;
     std::unique_lock<std::shared_mutex> lock(dev->res_mx);
@@ -171,7 +171,28 @@ void on_create_sampler(Device* dev, VkSampler h, const VkSamplerCreateInfo* info
     s.address[0] = info->addressModeU;
     s.address[1] = info->addressModeV;
     s.address[2] = info->addressModeW;
+    // A custom allocator's user data may expire when the application destroys the object.
+    // Such samplers remain tracked but cannot enter an asynchronously retained variant.
+    if (!alloc && dev->d.DestroySampler) {
+        s.lifetime = std::make_shared<SamplerLifetime>();
+        s.lifetime->device = dev->handle; s.lifetime->handle = h; s.lifetime->destroy = dev->d.DestroySampler;
+    }
     dev->samplers[h] = s;
+}
+
+bool on_destroy_sampler(Device* dev, VkSampler h)
+{
+    if (skip(dev)) return false;
+    std::shared_ptr<SamplerLifetime> owner;
+    {
+        std::unique_lock<std::shared_mutex> lock(dev->res_mx);
+        const auto it = dev->samplers.find(h);
+        if (it == dev->samplers.end()) return false;
+        owner = it->second.lifetime;
+        if (owner) owner->requested = true;
+        dev->samplers.erase(it);
+    }
+    return bool(owner); // The last owner, possibly this one, performs the actual driver call.
 }
 
 #define DESTROY_RESOURCE(fn, Handle, map) \
@@ -183,8 +204,6 @@ void on_create_sampler(Device* dev, VkSampler h, const VkSamplerCreateInfo* info
 DESTROY_RESOURCE(on_destroy_image, VkImage, images)
 DESTROY_RESOURCE(on_destroy_image_view, VkImageView, image_views)
 DESTROY_RESOURCE(on_destroy_buffer_view, VkBufferView, buffer_views)
-DESTROY_RESOURCE(on_destroy_sampler, VkSampler, samplers)
-DESTROY_RESOURCE(on_destroy_set_layout, VkDescriptorSetLayout, set_layouts)
 DESTROY_RESOURCE(on_destroy_pipeline_layout, VkPipelineLayout, pipeline_layouts)
 DESTROY_RESOURCE(on_destroy_descriptor_template, VkDescriptorUpdateTemplate, descriptor_templates)
 #undef DESTROY_RESOURCE
@@ -209,13 +228,33 @@ static uint64_t intern(const std::string& key)
     return g_interned.emplace(key, uint64_t(g_interned.size() + 1)).first->second;
 }
 
-void on_create_set_layout(Device* dev, VkDescriptorSetLayout h, const VkDescriptorSetLayoutCreateInfo* info)
+bool on_destroy_set_layout(Device* dev, VkDescriptorSetLayout h)
+{
+    if (skip(dev)) return false;
+    std::shared_ptr<const DescriptorLayoutInfo> held;
+    {
+        std::unique_lock<std::shared_mutex> lock(dev->res_mx);
+        const auto it = dev->set_layouts.find(h);
+        if (it == dev->set_layouts.end()) return false;
+        held = it->second;
+        if (held->lifetime) held->lifetime->requested = true;
+        dev->set_layouts.erase(it);
+    }
+    return bool(held->lifetime);
+}
+
+void on_create_set_layout(Device* dev, VkDescriptorSetLayout h, const VkDescriptorSetLayoutCreateInfo* info, const VkAllocationCallbacks* alloc)
 {
     if (skip(dev)) return;
     std::unique_lock<std::shared_mutex> lock(dev->res_mx);
     auto layout = std::make_shared<DescriptorLayoutInfo>();
     layout->id = dev->next_resource_id++;
     layout->flags = info->flags;
+    if (!alloc && dev->d.DestroyDescriptorSetLayout) {
+        layout->lifetime = std::make_shared<SetLayoutLifetime>();
+        layout->lifetime->device = dev->handle; layout->lifetime->handle = h;
+        layout->lifetime->destroy = dev->d.DestroyDescriptorSetLayout;
+    }
     auto flags = find_next<VkDescriptorSetLayoutBindingFlagsCreateInfo>(
         info->pNext, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO);
     for (auto p = static_cast<const VkBaseInStructure*>(info->pNext); p; p = p->pNext)
@@ -230,7 +269,13 @@ void on_create_set_layout(Device* dev, VkDescriptorSetLayout h, const VkDescript
         if (flags && i < flags->bindingCount) b.flags = flags->pBindingFlags[i];
         if (in.pImmutableSamplers &&
             (b.type == VK_DESCRIPTOR_TYPE_SAMPLER || b.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER))
+        {
             b.immutable_samplers.assign(in.pImmutableSamplers, in.pImmutableSamplers + b.count);
+            for (auto sampler : b.immutable_samplers) {
+                const auto found = dev->samplers.find(sampler);
+                b.immutable_owners.push_back(found == dev->samplers.end() ? nullptr : found->second.lifetime);
+            }
+        }
         layout->bindings[in.binding] = std::move(b);
     }
     if (layout->complete) {

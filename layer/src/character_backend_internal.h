@@ -23,6 +23,7 @@
 // only declares here is defined, with its comment, in the part that has its concern.
 #pragma once
 #include "character_backend.h"
+#include "shader_fixes.h"
 #include "../../frontend/gpu/dither_kills.h"
 #include "character_module.h"
 #include "command_owner.h"
@@ -632,6 +633,7 @@ void generation_status(CharacterGeneration&, JsonWriter&);
 // it, one per character Mod it could take. The generation's Present, saves and F10 are the folder's.
 struct FolderGeneration {
     Device* device = nullptr;
+    std::shared_ptr<const NativeShaderSet> shader_fixes;
     std::vector<std::shared_ptr<CharacterGeneration>> packages; // in the folder's order
     std::vector<std::pair<std::string, std::string>> left_out;   // a Mod's INI and why it has no package
     std::shared_ptr<OwnedPresenter> presenter;
@@ -834,8 +836,10 @@ public:
     std::atomic<uint64_t> frame_us{0}, frame_calls{0}; // character_frame: every package's presentation work
     // D-133: the twins of the application's pipelines without the character dither, by pipeline id.
     std::shared_mutex twins_mx;
-    std::unordered_map<uint32_t, std::shared_ptr<const PipelineVariant>> twins;
-    std::unordered_set<uint32_t> twins_failed;
+    using TwinKey = std::tuple<uint64_t, uint32_t, bool>;
+    std::map<TwinKey, std::shared_ptr<const PipelineVariant>> twins;
+    std::set<TwinKey> twins_failed;
+    std::atomic<uint64_t> shader_fix_binds{0};
     std::atomic<uint64_t> twin_binds{0}, twins_prepared{0};
     // The packages' sections by hash (D-096, D-097): a draw's index region is hashed once for every
     // package and looked up here, so only the packages with a section of that hash see the draw.

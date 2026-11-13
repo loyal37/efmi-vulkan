@@ -48,6 +48,8 @@ public:
     // Finished variants the cache let go of when it was full (L-08): the least recently asked for first.
     uint64_t evictions() const { return evictions_.load(); }
     uint64_t wait_microseconds() const { return wait_us_.load(); }
+    void native_shaders(std::shared_ptr<const NativeShaderSet> shaders) { std::atomic_store(&native_shaders_, std::move(shaders)); }
+    std::shared_ptr<const NativeShaderSet> native_shaders() const { return std::atomic_load(&native_shaders_); }
     // Removes every vertex variant of an original. Existing command-buffer references keep a
     // ready variant alive; an in-progress build may finish but cannot reinsert its retired entry.
     void retire(uint64_t identity);
@@ -95,6 +97,7 @@ private:
     // `released`, which the caller lets go of outside the lock. Caller holds mutex_.
     void evict(std::vector<std::shared_ptr<Job>>& released);
     bool stopped_ = false;
+    std::shared_ptr<const NativeShaderSet> native_shaders_;
     std::map<Key, std::shared_ptr<Job>> jobs_;
     std::deque<std::shared_ptr<Job>> queue_, later_;
     // Several builders: the variants a character needs when it first appears compile in parallel,

@@ -75,21 +75,36 @@ struct BufferViewInfo {
     uint64_t offset = 0, range = 0;
 };
 
+// Same-handle ownership for immutable samplers in asynchronous pipeline variants.
+// Armed only when the application destroys the sampler; released before device destruction.
+template<class Handle, class Destroy> struct ResourceLifetime {
+    VkDevice device = VK_NULL_HANDLE;
+    Handle handle = VK_NULL_HANDLE;
+    Destroy destroy = nullptr;
+    bool requested = false;
+    ~ResourceLifetime() { if (requested && destroy) destroy(device, handle, nullptr); }
+};
+using SamplerLifetime = ResourceLifetime<VkSampler, PFN_vkDestroySampler>;
+using SetLayoutLifetime = ResourceLifetime<VkDescriptorSetLayout, PFN_vkDestroyDescriptorSetLayout>;
+
 struct SamplerInfo {
     uint32_t id = 0;
     uint32_t mag = 0, min = 0, mipmap = 0;
     uint32_t address[3] = {};
+    std::shared_ptr<SamplerLifetime> lifetime;
 };
 
 struct DescriptorBinding {
     uint32_t type = 0, count = 0, stages = 0, flags = 0;
     std::vector<VkSampler> immutable_samplers;
+    std::vector<std::shared_ptr<SamplerLifetime>> immutable_owners;
 };
 
 struct DescriptorLayoutInfo {
     uint32_t id = 0, flags = 0;
     bool complete = true;
     std::map<uint32_t, DescriptorBinding> bindings;
+    std::shared_ptr<SetLayoutLifetime> lifetime;
     // Equal contents, equal id (interned at creation), so two layouts compare in one step; 0 when
     // the layout is not completely known.
     uint64_t canonical = 0;
@@ -156,10 +171,10 @@ void on_create_image_view(Device*, VkImageView, const VkImageViewCreateInfo*);
 void on_destroy_image_view(Device*, VkImageView);
 void on_create_buffer_view(Device*, VkBufferView, const VkBufferViewCreateInfo*);
 void on_destroy_buffer_view(Device*, VkBufferView);
-void on_create_sampler(Device*, VkSampler, const VkSamplerCreateInfo*);
-void on_destroy_sampler(Device*, VkSampler);
-void on_create_set_layout(Device*, VkDescriptorSetLayout, const VkDescriptorSetLayoutCreateInfo*);
-void on_destroy_set_layout(Device*, VkDescriptorSetLayout);
+void on_create_sampler(Device*, VkSampler, const VkSamplerCreateInfo*, const VkAllocationCallbacks* = nullptr);
+bool on_destroy_sampler(Device*, VkSampler);
+void on_create_set_layout(Device*, VkDescriptorSetLayout, const VkDescriptorSetLayoutCreateInfo*, const VkAllocationCallbacks* = nullptr);
+bool on_destroy_set_layout(Device*, VkDescriptorSetLayout);
 void on_create_pipeline_layout(Device*, VkPipelineLayout, const VkPipelineLayoutCreateInfo*);
 void on_destroy_pipeline_layout(Device*, VkPipelineLayout);
 void on_allocate_sets(Device*, const VkDescriptorSetAllocateInfo*, const VkDescriptorSet*);

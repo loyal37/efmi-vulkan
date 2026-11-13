@@ -110,10 +110,11 @@
 - character_core.cpp:465-470 against `global $version = 1.49` in Core\EFMI\main.ini. No installed Mod requires more than 1.48. R-06.
 - Fixed (P0-2): the native RegisterMod compares with the installed Core's `$version` (CharacterProgram::core_version reads its main.ini) and sets `$mod_id` 1 or -1 as the original's list; a Mod requiring more than the installed Core stays off and is told. check_mod_containment.py: a Mod requiring 1.49 draws, one requiring 9.99 does not and is told (both failing before).
 
-## LIMIT-048: What route 2's first step does not do yet (2026-11-12, D-187, D-188, docs/vulkan-native-mods.md)
+## LIMIT-048: Remaining native route boundaries (D-187 to D-190, docs/vulkan-native-mods.md)
 
 - At a draw no Mod section made the Mod's, a ShaderOverride's lists set variables, run lists and skip the draw; a binding or a draw of those lists is not done (the game's draw stays, said once, the status's `shader_overrides.kept`), and the game's textures there are not answered (`checktextureoverride = ps-tN`, texture queries: they are answered from a package's material state). Needs the slots of route 2's later steps.
-- The legacy `depth_filter` and `model` of a SPIR-V-hash section do nothing (a notice): they swap in the original shader, which needs shader replacement (the next step).
+- D-190 implements native graphics shader replacement by original SPIR-V hash, F10, last-good reload and offline HLSL compilation. It requires tracked graphics recipes, matching single entry points, supported capabilities and compatible resource/stage interfaces. Unsupported binding flags/extension state and immutable samplers/layouts with custom allocators are refused. Empty Mods supports initial file loading, but F10 input still needs an INI generation. No general compute replacement.
+- The legacy `depth_filter` and `model` of a SPIR-V-hash section still do nothing (a notice). Native HLSL's model is an explicit offline compiler option; depth filtering and `pink`/`original` marking remain follow-ups to D-190's pipeline replacement.
 - Hunting (D-189 added index and vertex buffers, render targets, the `hunting` value, dumps, frame analysis's log): no compute shaders (dispatches are not hooked), marking mode `skip` only (the others select and mark but draw as is), render targets only where a draw is recorded inside its render pass instance, frame analysis without resource dumps, the 60-second timeout counts hunting keys only (the original counts any key event). The overlay shows a notice per key, not the original's steady `VS:n/m PS:n/m` line.
 - A module created inline in a pipeline (`VkShaderModuleCreateInfo` chained into a stage) or a shader object has no hash here; none was seen in this game.
 - Nothing of it has run in the game.

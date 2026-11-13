@@ -773,6 +773,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         };
         auto keep_variant = [&](uint32_t i, const VariantResult& result) {
             if (!result.variant) return false;
+            if (!result.variant->native_warning.empty()) note(result.variant->native_warning);
             variants[i] = result.variant;
             if (variant_lookup.size() < 65536)
                 variant_lookup.emplace(std::make_tuple(pipe->second.id, list->first + i, material_plans[i], no_dither), result.variant);
