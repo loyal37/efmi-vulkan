@@ -34,7 +34,8 @@ namespace {
 bool has_native_shader(const std::shared_ptr<const NativeShaderSet>& fixes, const GraphicsRecipe& recipe)
 {
     if (fixes) for (const auto& stage : recipe.stages)
-        if (stage.shader && fixes->modules.count((uint64_t(stage.stage) << 32) | stage.shader->hash)) return true;
+        if (stage.shader && fixes->allows(stage.shader->hash, recipe) &&
+            fixes->modules.count((uint64_t(stage.stage) << 32) | stage.shader->hash)) return true;
     return false;
 }
 

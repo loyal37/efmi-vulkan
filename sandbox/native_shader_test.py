@@ -45,7 +45,8 @@ def main():
                  "failed HLSL compilation preserves the published last good shader")
     vertex, fragment = sandbox_shader_hashes()
     for entry, case in (("layer", "pixel"), ("inject", "pixel"), ("layer", "empty"),
-                        ("layer", "vertex"), ("layer", "interface"), ("layer", "stage"), ("layer", "skip"), ("layer", "image_type")):
+                        ("layer", "vertex"), ("layer", "interface"), ("layer", "stage"), ("layer", "skip"), ("layer", "image_type"),
+                        ("layer", "depth_active"), ("layer", "depth_inactive")):
         if selected and case not in selected: continue
         label = entry + " " + case
         root = Path(test_dir("native-shaders-"))
@@ -56,6 +57,9 @@ def main():
         if case == "skip":
             with (mods / "native" / "mod.ini").open("a", encoding="ascii") as ini:
                 ini.write("[ShaderOverrideOriginalHash]\nhash = %08x\nhandling = skip\n" % fragment)
+        if case.startswith("depth_"):
+            with (mods / "native" / "mod.ini").open("a", encoding="ascii") as ini:
+                ini.write("[ShaderOverrideDepth]\nhash = %08x\ndepth_filter = %s\n" % (fragment, case))
         (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\n"
                                         "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
         settings = root / "settings"
@@ -95,19 +99,19 @@ def main():
         if case == "vertex":
             checks.equal(band_pixels(readback), 0, label + ": replacement vertex shader moves every mesh off screen")
         else:
-            checks.equal(colored_pixels(readback, (255, 0, 255)) > 200, case not in ("interface", "stage", "skip", "image_type"),
+            checks.equal(colored_pixels(readback, (255, 0, 255)) > 200, case not in ("interface", "stage", "skip", "image_type", "depth_active"),
                          label + ": replacement image or original fallback as expected")
         if case in ("interface", "stage", "image_type"):
             checks.check((band_pixels(readback) or 0) > 200, label + ": the game's original meshes still draw")
         if case == "skip": checks.equal(band_pixels(readback), 0, label + ": ShaderOverride still matches the original hash after replacement")
         checks.equal(status.get("loaded", 0), 0 if case == "stage" else 1, label + ": expected validated files")
-        checks.equal(status.get("binds", 0) > 0, case not in ("interface", "stage", "image_type"),
+        checks.equal(status.get("binds", 0) > 0, case not in ("interface", "stage", "image_type", "depth_active"),
                      label + ": compatible replacement pipeline bound: " + str(status))
         checks.check("Validation Error" not in sb.output() and "VUID-" not in sb.output(), label + ": Vulkan validation clean")
         print("artifacts:", root)
     # The existing readback is one shot. These processes show their first notice only after F10,
     # so their first image proves what was drawn after the replacement changed or disappeared.
-    for change in ("reload", "invalid", "interface", "removed", "unchanged"):
+    for change in ("reload", "invalid", "interface", "removed", "unchanged", "depth_filter"):
         if selected and "f10:" + change not in selected: continue
         root = Path(test_dir("native-shader-" + change + "-"))
         mods = root / "Mods"
@@ -139,6 +143,9 @@ def main():
                     source.write_text("float4 main() : SV_Target3 { return float4(0,1,0,1); }", encoding="ascii")
                     path.write_bytes(compile_shader(source, root / "compiled", "12345678", "ps").read_bytes())
                 elif change == "removed": path.unlink()
+                elif change == "depth_filter":
+                    with (mods / "native" / "mod.ini").open("a", encoding="ascii") as ini:
+                        ini.write("[ShaderOverrideDepth]\nhash = %08x\ndepth_filter = depth_active\n" % fragment)
                 keys.write_text("1 121\n", encoding="ascii")
                 time.sleep(0.5)
                 keys.write_text("1\n", encoding="ascii")
@@ -157,6 +164,11 @@ def main():
                 if change == "removed":
                     checks.equal(after.get("loaded"), 0, "removed: F10 restores the game's shader")
                     checks.equal(colored_pixels(readback, (255, 0, 255)), 0, "removed: replacement color gone after F10")
+                elif change == "depth_filter":
+                    checks.equal(after.get("loaded"), 1, "depth_filter: the replacement stays loaded")
+                    checks.equal(colored_pixels(readback, (255, 0, 255)), 0, "depth_filter: F10 restores original on a draw without depth")
+                    checks.check((band_pixels(readback) or 0) > 200, "depth_filter: the original meshes remain visible")
+                    checks.check(after.get("revision") != before.get("revision"), "depth_filter: INI changes invalidate the pipeline revision")
                 else:
                     color = (0, 255, 0) if change == "reload" else (255, 0, 255)
                     checks.check(colored_pixels(readback, color) > 200, change + ": correct post-F10 image")

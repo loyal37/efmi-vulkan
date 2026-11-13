@@ -285,6 +285,7 @@ struct IniRuntime::Impl {
     // Route 2 (docs/vulkan-native-mods.md): the SPIR-V hashes the ShaderOverride sections name, the [Hunting] settings,
     // and the hunting keys the presentations dispatched, until the host takes them.
     std::vector<uint32_t> shader_hashes;
+    std::map<uint32_t, int> shader_depth_filters;
     HuntingSettings hunting;
     size_t hunting_keys_first = 0, hunting_keys_last = 0; // the hunting keys among the original's key actions
     std::atomic<int> hunting_mode{0}; // the host's hunting mode for G->hunting, 0 until the host says
@@ -509,7 +510,11 @@ std::shared_ptr<IniRuntime> IniRuntime::load(const RuntimeConfig& config, std::s
             // Route 2 (docs/vulkan-native-mods.md): the sections that name a SPIR-V module act at its draws; the
             // DX11-hash ones stay out, as the compatibility route keeps them.
             RuntimeParseSpirvShaderOverrides();
-            for (const auto& entry : G->mShaderOverrideMap) p.shader_hashes.push_back(uint32_t(entry.first));
+            for (const auto& entry : G->mShaderOverrideMap) {
+                p.shader_hashes.push_back(uint32_t(entry.first));
+                if (entry.second.depth_filter != DepthBufferFilter::NONE && entry.second.depth_filter != DepthBufferFilter::INVALID)
+                    p.shader_depth_filters[uint32_t(entry.first)] = int(entry.second.depth_filter);
+            }
             std::sort(p.shader_hashes.begin(), p.shader_hashes.end());
         }
         HostParseTextureOverrides();HostParseResourceMatching(); RuntimeCompilePresent(); RuntimeParseKeys();
@@ -783,6 +788,7 @@ void RuntimePublishTransitionParameters()
 }
 bool IniRuntime::replayable() const { return impl_->replayable; }
 std::vector<uint32_t> IniRuntime::shader_hashes() const { return impl_->shader_hashes; }
+std::map<uint32_t, int> IniRuntime::shader_depth_filters() const { return impl_->shader_depth_filters; }
 HuntingSettings IniRuntime::hunting() const { return impl_->hunting; }
 void IniRuntime::hunting_mode(int mode) { if (mode == 1 || mode == 2) impl_->hunting_mode.store(mode, std::memory_order_relaxed); }
 std::vector<HuntingAction> IniRuntime::take_hunting_actions()

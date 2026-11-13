@@ -4,6 +4,13 @@
 
 > Branches: main and engine-work, the branch of the worktree `.worktrees/fix` where the work is done; main is fast-forwarded to verified commits. Local commits and the remote-tracking ref are distinguished below.
 
+## 2.2.1: Native depth filters, D-191 (2026-11-13; sandbox verified, not deployed)
+
+- Implements the original ProcessShaderOverride depth rule for native replacements. The captured subpass's depth attachment decides active/inactive, independently of depth-test enable. The command lists still run and keep their original hash. Filters load with the INI/shader generation, and a filter-only F10 changes its revision and invalidates variants.
+- Built the worktree host/backend as 2.2.1, binary version strings checked; shared host/backend stamp remains 0x704757de049c7bb3. Root dist remains 2.1.8; latest game evidence remains 2.1.7. No game, deployment, launcher change or remote operation.
+- Failing first: depth-active/inactive image scenes 9/11 on 2.2.0; after the change plus filter-only F10, 17/17. Eleven selected regression steps pass: quick six and native-shaders five. Native shader scenes 87/87; tracker 185; recipes 170, cache 61 (including both depth attachment shapes), snapshots 52, GPU variants 63; live INI 221; Vulkan validation 76. Logs: build/d191-build.out, d191-depth-before.out, d191-depth-after.out, d191-quick.out, d191-native-regression.out. No full suite or installed-plan rerun for this metadata-only filter change.
+- Next offline step is hunting original/pink. New image checks reproduce the old behavior: 19/25, and mesh selection 7/8. These are failing baselines for the following change, not current feature acceptance.
+
 ## 2.2.0: Native shader replacement, D-190 (2026-11-13; sandbox verified, not deployed)
 
 - The user asked to review/integrate D-189, then continue the native route's game shader replacement without entering the game. D-189's reviewed commit is 08cf62b; integration into engine-work/main is 783a7c9. The frame-analysis collision fix and the D-189 results below precede that merge.

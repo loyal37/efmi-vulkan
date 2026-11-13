@@ -1077,6 +1077,12 @@ Design decisions D1 to D11 of the product itself are in `docs/plan.md`, section 
 - Measured: one map 20 ms, the ten together 99 ms; in the vk03 replay the draws' texture waits at startup 120 to 46 ms (median of three interleaved pairs), the longest startup frame 207 to 127 ms, pictures identical.
 - Enforced: the suite step "texture first-use loads against the original" (bench_texture_load.py --check) fails when one map alone or all of them take longer than the original's loads; the asset tests read every level of arena loads back (including one without its top level) and check one arena per busy period, one command pool per worker and the arena's release.
 
+## D-191: Native depth filters belong to the same immutable shader generation
+
+- Date: 2026-11-13. Original read first: HackerContext.cpp ProcessShaderOverride queries the bound depth-stencil view, keeps the replacement only when the depth filter matches, and always runs the section's command lists. DX11 provides reference-counted deferred resource destruction, hazard tracking and one-context order; Vulkan keeps pipeline snapshots alive through explicit owners and uses the captured subpass for this target state.
+- The native runtime exports the original parser's depth filters with its hashes. ShaderFixes loads after the INI candidate and compares both code and filters for revision reuse. Variant builders and native twins apply the filter to the recipe's subpass, independently of depth-test enable. A mismatch leaves the original stage; shader lists and original-hash matching are unchanged. Filter-only F10 invalidates both native twins and package variant lookups.
+- Initial depth-active/inactive image scenes failed 9/11 on 2.2.0; the same cases plus filter-only F10 pass 17/17 on the new build. CPU pipeline cases exercise no filter / active / inactive with and without a depth attachment. Source/build version 2.2.1; sandbox only, no deployment or game action.
+
 ## D-190: Native ShaderFixes are immutable revision snapshots and owned pipeline variants
 
 - Date: 2026-11-13; user requested D-189 integration followed by game shader replacement and offline work. D-189 reviewed as 08cf62b and merged as 783a7c9. Native shader implementation is source version 2.2.0; it is not deployed to the main checkout or game.

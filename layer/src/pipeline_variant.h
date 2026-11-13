@@ -24,6 +24,15 @@ struct NativeShaderSet {
     uint64_t revision = 0;
     // (Vulkan stage << 32) | original SPIR-V CRC-32C. A shader's original identity never changes.
     std::map<uint64_t, std::shared_ptr<const ShaderInfo>> modules;
+    // The original's DepthBufferFilter values: 1 active, 2 inactive. The captured subpass owns this state.
+    std::map<uint32_t, int> depth_filters;
+    bool allows(uint32_t hash, const GraphicsRecipe& recipe) const {
+        const auto filter = depth_filters.find(hash);
+        if (filter == depth_filters.end()) return true;
+        const bool depth = recipe.render_pass && recipe.subpass < recipe.render_pass->subpasses.size() &&
+                           recipe.render_pass->subpasses[recipe.subpass].uses_depth();
+        return filter->second == 1 ? depth : filter->second == 2 ? !depth : true;
+    }
     std::vector<std::string> warnings;
     bool (*compatible)(const std::vector<uint32_t>&, const std::vector<uint32_t>&,
                        VkShaderStageFlagBits, const std::string&, std::string&) = nullptr;

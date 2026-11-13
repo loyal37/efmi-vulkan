@@ -122,7 +122,10 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
                                                 TextureResidency* textures, std::shared_ptr<VariantCache> variants, Translucency* translucency, BoneMerge* bones)
 {
     auto folder = std::make_shared<FolderGeneration>();
-    folder->shader_fixes = load_shader_fixes(device, variants ? variants->native_shaders() : nullptr);
+    const auto load_fixes = [&] {
+        folder->shader_fixes = load_shader_fixes(device, variants ? variants->native_shaders() : nullptr,
+            folder->program && folder->program->runtime() ? folder->program->runtime()->shader_depth_filters() : std::map<uint32_t, int>{});
+    };
     folder->device = device;
     CharacterProgram::FolderSource source;
     source.mods = mods_folder();
@@ -144,6 +147,7 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
     if (!CharacterProgram::folder_has_inputs(source.mods)) {
         folder->empty = true; folder->reason = "the Mods folder holds no enabled INI";
         logf("folder generation: %s", folder->reason.c_str());
+        load_fixes();
         return folder;
     }
     if (!CharacterProgram::discover_folder(source, mods, folder->reason, gpu) || !folder->generation) {
@@ -151,9 +155,11 @@ std::shared_ptr<FolderGeneration> folder_create(Device* device, const VkPhysical
         logf("folder generation refused: %s", folder->reason.c_str());
         for (auto& m : mods) if (!m.reason.empty()) folder->left_out.push_back({m.ini.u8string(), m.reason});
         folder->generation.reset();
+        load_fixes();
         return folder;
     }
     folder->program = folder->generation.get();
+    load_fixes();
     if (folder->program->gpu()) folder->presenter = std::make_shared<OwnedPresenter>(device, folder->program->gpu());
     else if (!folder->program->gpu_reason().empty()) logf("owned GPU work unavailable: %s", folder->program->gpu_reason().c_str());
     // The discard gates as the load left them (D-133); the live generation's reach the draws (BUG-070:

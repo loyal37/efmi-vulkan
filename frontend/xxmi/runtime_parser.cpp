@@ -175,12 +175,11 @@ void RuntimeValidateSections(const std::vector<std::wstring>& native_shaders,boo
         // Vulkan character generation cannot see (D-089). Without shader hooks they stay inert, as for
         // shaders that never run: the original's overlay warning names each one that would act, and
         // the rest of the Mod loads. Shader operands then read the game's shaders as named by none.
-        // A ShaderOverride with a SPIR-V module's hash acts (docs/vulkan-native-mods.md); of its keys only the legacy
-        // ones that swap in the original shader have nothing to act on until a game shader is replaced.
+        // Native files are compiled offline; their shader model is a compiler option, not a runtime INI option.
         if (!shader_hooks && !_wcsnicmp(section.first.c_str(), L"ShaderOverride", 14) && RuntimeSpirvShaderHash(section.second)) {
             for (const auto& line : section.second.kv_vec)
-                if (!_wcsicmp(line.first.c_str(), L"depth_filter") || !_wcsicmp(line.first.c_str(), L"model")) {
-                    LayerGap(L"[%ls] %ls does nothing: no game shader is replaced yet", section.first.c_str(), line.first.c_str());
+                if (!_wcsicmp(line.first.c_str(), L"model")) {
+                    LayerGap(L"[%ls] model does nothing: compile the SPIR-V replacement with the required shader model", section.first.c_str());
                     break;
                 }
             continue;

@@ -136,7 +136,7 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
         return build_recipe(recipe, source, vertex, max_sets, patch, limits);
     GraphicsRecipe changed = recipe;
     for (auto& stage : changed.stages) {
-        if (!stage.shader) continue;
+        if (!stage.shader || !patch.native_shaders->allows(stage.shader->hash, recipe)) continue;
         const auto found = patch.native_shaders->modules.find((uint64_t(stage.stage) << 32) | stage.shader->hash);
         if (found == patch.native_shaders->modules.end()) continue;
         std::string why;

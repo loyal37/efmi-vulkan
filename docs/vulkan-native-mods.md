@@ -129,9 +129,10 @@ context until changed; not issuing a draw has no further consequence.
 
 - **Loading.** The folder generation parses the ShaderOverride sections whose hash is below 2^32 with
   the original's parser and its rules (merging, `allow_duplicate_hash`, `filter_index`, warnings);
-  the others are DX11 hashes and stay as today (section 5). The legacy keys `depth_filter` and `model`
-  of an acting section do nothing, with a notice (they swap in the original shader, which the next
-  step's replacement gives a meaning). The generation hands the layer the set of the acting hashes.
+  the others are DX11 hashes and stay as today (section 5). D-191 implements `depth_filter` for native
+  replacements: `depth_active` requires a depth attachment in the captured subpass, `depth_inactive`
+  requires none. A mismatch uses the original stage; the section's command lists still run. `model`
+  remains an offline HLSL compiler option, with a notice for the unused INI key.
 - **At every draw** (indexed, non-indexed, indirect) of every pipeline whose stage modules include such
   a hash: the entries of the vertex, tessellation control and evaluation (hull, domain), geometry and
   fragment (pixel) module run as the original's, in its order and with its draw call info (`DRAW_TYPE`
@@ -315,7 +316,9 @@ tracker; a single matching entry point; supported core capabilities and fully tr
 binding flags, unsupported extension state, and immutable samplers/layouts created with custom host
 allocators remain refused. An empty Mods folder supports initial ShaderFixes loading; F10 uses the
 INI generation's input dispatcher and therefore needs an active INI configuration. Compute shader
-replacement, native arbitrary resource/draw lists, legacy filters and marking modes remain pending.
+replacement, native arbitrary resource/draw lists and marking modes remain pending. D-191 publishes
+depth filters with the INI/shader generation; a filter-only F10 changes the revision and invalidates
+cached variants. Depth presence means an attachment, independently of the pipeline's depth-test switch.
 
 Verification lives in `sandbox/native_shader_test.py`; `sandbox/run_all.py --no-build --only native-shaders`
 adds tracker lifetime, pipeline/cache, live INI and validation checks. These are sandbox results, not

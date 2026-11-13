@@ -308,6 +308,30 @@ int main()
         cache.stop(); ready.variant.reset();
         check(driver.count()==0,"native adaptation fallback releases every owned object");
     }
+    {
+        // The native depth filter is render-target presence, not depth-test enable. Exercise both pass shapes.
+        for (bool has_depth : {false, true}) for (int filter : {0, 1, 2}) {
+            auto filtered=std::make_shared<GraphicsRecipe>(*recipe);
+            auto pass=std::make_shared<RenderPassRecipe>(*recipe->render_pass);
+            auto& subpass=pass->subpasses[filtered->subpass];
+            subpass.has_depth=has_depth; subpass.depth.attachment=has_depth ? 0 : VK_ATTACHMENT_UNUSED;
+            filtered->render_pass=pass;
+            auto fixes=std::make_shared<NativeShaderSet>(); fixes->revision=1;
+            for (const auto& stage:filtered->stages) if (stage.stage==VK_SHADER_STAGE_FRAGMENT_BIT) {
+                fixes->modules[(uint64_t(stage.stage)<<32)|stage.shader->hash]=stage.shader;
+                if (filter) fixes->depth_filters[stage.shader->hash]=filter;
+            }
+            fixes->compatible=[](const std::vector<uint32_t>&,const std::vector<uint32_t>&,VkShaderStageFlagBits,const std::string&,std::string&){return true;};
+            VariantCache cache(handle<VkDevice>(1),dispatch(),4); cache.native_shaders(fixes);
+            FragmentPatch patch; patch.keep_vertex=true; patch.native_only=true;
+            auto ready=await(cache,94,filtered,layout,vertex,patch);
+            const bool expected=!filter || (filter==1 ? has_depth : !has_depth);
+            check(ready.variant && bool(ready.variant->native_replaced)==expected,
+                  "native depth filtering selects original or replacement by the subpass depth target");
+            cache.stop(); ready.variant.reset();
+            check(driver.count()==0,"filtered native pipeline releases all owners");
+        }
+    }
     printf("variant cache: %d checks passed, %d failed\n",passed,failed);
     return failed?1:0;
 }

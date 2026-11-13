@@ -239,6 +239,8 @@ public:
     // The SPIR-V module hashes the generation's ShaderOverride sections name (below 2^32; the others are DX11
     // shaders' and stay as the compatibility route keeps them), ascending.
     std::vector<uint32_t> shader_hashes() const;
+    // Original DepthBufferFilter values: 1 needs a depth target, 2 needs no depth target.
+    std::map<uint32_t, int> shader_depth_filters() const;
     // The installation's [Hunting] settings as the generation read them, and the hunting keys its presentations
     // dispatched since the last call, in order.
     HuntingSettings hunting() const;

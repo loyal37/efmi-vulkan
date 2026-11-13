@@ -5,10 +5,12 @@
 #include <regex>
 
 namespace efvk {
-std::shared_ptr<const NativeShaderSet> load_shader_fixes(Device* device, const std::shared_ptr<const NativeShaderSet>& previous)
+std::shared_ptr<const NativeShaderSet> load_shader_fixes(Device* device, const std::shared_ptr<const NativeShaderSet>& previous,
+                                                       const std::map<uint32_t, int>& depth_filters)
 {
     static std::atomic<uint64_t> serial{0};
     auto next = std::make_shared<NativeShaderSet>();
+    next->depth_filters = depth_filters;
     next->compatible = &efmi::gpu::native_shader_interface;
     const auto tools = module_folder();
     const auto folder = (g_cfg.m2_settings.empty() ? tools / "settings" :
@@ -76,7 +78,7 @@ std::shared_ptr<const NativeShaderSet> load_shader_fixes(Device* device, const s
         if (previous) next->modules = previous->modules;
     }
     if (!next->modules.empty()) {
-        bool same = previous && previous->modules.size() == next->modules.size();
+        bool same = previous && previous->modules.size() == next->modules.size() && previous->depth_filters == next->depth_filters;
         if (same) for (const auto& item : next->modules) {
             const auto old = previous->modules.find(item.first);
             if (old == previous->modules.end() || old->second->code != item.second->code) { same = false; break; }
