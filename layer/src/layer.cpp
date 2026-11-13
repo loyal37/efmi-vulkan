@@ -496,12 +496,28 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdBindDescriptorSets(VkCommandBuffer cmd, VkPipel
 // ---------------------------------------------------------------------------
 // Draws and dispatches
 
+// Hunting may bind a pipeline for one draw, including an indirect/count draw forwarded by these hooks.
+// Restore after the driver call (or a skipped/replaced draw) so a subsequent draw cannot inherit the selection.
+struct DrawPipelineRestore {
+    Device* device;
+    CmdBuf* cb;
+    VkPipeline pipeline;
+    DrawPipelineRestore(Device* dev, VkCommandBuffer cmd) : device(dev), cb(cb_of(dev, cmd)), pipeline(cb ? cb->gfx_bound : VK_NULL_HANDLE) {}
+    ~DrawPipelineRestore() {
+        if (cb && pipeline && cb->gfx_bound != pipeline) {
+            device->d.CmdBindPipeline(cb->handle, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            cb->gfx_bound = pipeline;
+        }
+    }
+};
+
 VKAPI_ATTR void VKAPI_CALL hk_CmdDraw(VkCommandBuffer cmd, uint32_t vertices, uint32_t instances, uint32_t first_vertex,
                                       uint32_t first_instance)
 {
     count_call(HI_CmdDraw);
     Device* dev = dev_of(cmd);
-    if (CmdBuf* cb = cb_of(dev, cmd)) {
+    DrawPipelineRestore restore(dev, cmd);
+    if (CmdBuf* cb = restore.cb) {
         WorkScope work(dev->work, WK_DRAW);
         cb->draws.push_back(make_rec(cb, DK_DRAW, false));
         DrawRec& r = cb->draws.back();
@@ -519,7 +535,8 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexed(VkCommandBuffer cmd, uint32_t indic
 {
     count_call(HI_CmdDrawIndexed);
     Device* dev = dev_of(cmd);
-    if (CmdBuf* cb = cb_of(dev, cmd)) {
+    DrawPipelineRestore restore(dev, cmd);
+    if (CmdBuf* cb = restore.cb) {
         WorkScope work(dev->work, WK_DRAW);
         // Moved in and filled there: a copy would count every bound set's shared layout twice more.
         // Nothing appends to the list while the replacement records this draw.
@@ -556,6 +573,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirect(VkCommandBuffer cmd, VkBuffer buf,
 {
     count_call(HI_CmdDrawIndirect);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, count)) return;
     dev->d.CmdDrawIndirect(cmd, buf, off, count, stride);
 }
@@ -565,6 +583,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirect(VkCommandBuffer cmd, VkBuff
 {
     count_call(HI_CmdDrawIndexedIndirect);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, count)) return;
     dev->d.CmdDrawIndexedIndirect(cmd, buf, off, count, stride);
 }
@@ -574,6 +593,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirectCount(VkCommandBuffer cmd, VkBuffer
 {
     count_call(HI_CmdDrawIndirectCount);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndirectCount(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
@@ -583,6 +603,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndirectCountKHR(VkCommandBuffer cmd, VkBuf
 {
     count_call(HI_CmdDrawIndirectCountKHR);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndirectCountKHR(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
@@ -593,6 +614,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirectCount(VkCommandBuffer cmd, V
 {
     count_call(HI_CmdDrawIndexedIndirectCount);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndexedIndirectCount(cmd, buf, off, count_buf, count_off, max_count, stride);
 }
@@ -603,6 +625,7 @@ VKAPI_ATTR void VKAPI_CALL hk_CmdDrawIndexedIndirectCountKHR(VkCommandBuffer cmd
 {
     count_call(HI_CmdDrawIndexedIndirectCountKHR);
     Device* dev = dev_of(cmd);
+    DrawPipelineRestore restore(dev, cmd);
     if (track_indirect(dev, cmd, DK_INDEXED_INDIRECT, buf, off, max_count)) return;
     dev->d.CmdDrawIndexedIndirectCountKHR(cmd, buf, off, count_buf, count_off, max_count, stride);
 }

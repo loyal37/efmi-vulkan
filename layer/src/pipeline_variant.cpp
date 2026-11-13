@@ -1,4 +1,5 @@
 #include "pipeline_variant.h"
+#include "hunting_shader.h"
 #include "../../frontend/gpu/dither_kills.h"
 #include <set>
 
@@ -21,7 +22,7 @@ static bool prepare_fragment(const GraphicsRecipe& recipe,const PipelineLayoutIn
     auto fail=[&](const char* why){reason=why;return false;};
     if(patch.images.size()+patch.nulls.size()>32)return fail("fragment_patch_budget");
     stage=recipe.stages.size();
-    if(patch.images.empty() && patch.nulls.empty() && !patch.no_dither)return true;
+    if(patch.pink || (patch.images.empty() && patch.nulls.empty() && !patch.no_dither))return true;
     std::set<std::pair<uint32_t,uint32_t>> seen;
     for(const auto* list:{&patch.images,&patch.nulls})for(const auto& image:*list){
         if(!seen.insert({image.set,image.binding}).second)return fail("fragment_patch_duplicate_source");
@@ -132,11 +133,22 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
                             const FragmentPatch& patch,const VkPhysicalDeviceLimits& limits)
 {
     native_warning.clear(); native_replaced = 0;
-    if (!patch.native_shaders || patch.native_shaders->modules.empty())
+    if ((!patch.native_shaders || patch.native_shaders->modules.empty()) && !patch.pink)
         return build_recipe(recipe, source, vertex, max_sets, patch, limits);
     GraphicsRecipe changed = recipe;
+    bool pink = false;
     for (auto& stage : changed.stages) {
-        if (!stage.shader || !patch.native_shaders->allows(stage.shader->hash, recipe)) continue;
+        if (!stage.shader) continue;
+        if (patch.pink && stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+            auto shader = std::make_shared<ShaderInfo>(); shader->code = hunting_pink_shader(stage.entry);
+            std::string why;
+            if (patch.native_shaders && patch.native_shaders->compatible &&
+                patch.native_shaders->compatible(stage.shader->code, shader->code, stage.stage, stage.entry, why)) {
+                stage.shader = std::move(shader); stage.entries.clear(); stage.data.clear(); pink = true;
+            } else native_warning = "Pink marking cannot use this fragment interface: " + why;
+            continue;
+        }
+        if (!patch.native_shaders || (patch.original_stages & stage.stage) || !patch.native_shaders->allows(stage.shader->hash, recipe)) continue;
         const auto found = patch.native_shaders->modules.find((uint64_t(stage.stage) << 32) | stage.shader->hash);
         if (found == patch.native_shaders->modules.end()) continue;
         std::string why;
@@ -148,11 +160,13 @@ bool PipelineVariant::build(const GraphicsRecipe& recipe, const PipelineLayoutIn
         stage.shader = found->second;
         ++native_replaced;
     }
-    if (build_recipe(changed, source, vertex, max_sets, patch, limits)) return true;
-    if (!patch.native_only && native_replaced) {
+    auto applied = patch; applied.pink = pink;
+    if (build_recipe(changed, source, vertex, max_sets, applied, limits)) return true;
+    if (!patch.native_only && (native_replaced || pink)) {
         native_warning = "Native replacement cannot serve this mesh variant (" + reason + "); original stages kept";
         native_replaced = 0;
-        return build_recipe(recipe, source, vertex, max_sets, patch, limits);
+        applied.pink = false;
+        return build_recipe(recipe, source, vertex, max_sets, applied, limits);
     }
     return false;
 }

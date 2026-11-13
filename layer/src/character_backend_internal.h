@@ -65,6 +65,14 @@ namespace character_internal {}
 using namespace character_internal;
 namespace character_internal {
 
+constexpr uint32_t kHuntingPink = 1u << 31;
+inline thread_local uint32_t t_hunting_marking = 0;
+inline void apply_hunting(FragmentPatch& patch) {
+    patch.original_stages = t_hunting_marking & ~kHuntingPink;
+    patch.pink = (t_hunting_marking & kHuntingPink) != 0;
+    if (patch.original_stages & VK_SHADER_STAGE_FRAGMENT_BIT) patch.no_dither = false;
+}
+
 // The configured folders and packages (character_backend.cpp).
 bool is_mod_ini(const std::string& path);
 std::filesystem::path module_folder();
@@ -562,7 +570,7 @@ public:
     bool init_materials();
     // The variant a (pipeline, draw, material plan) resolved to, kept per generation (D-106): the
     // variant cache's key building and lookup cost 5 us per replaced draw. Cleared with the plans.
-    std::map<std::tuple<uint32_t, uint32_t, const StaticMaterial*, bool>, std::shared_ptr<const PipelineVariant>> variant_lookup;
+    std::map<std::tuple<uint32_t, uint32_t, const StaticMaterial*, bool, uint32_t>, std::shared_ptr<const PipelineVariant>> variant_lookup;
     std::vector<FragmentPatch> scratch_patches; // a draw's material patch without the dither (D-133)
     bool refresh_materials();
     // `origin`: 0 the package's own profile or nothing to bind, 1 rules derived from the module, 2 the application's images.
@@ -705,6 +713,7 @@ bool pipeline_modules(Device* device, VkPipeline pipeline, PipelineModules& out)
 // takes them (ResourceHash.cpp GetVertexBufferRegionOffset and Size), and its colour targets' images.
 struct DrawFacts {
     PipelineModules modules;
+    uint32_t marking = 0; // original stage bits, plus kHuntingPink for a selected draw
     bool indexed = false, index_known = false;
     uint32_t index_hash = 0;
     uint32_t vertex_mask = 0;                 // bit i: binding i has a hash
@@ -729,7 +738,7 @@ public:
     // The value the `hunting` operand reads: the original's mode, 2 (soft disabled) where no key was registered.
     int operand() const { const int mode = mode_.load(std::memory_order_relaxed); return mode ? mode : 2; }
     // While enabled, at a draw: what it uses visited; true when it is to be kept from the GPU (the selection, skip).
-    bool visit(const DrawFacts& facts);
+    bool visit(DrawFacts& facts);
     // Frame analysis (FrameAnalysis.cpp, the log): armed by its key, it records the draws between the next two
     // presentations. `analysing` at a draw; `analyse` adds the draw's lines.
     bool analysing() const { return analysing_.load(std::memory_order_relaxed); }
@@ -836,7 +845,7 @@ public:
     std::atomic<uint64_t> frame_us{0}, frame_calls{0}; // character_frame: every package's presentation work
     // D-133: the twins of the application's pipelines without the character dither, by pipeline id.
     std::shared_mutex twins_mx;
-    using TwinKey = std::tuple<uint64_t, uint32_t, bool>;
+    using TwinKey = std::tuple<uint64_t, uint32_t, bool, uint32_t>;
     std::map<TwinKey, std::shared_ptr<const PipelineVariant>> twins;
     std::set<TwinKey> twins_failed;
     std::atomic<uint64_t> shader_fix_binds{0};
@@ -880,7 +889,19 @@ bool shader_draw_unmatched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, co
 void shader_hooks_status(CharacterBackend& b, JsonWriter& w);
 // character_backend_twins.cpp
 void prepare_twins(CharacterBackend& b);
-VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline);
+VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline, uint32_t marking = 0);
 void character_created(CharacterBackend& b, VkPipeline pipeline);
+
+// Selection is one draw's state, including its Mod draws. The host restores the pipeline after forwarding.
+class HuntingDrawScope {
+public:
+    HuntingDrawScope(CharacterBackend&, CmdBuf*, const DrawRec&, uint32_t marking);
+    ~HuntingDrawScope() { t_hunting_marking = previous_; }
+    const DrawRec& draw() const { return marked_ ? *marked_ : original_; }
+private:
+    const DrawRec& original_;
+    std::unique_ptr<DrawRec> marked_;
+    uint32_t previous_;
+};
 
 } // namespace efvk

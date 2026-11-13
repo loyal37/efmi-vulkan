@@ -241,7 +241,7 @@ void Hunting::act(efmi::frontend::HuntingAction action, Device* device, const st
     for (const auto& text : told) notice(NoticeLevel::Info, "", text.c_str());
 }
 
-bool Hunting::visit(const DrawFacts& facts)
+bool Hunting::visit(DrawFacts& facts)
 {
     const auto& m = facts.modules;
     std::lock_guard<std::mutex> lock(mx_);
@@ -278,10 +278,15 @@ bool Hunting::visit(const DrawFacts& facts)
         }
     for (uint32_t i = 0; i < facts.target_count; ++i)
         if (selected(Target, facts.targets[i])) { peers(Target); break; }
-    // marking_mode = skip keeps the draw from the GPU; the other modes need a replaced fragment shader (pink, mono) or
-    // a game shader replaced to draw (original): until then the draw is drawn as is, said once.
     if (marked && marking_mode_ == 0) { ++skipped_; return true; }
-    if (marked && !told_mode_) { told_mode_ = true; logf("hunting: marking mode %s draws a selected element as it is", kMarkingNames[marking_mode_]); }
+    if (marking_mode_ == 1) {
+        if (has_vs && selected(Vertex, m.hashes[0])) facts.marking |= VK_SHADER_STAGE_VERTEX_BIT;
+        if (has_ps && selected(Pixel, m.hashes[4])) facts.marking |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    if (marked && marking_mode_ == 2) facts.marking |= kHuntingPink;
+    if (marked && marking_mode_ == 3 && !told_mode_) {
+        told_mode_ = true; logf("hunting: mono marking has no stereo separation to change");
+    }
     return false;
 }
 
@@ -623,7 +628,23 @@ bool character_shader_draw(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
     if (!b.device || !b.device->shader_draws.load(std::memory_order_relaxed) || !b.enabled.load(std::memory_order_relaxed)) return false;
     DrawFacts facts;
     if (!pipeline_modules(b.device, r.pipeline, facts.modules)) return false;
-    return shader_draw_unmatched(b, cb, r, facts.modules, true, hunting_draw(b, cb, r, facts));
+    const bool skip = hunting_draw(b, cb, r, facts);
+    HuntingDrawScope marking(b, cb, r, facts.marking);
+    return shader_draw_unmatched(b, cb, marking.draw(), facts.modules, true, skip);
+}
+
+HuntingDrawScope::HuntingDrawScope(CharacterBackend& b, CmdBuf* cb, const DrawRec& r, uint32_t marking)
+    : original_(r), previous_(t_hunting_marking)
+{
+    t_hunting_marking = marking;
+    if (!marking || !cb) return;
+    const auto pipeline = character_bind(b, cb, r.pipeline, marking);
+    if (pipeline != cb->gfx_bound) {
+        b.device->d.CmdBindPipeline(cb->handle, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        cb->gfx_bound = pipeline;
+    }
+    marked_ = std::make_unique<DrawRec>(r);
+    marked_->bound = pipeline;
 }
 
 } // namespace efvk

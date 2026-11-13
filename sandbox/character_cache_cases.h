@@ -40,12 +40,12 @@ void character_cache_cases(void (*check)(bool, const char*))
     std::vector<std::weak_ptr<const PipelineVariant>> retired;
     auto command_owner = std::make_shared<PipelineVariant>(VK_NULL_HANDLE, VariantDispatch{});
     auto other = std::make_shared<PipelineVariant>(VK_NULL_HANDLE, VariantDispatch{});
-    generation.variant_lookup.emplace(std::make_tuple(999u, 0u, &material, false), other);
+    generation.variant_lookup.emplace(std::make_tuple(999u, 0u, &material, false, 0u), other);
     for (uint32_t id = 1; id <= 256; ++id) {
         auto variant = id == 1 ? command_owner : std::make_shared<PipelineVariant>(VK_NULL_HANDLE, VariantDispatch{});
         retired.push_back(variant);
-        generation.variant_lookup.emplace(std::make_tuple(id, 0u, &material, false), variant);
-        generation.variant_lookup.emplace(std::make_tuple(id, 1u, &material, true), variant);
+        generation.variant_lookup.emplace(std::make_tuple(id, 0u, &material, false, 0u), variant);
+        generation.variant_lookup.emplace(std::make_tuple(id, 1u, &material, true, 0u), variant);
         variant.reset(); generation_retire(generation, id);
     }
     check(generation.variant_lookup.size() == 1 && !retired[0].expired(),

@@ -21,13 +21,13 @@ def compile_pixel(root, color):
     return output.read_bytes()
 
 
-def colored_pixels(path, color):
+def colored_pixels(path, color, x_range=(0, 1)):
     meta_path = Path(str(path) + ".json")
     if not path.exists() or not meta_path.exists():
         return 0
     meta = json.loads(meta_path.read_text())
     width, height, data = meta["width"], meta["height"], path.read_bytes()
-    return sum(1 for y in range(int(height * .46), int(height * .54)) for x in range(width)
+    return sum(1 for y in range(int(height * .46), int(height * .54)) for x in range(int(width * x_range[0]), int(width * x_range[1]))
                if all(abs(data[4 * (y * width + x) + i] - color[i]) < 8 for i in range(3)))
 
 
@@ -111,12 +111,13 @@ def main():
         print("artifacts:", root)
     # The existing readback is one shot. These processes show their first notice only after F10,
     # so their first image proves what was drawn after the replacement changed or disappeared.
-    for change in ("reload", "invalid", "interface", "removed", "unchanged", "depth_filter"):
+    for change in ("reload", "invalid", "interface", "removed", "unchanged", "depth_filter", "empty"):
         if selected and "f10:" + change not in selected: continue
         root = Path(test_dir("native-shader-" + change + "-"))
         mods = root / "Mods"
         (mods / "native").mkdir(parents=True)
-        (mods / "native" / "mod.ini").write_text("namespace = native_test\n[Constants]\nglobal $loaded = 1\n", encoding="ascii")
+        if change != "empty":
+            (mods / "native" / "mod.ini").write_text("namespace = native_test\n[Constants]\nglobal $loaded = 1\n", encoding="ascii")
         (root / "d3dx.ini").write_text("[Include]\ninclude = Core\\EFMI\\main.ini\ninclude_recursive = Mods\n"
                                         "[Rendering]\nrecursive_include = 1\n", encoding="ascii")
         settings = root / "settings"
@@ -136,7 +137,7 @@ def main():
             with ProbeClient(sb.pid) as probe:
                 time.sleep(1)
                 before = probe.status().get("replacement", {}).get("shader_fixes", {})
-                if change == "reload": path.write_bytes(compile_pixel(root, "0, 1, 0"))
+                if change in ("reload", "empty"): path.write_bytes(compile_pixel(root, "0, 1, 0"))
                 elif change == "invalid": path.write_bytes(b"invalid shader")
                 elif change == "interface":
                     source = root / "replacement.hlsl"
@@ -170,10 +171,10 @@ def main():
                     checks.check((band_pixels(readback) or 0) > 200, "depth_filter: the original meshes remain visible")
                     checks.check(after.get("revision") != before.get("revision"), "depth_filter: INI changes invalidate the pipeline revision")
                 else:
-                    color = (0, 255, 0) if change == "reload" else (255, 0, 255)
+                    color = (0, 255, 0) if change in ("reload", "empty") else (255, 0, 255)
                     checks.check(colored_pixels(readback, color) > 200, change + ": correct post-F10 image")
                     checks.equal(after.get("loaded"), 1, change + ": one shader remains active")
-                    checks.equal(after.get("revision") != before.get("revision"), change == "reload",
+                    checks.equal(after.get("revision") != before.get("revision"), change in ("reload", "empty"),
                                  change + ": changed code alone advances the shader revision")
                 if change in ("invalid", "interface"): checks.check(bool(after.get("warnings")), change + ": bad shader reported while last good shader remains")
             sb.proc.terminate(); sb.proc.wait(timeout=30)

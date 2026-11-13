@@ -74,7 +74,7 @@
     X(GetBufferMemoryRequirements) X(AllocateMemory) X(FreeMemory) X(BindBufferMemory) X(MapMemory) X(UnmapMemory)     \
     X(CreateCommandPool) X(DestroyCommandPool) X(AllocateCommandBuffers) X(BeginCommandBuffer) X(EndCommandBuffer)     \
     X(ResetCommandBuffer) X(CmdBeginRenderPass) X(CmdEndRenderPass) X(CmdBindPipeline) X(CmdBindVertexBuffers)         \
-    X(CmdBindIndexBuffer) X(CmdBindDescriptorSets) X(CmdDrawIndexed) X(CmdCopyBuffer) X(CmdExecuteCommands)            \
+    X(CmdBindIndexBuffer) X(CmdBindDescriptorSets) X(CmdDrawIndexed) X(CmdDraw) X(CmdDrawIndexedIndirect) X(CmdCopyBuffer) X(CmdExecuteCommands) \
     X(CmdSetViewport) X(CmdSetScissor) X(QueueSubmit) X(QueueWaitIdle) X(CreateSemaphore) X(DestroySemaphore)          \
     X(CreateFence) X(DestroyFence) X(WaitForFences) X(ResetFences) X(CmdBlitImage) X(CmdClearColorImage)
 
@@ -192,6 +192,8 @@ struct App {
     int seconds = 30;
     int threads = 2;
     int draws = kDrawCount;
+    int draw_kind = 0; // 0 indexed, 1 non-indexed, 2 indexed indirect (one call per draw)
+    Buffer draw_arguments;
     int warmup = 30, measured_frames = 120;
     std::wstring timings_path;
     struct Timing { double wait, record, submit, present, total; };
@@ -878,6 +880,12 @@ static bool create_material_templates()
 
 static bool create_resources()
 {
+    if (g.draw_kind == 2) {
+        if (!make_buffer(g.draw_arguments, sizeof(VkDrawIndexedIndirectCommand) * kDrawCount,
+                         VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, true, true)) return false;
+        auto* args = static_cast<VkDrawIndexedIndirectCommand*>(g.draw_arguments.map);
+        for (int i = 0; i < kDrawCount; ++i) args[i] = {kDraws[i].count, kDraws[i].instances, kDraws[i].first, 0, 0};
+    }
     if (!make_buffer(g.vb, sizeof(kVertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, true))
         return false;
     memcpy(g.vb.map, kVertices, sizeof(kVertices));
@@ -1245,7 +1253,9 @@ static void record_draw(VkCommandBuffer cb, int i)
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g.layout, 0, 1, sets, 1, dyn);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g.layout, 1, 1, sets + 1, 2, dyn + 1);
     }
-    vkCmdDrawIndexed(cb, d.count, d.instances, d.first, 0, 0);
+    if (g.draw_kind == 1) vkCmdDraw(cb, 3, d.instances, 0, 0);
+    else if (g.draw_kind == 2) vkCmdDrawIndexedIndirect(cb, g.draw_arguments.buf, i * sizeof(VkDrawIndexedIndirectCommand), 1, sizeof(VkDrawIndexedIndirectCommand));
+    else vkCmdDrawIndexed(cb, d.count, d.instances, d.first, 0, 0);
 }
 
 static void record_worker(Worker* w, VkFramebuffer fb)
@@ -1620,6 +1630,7 @@ static void cleanup()
     if (g.material_template) vkDestroyDescriptorUpdateTemplate(g.device, g.material_template, nullptr);
     if (g.rewrite_template) vkDestroyDescriptorUpdateTemplate(g.device, g.rewrite_template, nullptr);
     destroy_buffer(g.vb);
+    destroy_buffer(g.draw_arguments);
     destroy_buffer(g.ib_a);
     destroy_buffer(g.ib_b);
     destroy_buffer(g.ubo);
@@ -1700,6 +1711,10 @@ int wmain(int argc, wchar_t** argv)
             g.primary_screen = true;
         else if (a == L"--readable-swapchain")
             g.readable_swapchain = true;
+        else if (a == L"--non-indexed")
+            g.draw_kind = 1;
+        else if (a == L"--indexed-indirect")
+            g.draw_kind = 2;
         else if (a == L"--present-burst" && i + 1 < argc)
             g.present_burst = std::clamp(_wtoi(argv[++i]), 0, 16);
         else if (a == L"--api" && i + 1 < argc) {

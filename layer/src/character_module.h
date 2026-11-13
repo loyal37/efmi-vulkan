@@ -7,6 +7,8 @@
 // are (tracker structures, strings, vectors): both sides allocate from the process heap. Code of a
 // module that was ever used stays loaded until the process ends, because objects it made may
 // outlive the backend that made them.
+// D-192 contract: the host saves/restores CmdBuf::gfx_bound around every graphics draw callback and
+// its forwarded driver draw. A module may temporarily change it for hunting; it retains that pipeline's owner.
 #pragma once
 
 #include "character_backend.h"

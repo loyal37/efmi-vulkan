@@ -541,7 +541,7 @@ const CharacterModule* builtin_character_module()
         m.create = character_create; m.usable = character_usable; m.ready = character_ready; m.stop = character_stop;
         m.record = character_record; m.retire = character_retire; m.frame = character_frame; m.status = character_status;
         m.enable = character_enable; m.submit = character_submit; m.submitted = character_submitted; m.pass_end = character_pass_end;
-        m.bind = character_bind;
+        m.bind = [](CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline) { return character_bind(b, cb, pipeline); };
         m.created = character_created;
         m.shader_draw = character_shader_draw;
         return m;

@@ -31,18 +31,19 @@ bool pipeline_dither(uint32_t id, const GraphicsRecipe& recipe)
 } // namespace character_internal
 
 namespace {
-bool has_native_shader(const std::shared_ptr<const NativeShaderSet>& fixes, const GraphicsRecipe& recipe)
+bool has_native_shader(const std::shared_ptr<const NativeShaderSet>& fixes, const GraphicsRecipe& recipe, uint32_t marking = 0)
 {
     if (fixes) for (const auto& stage : recipe.stages)
-        if (stage.shader && fixes->allows(stage.shader->hash, recipe) &&
+        if (stage.shader && !(marking & stage.stage) && fixes->allows(stage.shader->hash, recipe) &&
             fixes->modules.count((uint64_t(stage.stage) << 32) | stage.shader->hash)) return true;
     return false;
 }
 
-FragmentPatch game_shader_patch(const std::shared_ptr<const NativeShaderSet>& fixes, bool native, bool dither)
+FragmentPatch game_shader_patch(const std::shared_ptr<const NativeShaderSet>& fixes, bool native, bool dither, uint32_t marking = 0)
 {
     FragmentPatch patch;
     patch.keep_vertex = true; patch.native_only = native; patch.no_dither = dither; patch.native_shaders = fixes;
+    patch.original_stages = marking & ~kHuntingPink; patch.pink = (marking & kHuntingPink) != 0;
     return patch;
 }
 
@@ -61,13 +62,14 @@ struct TwinOwner final : CommandOwner {
 // pipeline (its own vertex stage and images, the dither branch steered away) built by the variant cache's
 // workers; the first bind waits for it, and binds the application's pipeline only when that wait runs out
 // or the twin cannot be made. Recording thread; the gate off costs one load.
-VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
+VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline, uint32_t marking)
 {
     // RabbitFX's state alone decides, as under DX11 its replaced shaders do whatever the character Mods do.
     if (!b.variants || !cb) return pipeline;
     const auto fixes = b.variants->native_shaders();
-    const bool dither_off = g_dither_off.load(std::memory_order_relaxed);
-    if (!dither_off && (!fixes || fixes->modules.empty())) return pipeline;
+    const bool dither_off = !(marking & VK_SHADER_STAGE_FRAGMENT_BIT) && g_dither_off.load(std::memory_order_relaxed);
+    const bool pink = (marking & kHuntingPink) != 0;
+    if (!pink && !dither_off && (!fixes || fixes->modules.empty())) return pipeline;
     uint32_t id = 0;
     std::shared_ptr<const GraphicsRecipe> recipe;
     std::shared_ptr<const PipelineLayoutInfo> layout;
@@ -77,10 +79,10 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
         if (pipe == b.device->pipes.end() || !pipe->second.recipe || !pipe->second.layout) return pipeline;
         id = pipe->second.id; recipe = pipe->second.recipe; layout = pipe->second.layout;
     }
-    const bool native = b.enabled.load(std::memory_order_relaxed) && has_native_shader(fixes, *recipe);
+    const bool native = b.enabled.load(std::memory_order_relaxed) && (pink || has_native_shader(fixes, *recipe, marking));
     const bool dither = dither_off && pipeline_dither(id, *recipe);
     if (!native && !dither) return pipeline;
-    const CharacterBackend::TwinKey key{fixes ? fixes->revision : 0, id, dither};
+    const CharacterBackend::TwinKey key{fixes ? fixes->revision : 0, id, dither, marking};
     std::shared_ptr<const PipelineVariant> twin;
     {
         std::shared_lock<std::shared_mutex> lock(b.twins_mx);
@@ -91,7 +93,7 @@ VkPipeline character_bind(CharacterBackend& b, CmdBuf* cb, VkPipeline pipeline)
     if (!twin) {
         // Prepared when the game created the pipeline (character_created), so normally made by now; a twin
         // still being built is waited for (bounded), as a replaced draw waits for its variant (D-103).
-        const auto result = b.variants->await(twin_identity(id), recipe, layout, recipe->vertex, game_shader_patch(fixes, native, dither), std::chrono::milliseconds(4000));
+        const auto result = b.variants->await(twin_identity(id), recipe, layout, recipe->vertex, game_shader_patch(fixes, native, dither, marking), std::chrono::milliseconds(4000));
         std::unique_lock<std::shared_mutex> lock(b.twins_mx);
         if (result.variant) {
             twin = b.twins[key] = result.variant;

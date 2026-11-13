@@ -156,10 +156,11 @@ bool character_record(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)
     DrawFacts facts;
     const bool hooks = b.device && b.device->shader_draws.load(std::memory_order_relaxed) && pipeline_modules(b.device, r.pipeline, facts.modules);
     const bool marked = hooks && hunting_draw(b, cb, r, facts);
+    HuntingDrawScope marking(b, cb, r, facts.marking);
     const uint64_t plans = t_draw_plans;
     // The Mod's draws stand: hunting's skip keeps a list's own draws, as the original's hunting_skip does.
-    if (character_record_matched(b, cb, r)) return true;
-    return hooks && shader_draw_unmatched(b, cb, r, facts.modules, t_draw_plans == plans, marked);
+    if (character_record_matched(b, cb, marking.draw())) return true;
+    return hooks && shader_draw_unmatched(b, cb, marking.draw(), facts.modules, t_draw_plans == plans, marked);
 }
 
 static bool character_record_matched(CharacterBackend& b, CmdBuf* cb, const DrawRec& r)

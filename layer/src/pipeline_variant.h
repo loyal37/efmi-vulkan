@@ -56,6 +56,9 @@ struct FragmentPatch {
     bool own_geometry = false;
     // A game pipeline with only its shaders replaced: keep the application's complete layout, with no private set.
     bool native_only = false;
+    // Hunting uses original Vulkan stage bits; pink overrides the fragment output for this draw only.
+    uint32_t original_stages = 0;
+    bool pink = false;
     std::shared_ptr<const NativeShaderSet> native_shaders;
 };
 std::vector<VkDescriptorSetLayoutBinding> private_draw_bindings(uint32_t image_count);

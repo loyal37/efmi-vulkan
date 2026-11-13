@@ -204,9 +204,14 @@ does (the user, 2026-11-12: consider the compatibility with the existing DX11 ro
   `std::set`); cleared after 60 seconds without a hunting key and by `done_hunting`.
 - **Selection and skip**: `next_`/`previous_` vertex and pixel shader as `HuntNext`/`HuntPrev`; with
   `marking_mode = skip` every draw whose pipeline has the selected module is not forwarded (a draw a Mod
-  replaced keeps the Mod's draws, as `hunting_skip` keeps a list's own draws under the original). The
-  other marking modes need a replaced fragment shader (the next step): until then they select and mark
-  but draw as is, said once.
+  replaced keeps the Mod's draws, as `hunting_skip` keeps a list's own draws under the original).
+  D-192 adds `original` (restore only the selected VS/PS stage, including its native replacement and
+  anti-dither patch) and `pink` (the selected draw's pixel output is float4(1,0,1,1) at location 0).
+  Pink supports shader, buffer and target selections, including ordinary Mod mesh variants; a custom
+  shader pass such as a translucency capture keeps its own shader. The host restores the previous
+  pipeline after each direct/indirect draw, and recording owners retain every temporary twin.
+  An incompatible pink output interface leaves the original shader and reports why. `mono` has no
+  stereo separation to change in this renderer and is reported as such.
 - **Mark**: the original's log lines with the 8-digit hash (`>>>> pixel shader marked: pixel shader
   hash = 8a1b2c3d`, `>>>> Index buffer marked: index buffer hash = ...`, `>>>> Vertex buffer marked:
   ...`, `>>>> Render target marked: ...` with the image's format and size, then the visited peer modules),
@@ -236,8 +241,7 @@ does (the user, 2026-11-12: consider the compatibility with the existing DX11 ro
   `RT 1/1: image 7`) in place of the overlay's line. The status has a `hunting` object (mode, marking
   mode, the visited counts and selections of the five kinds, the vertex buffer slot, draws skipped,
   marks, dumps, frame analyses).
-- **Not yet**: compute shaders (the layer does not hook dispatches yet), the marking modes other than
-  `skip`, dumping resources in a frame analysis, the overlay's steady line.
+- **Not yet**: compute hunting, dumping resources in a frame analysis, the overlay's steady line.
 
 ## 7. What needs the game
 
@@ -250,7 +254,7 @@ notices while playing; whether any game pipeline has no module hash (inline modu
 ## 8. What comes after this step
 
 1. Replacing game shaders: D-190 implements the SPIR-V files and an offline HLSL compiler (section 9).
-   The `pink` and `original` marking modes and legacy `depth_filter` remain separate follow-up work;
+   D-191 adds `depth_filter`; D-192 adds `pink` and `original` marking;
    the compiler's explicit `--model` chooses the native HLSL target, not an INI `model` directive.
 2. Slots of other stages and render targets by (set, binding) for Vulkan-native lists, and the
    bindings and draws of a ShaderOverride's lists at any draw.
@@ -314,12 +318,22 @@ Per-pipeline interface/build refusals appear in the overlay and log. A file coun
 that a replacement was drawn. Current boundaries: graphics pipelines captured by the existing recipe
 tracker; a single matching entry point; supported core capabilities and fully tracked layouts. Layout
 binding flags, unsupported extension state, and immutable samplers/layouts created with custom host
-allocators remain refused. An empty Mods folder supports initial ShaderFixes loading; F10 uses the
-INI generation's input dispatcher and therefore needs an active INI configuration. Compute shader
-replacement, native arbitrary resource/draw lists and marking modes remain pending. D-191 publishes
+allocators remain refused. An empty Mods folder supports initial ShaderFixes loading and F10 via the
+existing host input fallback (verified in D-192). Hunting keys still require a loaded INI generation.
+Compute shader replacement and native arbitrary resource/draw lists remain pending. D-191 publishes
 depth filters with the INI/shader generation; a filter-only F10 changes the revision and invalidates
 cached variants. Depth presence means an attachment, independently of the pipeline's depth-test switch.
 
 Verification lives in `sandbox/native_shader_test.py`; `sandbox/run_all.py --no-build --only native-shaders`
 adds tracker lifetime, pipeline/cache, live INI and validation checks. These are sandbox results, not
 real-game acceptance.
+
+`sandbox/hunting_shader_test.py` checks VS/PS original selection, pink shader/index/target selections,
+clearing, a Mod's own mesh region, non-indexed and indexed-indirect draws, and the inject entry. A
+render-target selection identifies one swapchain image, so another presented image need not be pink;
+that case checks selected pipeline binds and validation, while the shader/index cases verify pixels.
+
+The routine pipeline step runs deterministic fixtures. Historical captured-shader rewrites are a
+separate `sandbox/run_all.py --no-build --only shader-corpus` step, also in the full suite and the
+bones group; it retains the capture checks without scanning the entire capture tree for every native
+pipeline change. This separation avoids the old 30-second cold-read timeout.

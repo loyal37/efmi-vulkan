@@ -3,20 +3,23 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 from harness import Checks, DIST, INJECT_DLL, PINNED_SETTINGS, inject_env, layer_env, test_dir
 
 
 def main() -> int:
-    c = Checks("pipeline variants")
+    corpus = "--corpus" in sys.argv[1:]
+    c = Checks("captured shader rewrites" if corpus else "pipeline variants")
     folder = test_dir("recipe-")
     env = inject_env(os.path.join(folder, "tracker.log"), extra=PINNED_SETTINGS)
     env.update(XDG_CACHE_HOME=folder, TMPDIR=folder, TEMP=folder, TMP=folder)
-    result = subprocess.run([os.path.join(DIST, "efmi_vk_recipe_test.exe")], cwd=folder, env=env,
-                            capture_output=True, text=True, timeout=30)
+    args = [os.path.join(DIST, "efmi_vk_recipe_test.exe")] + (["--corpus"] if corpus else [])
+    result = subprocess.run(args, cwd=folder, env=env, capture_output=True, text=True, timeout=180 if corpus else 30)
     Path(folder, "stdout.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
     print(result.stdout, end="")
     c.equal(result.returncode, 0, "native recipe tests", )
+    if corpus: return c.finish()
     result = subprocess.run([os.path.join(DIST, "efmi_vk_cache_test.exe")], cwd=folder, env=env,
                             capture_output=True, text=True, timeout=30)
     Path(folder, "cache.txt").write_text(result.stdout + result.stderr, encoding="utf-8")

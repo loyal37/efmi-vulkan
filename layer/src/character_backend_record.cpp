@@ -766,9 +766,10 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
         const bool dithered = g_dither_gated.load(std::memory_order_relaxed) && pipeline_dither(pipe->second.id, *pipe->second.recipe);
         const bool no_dither = dithered && g_dither_off.load(std::memory_order_relaxed);
         auto patch_of = [&](uint32_t i) -> const FragmentPatch& {
-            if (!no_dither) return material_plans[i]->patch;
+            if (!no_dither && !t_hunting_marking) return material_plans[i]->patch;
             if (scratch_patches.size() < list->count) scratch_patches.resize(list->count);
-            scratch_patches[i] = material_plans[i]->patch; scratch_patches[i].no_dither = true;
+            scratch_patches[i] = material_plans[i]->patch; scratch_patches[i].no_dither = no_dither;
+            apply_hunting(scratch_patches[i]);
             return scratch_patches[i];
         };
         auto keep_variant = [&](uint32_t i, const VariantResult& result) {
@@ -776,7 +777,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
             if (!result.variant->native_warning.empty()) note(result.variant->native_warning);
             variants[i] = result.variant;
             if (variant_lookup.size() < 65536)
-                variant_lookup.emplace(std::make_tuple(pipe->second.id, list->first + i, material_plans[i], no_dither), result.variant);
+                variant_lookup.emplace(std::make_tuple(pipe->second.id, list->first + i, material_plans[i], no_dither, t_hunting_marking), result.variant);
             return true;
         };
         for (uint32_t i = 0; i < list->count; ++i) {
@@ -825,7 +826,7 @@ bool CharacterGeneration::record(CmdBuf* cb, const DrawRec& r, uint32_t section_
                 }
                 continue;
             }
-            const auto lookup_key = std::make_tuple(pipe->second.id, list->first + i, material_plans[i], no_dither);
+            const auto lookup_key = std::make_tuple(pipe->second.id, list->first + i, material_plans[i], no_dither, t_hunting_marking);
             if (const auto known = variant_lookup.find(lookup_key); known != variant_lookup.end()) { variants[i] = known->second; continue; }
             VertexInputRecipe vertex;
             std::string reason;
@@ -1051,6 +1052,7 @@ bool CharacterGeneration::record_textures(CmdBuf* cb, const DrawRec& r, const Pi
     patch.keep_vertex = true;
     const bool dithered = g_dither_gated.load(std::memory_order_relaxed) && pipeline_dither(pipe.id, *pipe.recipe);
     patch.no_dither = dithered && g_dither_off.load(std::memory_order_relaxed);
+    apply_hunting(patch);
     const auto result = cache->await(pipe.id, pipe.recipe, pipe.layout, pipe.recipe->vertex, patch, std::chrono::milliseconds(4000));
     if (dithered) cache->prepare(pipe.id, pipe.recipe, pipe.layout, pipe.recipe->vertex, other_state(patch));
     if (!result.variant) {
@@ -1146,6 +1148,7 @@ bool CharacterGeneration::record_own_mesh(CmdBuf* cb, const DrawRec& r, const Pi
             return refuse(C_VERTEX, "a Mod's own mesh: vertex declaration: " + reason);
         FragmentPatch patch = plans[i]->patch;
         patch.keep_vertex = true; patch.own_geometry = true; patch.no_dither = no_dither;
+        apply_hunting(patch);
         const auto result = cache->request(pipe.id, pipe.recipe, pipe.layout, vertex, patch);
         if (dithered) cache->prepare(pipe.id, pipe.recipe, pipe.layout, vertex, other_state(patch));
         if (result.variant) { variants[i] = result.variant; continue; }

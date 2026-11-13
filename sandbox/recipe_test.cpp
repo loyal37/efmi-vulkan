@@ -290,7 +290,7 @@ static bool spirv_valid(const std::vector<uint32_t>& words, std::string& error)
 }
 
 // D-133: the character dither in SPIR-V and the module without it.
-static void dither_tests()
+static void dither_tests(bool corpus)
 {
     using variant_fixture::Kill;
     const auto dither = variant_fixture::shader(false, false, 6, Kill::Dither);
@@ -314,6 +314,7 @@ static void dither_tests()
     check(spirv_valid(patched, error), ("the patched module is valid SPIR-V " + error).c_str());
     check(!efmi::gpu::remove_dither(cutout, kept, reason) && kept == std::vector<uint32_t>({1, 2, 3}) && !reason.empty(),
           "a module without the dither is refused and the output left as it was");
+    if (!corpus) return;
     // The captured fragment modules of the game (local captures; the rule's ground truth, docs/rabbitfx-dither.md).
     const std::filesystem::path captures = "F:/efmi vulkan/captures";
     std::error_code ignored;
@@ -363,7 +364,7 @@ static std::vector<uint32_t> module_words(const std::filesystem::path& path)
     return input ? words : std::vector<uint32_t>{};
 }
 
-static void constant_bones_tests()
+static void constant_bones_tests(bool corpus)
 {
     std::string error, why;
     const auto original = m2_fixture::constant_bones_shader();
@@ -389,6 +390,7 @@ static void constant_bones_tests()
     check(!repoint_vertex(original, 3, out) && out.reason == "spirv_target_collision", "the private set cannot be at the block's own set");
     auto newer = original; newer[1] = 0x00010400;
     check(!repoint_vertex(newer, 4, out) && out.reason == "spirv_constant_bones_version", "a module after SPIR-V 1.3 has no BufferBlock to make");
+    if (!corpus) return;
     // The game's modules of the dash (captures/dash-2.1.7-20261112, 2.1.7 in the game, 2026-11-12): the after-images'
     // three with their bones at vs-cb3 or vs-cb4, three other effects' without bones.
     const std::filesystem::path dash = "F:/efmi vulkan/captures/dash-2.1.7-20261112";
@@ -456,8 +458,9 @@ int main(int argc, char** argv)
     }
     util_init(GetModuleHandleW(nullptr));
     rewrite_tests(); ownership_tests(); ignored_pointer_tests(); tracked_lifetime_tests(); draw_sequence_tests();
-    dither_tests();
-    constant_bones_tests();
+    const bool corpus = argc == 2 && !strcmp(argv[1], "--corpus");
+    dither_tests(corpus);
+    constant_bones_tests(corpus);
     printf("recipe_test: %d/%d checks passed\n", passed, passed + failed);
     return failed ? 1 : 0;
 }
